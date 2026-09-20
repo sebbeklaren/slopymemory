@@ -47,10 +47,17 @@ def _python() -> Finding:
 
 
 def _package() -> Finding:
+    """The substrate is vendored inside the slopymemory distribution (src/agent_memory) — there is no separate
+    `agent-memory` package to look up; what matters is that both import from this venv."""
     try:
-        return Finding(True, f"slopymemory {md.version('slopymemory')}; substrate agent-memory {md.version('agent-memory')}")
+        version = md.version("slopymemory")
     except md.PackageNotFoundError as e:
         return Finding(False, f"not installed: {e}")
+    try:
+        import agent_memory
+    except ImportError as e:
+        return Finding(False, f"slopymemory {version} but the vendored substrate does not import: {e}")
+    return Finding(True, f"slopymemory {version}; substrate agent_memory {Path(agent_memory.__file__).parent}")
 
 
 def _postgres() -> Finding:

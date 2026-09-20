@@ -143,3 +143,20 @@ def test_space_check_follows_the_paths_each_stores_env_names(tmp_home, tmp_path,
     monkeypatch.setattr(checks, "WARN_TOTAL_GB", 1.0)
     f = checks.by_id("space").run()
     assert f.ok is True and "3 MB of store data" in f.detail
+
+
+def test_package_check_verifies_the_vendored_substrate_not_a_separate_distribution(monkeypatch):
+    """The substrate ships inside the slopymemory distribution; there is no `agent-memory` package to look up."""
+    def version(name):
+        if name == "slopymemory": return "0.2.0"
+        raise checks.md.PackageNotFoundError(name)
+    monkeypatch.setattr(checks.md, "version", version)
+    f = checks._package()
+    assert f.ok and "slopymemory 0.2.0" in f.detail and "agent_memory" in f.detail
+
+
+def test_package_check_fails_when_slopymemory_is_not_installed(monkeypatch):
+    def version(name): raise checks.md.PackageNotFoundError(name)
+    monkeypatch.setattr(checks.md, "version", version)
+    f = checks._package()
+    assert not f.ok and "not installed" in f.detail
