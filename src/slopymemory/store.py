@@ -82,6 +82,16 @@ class Store:
     def save(self) -> None:
         paths.write_atomic(self.toml_file(), tomli_w.dumps(asdict(self)))
 
+    STATE_ENV_KEYS = ("AM_M3_BUFFER_PATH", "AM_M3_PROJECTOR_PATH", "AM_M3_FACET_PROJECTOR_DIR", "AM_MCP_INVOCATION_LOG")
+
+    def state_paths(self) -> list[Path]:
+        """The state dir and every file or dir the server's env names — an adopted store's live elsewhere."""
+        env = self.server_env()
+        return [self.path()] + [Path(env[k]) for k in self.STATE_ENV_KEYS]
+
+    def state_size(self) -> int:
+        return measure(self.state_paths())
+
     def server_env(self) -> dict[str, str]:
         d = str(self.path())
         env = {
@@ -95,6 +105,19 @@ class Store:
         env.update(DIALECT_ENV[self.dialect])
         env.update(self.env)            # adopted stores: the observed values win
         return env
+
+
+def measure(paths: list[Path]) -> int:
+    """Bytes in the files under `paths`, each file counted once (a dir and a file inside it may both be named)."""
+    seen: dict[Path, int] = {}
+    for p in paths:
+        if p.is_file():
+            seen[p.resolve()] = p.stat().st_size
+        elif p.is_dir():
+            for f in p.rglob("*"):
+                if f.is_file():
+                    seen[f.resolve()] = f.stat().st_size
+    return sum(seen.values())
 
 
 def _bound(port: int) -> bool:

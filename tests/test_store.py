@@ -77,3 +77,17 @@ def test_save_is_atomic_no_tmp_file_remains(tmp_home):
     s = mk(); s.save()
     assert Store.load("a") == s
     assert [p.name for p in (tmp_home / "stores" / "a").iterdir()] == ["store.toml"]
+
+
+def test_state_size_counts_the_files_the_server_env_names_once_each(tmp_home, tmp_path):
+    """Adopted stores keep their files where the [env] table says; the size must follow those paths, and a
+    file named both by a dir and by itself is counted once."""
+    s = mk(); s.save()
+    elsewhere = tmp_path / "elsewhere"; (elsewhere / "proj").mkdir(parents=True)
+    (elsewhere / "buf.jsonl").write_bytes(b"x" * 3000)
+    (elsewhere / "proj" / "p.npy").write_bytes(b"y" * 5000)
+    (s.path() / "local.bin").write_bytes(b"z" * 2000)
+    s.env = {"AM_M3_BUFFER_PATH": str(elsewhere / "buf.jsonl"), "AM_M3_FACET_PROJECTOR_DIR": str(elsewhere / "proj"),
+             "AM_MCP_INVOCATION_LOG": str(s.path() / "local.bin")}     # inside the state dir: not double-counted
+    s.save()
+    assert Store.load("a").state_size() == 3000 + 5000 + 2000 + s.toml_file().stat().st_size

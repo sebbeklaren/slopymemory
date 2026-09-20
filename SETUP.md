@@ -128,7 +128,7 @@ claude mcp list; codex mcp list
 
 **Symptom:** disk is filling
 
-**Verifies:** data under ~/.slopymemory (excluding venv), and free disk space on its filesystem; venv size shown separately
+**Verifies:** store data (state dirs, logs, and the files each store's env names — adopted stores keep theirs elsewhere) and free disk space under ~/.slopymemory; the venv is measured separately
 
 **See for yourself:**
 

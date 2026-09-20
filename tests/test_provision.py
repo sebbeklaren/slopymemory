@@ -206,3 +206,12 @@ def test_can_provision_needs_createdb_and_the_hint_says_so(monkeypatch):
     monkeypatch.setattr(pg, "_psql", _psql_answering(createdb="t"))
     assert pg.can_provision() is True
     assert "role can create databases: yes" in pg.describe()
+
+
+def test_database_size_is_a_number_or_none_never_a_crash(broken_pg_tools, monkeypatch):
+    pg = provision.SystemPostgres()
+    assert pg.database_size("x_memory") is None                  # psql fails: None, the caller says "unknown"
+    monkeypatch.setattr(pg, "_psql", lambda sql, db="postgres": "123456")
+    assert pg.database_size("x_memory") == 123456
+    with pytest.raises(ValueError):
+        pg.database_size("bad'name")

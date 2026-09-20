@@ -79,6 +79,14 @@ class SystemPostgres:
         name = self._ident(name)
         self._run("dropdb", [name])
 
+    def database_size(self, name: str) -> int | None:
+        """pg_database_size in bytes, or None when psql cannot answer — the caller says "unknown", never crashes."""
+        name = self._ident(name)
+        try:
+            return int(self._psql(f"select pg_database_size('{name}')"))
+        except (InitRefused, ValueError):
+            return None
+
     def has_pgvector(self) -> bool:
         return self._psql("select 1 from pg_available_extensions where name = 'vector'") == "1"
 

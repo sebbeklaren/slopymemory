@@ -14,7 +14,7 @@ from . import paths, server as srv
 from .provision import InitRefused, SystemPostgres, TEMPLATE_HINT
 from .paths import ConfigError
 from .registry import Registry
-from .store import Store, all_stores, store_problems
+from .store import Store, all_stores, measure, store_problems
 
 WARN_TOTAL_GB = 1.0
 WARN_FREE_GB = 2.0
@@ -129,19 +129,20 @@ def _harnesses() -> Finding:
 
 def _space() -> Finding:
     root = paths.home()
-    # Measure only data directories, not the venv
-    data_dirs = [paths.stores_dir(), paths.logs_dir(), root / "pg"]
-    data_total = sum(f.stat().st_size for d in data_dirs if d.exists() for f in d.rglob("*") if f.is_file())
-    # Measure venv separately
-    venv_dir = root / "venv"
-    venv_total = sum(f.stat().st_size for f in venv_dir.rglob("*") if f.is_file()) if venv_dir.exists() else 0
+    # Store data = the state dirs, the logs, an embedded Postgres, and the files each store's env names
+    # (adopted stores keep theirs elsewhere). The venv is measured separately: it is the install, not data.
+    data_paths = [paths.stores_dir(), paths.logs_dir(), root / "pg"]
+    for st in all_stores():
+        data_paths += st.state_paths()
+    data_total = measure(data_paths)
+    venv_total = measure([root / "venv"])
     free = shutil.disk_usage(root if root.exists() else Path.home()).free
     warn = []
     if data_total > WARN_TOTAL_GB * 2**30:
-        warn.append(f"{root} holds {data_total / 2**30:.1f} GB of data (> {WARN_TOTAL_GB} GB)")
+        warn.append(f"store data is {data_total / 2**20:.0f} MB (> {WARN_TOTAL_GB * 1024:.0f} MB)")
     if free < WARN_FREE_GB * 2**30:
         warn.append(f"only {free / 2**30:.1f} GB free")
-    detail = "; ".join(warn) or f"{data_total / 2**20:.0f} MB of data under {root}; install (venv) {venv_total / 2**20:.0f} MB; {free / 2**30:.0f} GB free"
+    detail = "; ".join(warn) or f"{data_total / 2**20:.0f} MB of store data; install (venv) {venv_total / 2**20:.0f} MB; {free / 2**30:.0f} GB free"
     return Finding(not warn, detail)
 
 
@@ -192,7 +193,7 @@ CHECKS: list[Check] = [
           "slopymem list; ss -ltnp | grep 87", "slopymem start <store>; read ~/.slopymemory/logs/<store>.log", _servers),
     Check("harnesses", "the agent has no memory tools", "each detected harness has slopymem-mcp registered at user scope",
           "claude mcp list; codex mcp list", "slopymem register", _harnesses),
-    Check("space", "disk is filling", "data under ~/.slopymemory (excluding venv), and free disk space on its filesystem; venv size shown separately",
+    Check("space", "disk is filling", "store data (state dirs, logs, and the files each store's env names — adopted stores keep theirs elsewhere) and free disk space under ~/.slopymemory; the venv is measured separately",
           "du -sh ~/.slopymemory; df -h ~", "slopymem list shows per-store sizes; remove a store you no longer want", _space),
     Check("logs", "something failed and nobody knows what", "the last error line of each server log (tail of the last 64 KB); error lines are reported, not failed; an unreadable log fails",
           "tail -50 ~/.slopymemory/logs/<store>.log", "read the line; the error names its anchor", _logs),

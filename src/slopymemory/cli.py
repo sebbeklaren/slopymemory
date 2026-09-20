@@ -87,10 +87,6 @@ def cmd_unlink(a) -> int:
     reg.unlink(path); reg.save(); print("unlinked"); return 0
 
 
-def _dir_size(p: Path) -> int:
-    return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) if p.exists() else 0
-
-
 def cmd_list(a) -> int:
     try:
         reg = Registry.load()
@@ -100,9 +96,12 @@ def cmd_list(a) -> int:
     problems = store_problems()
     if not stores and not problems:
         print("no stores — `slopymem init` in a project directory"); return 0
+    pg = postgres()
     for st in stores:
         up = "up" if srv.probe(st.port) else "down"
-        print(f"{st.name}  {st.dialect}  port {st.port}  {up}  db {st.database}  state {_dir_size(st.path()) // 1024} KB")
+        size = pg.database_size(st.database)
+        db = f"{size // 1024} KB" if size is not None else "unknown — see SETUP.md#postgres"
+        print(f"{st.name}  {st.dialect}  port {st.port}  {up}  db {st.database}  db size {db}  state {st.state_size() // 1024} KB")
         for p in reg.paths_of(st.name):
             print(f"    {p}")
     for problem in problems:

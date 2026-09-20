@@ -7,8 +7,9 @@ from slopymemory.store import Store
 
 
 class FakePg:
-    def __init__(self): self.created = []; self.dropped = []
+    def __init__(self): self.created = []; self.dropped = []; self.sizes = {}
     def database_exists(self, n): return n in self.created
+    def database_size(self, n): return self.sizes.get(n)
     def create_database(self, n): self.created.append(n)
     def drop_database(self, n): self.dropped.append(n)
     def has_pgvector(self): return True
@@ -144,3 +145,18 @@ def test_stop_and_remove_report_a_missing_ss(tmp_home, tmp_path, fake_pg, monkey
     assert code == 1 and "ss not found" in out and "SETUP.md#servers" in out
     code, out = run(["remove", "a"], stdin="y\na\n")
     assert code == 1 and "ss not found" in out and "SETUP.md#servers" in out and Store.exists("a")
+
+
+def test_list_reports_the_state_size_from_the_env_paths_and_the_database_size(tmp_home, tmp_path, fake_pg, monkeypatch):
+    a = tmp_path / "a"; a.mkdir(); monkeypatch.chdir(a); assert run(["init", "--yes"])[0] == 0
+    st = Store.load("a")
+    elsewhere = tmp_path / "elsewhere"; elsewhere.mkdir()
+    (elsewhere / "buf.jsonl").write_bytes(b"x" * 300 * 1024)
+    st.env = {"AM_M3_BUFFER_PATH": str(elsewhere / "buf.jsonl")}; st.save()
+    fake_pg.sizes = {"a_memory": 7 * 1024 * 1024}
+    code, out = run(["list"])
+    assert code == 0 and f"state {Store.load('a').state_size() // 1024} KB" in out and "state 300 KB" in out
+    assert "db a_memory  db size 7168 KB" in out
+    fake_pg.sizes = {}
+    code, out = run(["list"])
+    assert code == 0 and "db size unknown" in out and "SETUP.md#postgres" in out

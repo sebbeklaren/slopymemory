@@ -131,3 +131,17 @@ def test_logs_check_reads_only_the_last_64_kb(tmp_home):
     a.log_file().write_text("ERROR early one\n" + filler + "ERROR late one\nINFO end\n")
     f = checks.by_id("logs").run()
     assert f.ok is True and "ERROR late one" in f.detail and "1 error line" in f.detail and "early" not in f.detail
+
+
+def test_space_check_follows_the_paths_each_stores_env_names(tmp_home, tmp_path, monkeypatch):
+    from slopymemory import paths
+    st = Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system")
+    elsewhere = tmp_path / "elsewhere"; elsewhere.mkdir()
+    (elsewhere / "buf.jsonl").write_bytes(b"x" * (3 * 2**20))
+    st.env = {"AM_M3_BUFFER_PATH": str(elsewhere / "buf.jsonl")}; st.save()
+    monkeypatch.setattr(checks, "WARN_TOTAL_GB", 2 * 2**20 / 2**30)          # warn above 2 MB
+    f = checks.by_id("space").run()
+    assert f.ok is False and "store data is 3 MB" in f.detail
+    monkeypatch.setattr(checks, "WARN_TOTAL_GB", 1.0)
+    f = checks.by_id("space").run()
+    assert f.ok is True and "3 MB of store data" in f.detail
