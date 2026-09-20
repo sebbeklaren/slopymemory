@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from . import paths, server as srv
+from .provision import SystemPostgres, TEMPLATE_HINT
 from .registry import Registry
 from .store import Store, all_stores
 
@@ -52,19 +53,23 @@ def _package() -> Finding:
 
 
 def _postgres() -> Finding:
-    r = subprocess.run(["psql", "-d", "postgres", "-Atc", "select 1 from pg_available_extensions where name='vector'"],
-                       capture_output=True, text=True, check=False)
-    if r.returncode != 0:
-        return Finding(False, f"psql failed: {r.stderr.strip()}")
-    if r.stdout.strip() != "1":
-        return Finding(False, "pgvector is not available")
-    missing = []
-    for st in all_stores():
-        q = subprocess.run(["psql", "-d", "postgres", "-Atc", f"select 1 from pg_database where datname='{st.database}'"],
-                           capture_output=True, text=True, check=False).stdout.strip()
-        if q != "1":
-            missing.append(f"{st.name}: database {st.database} missing")
-    return Finding(not missing, "; ".join(missing) or "reachable, pgvector present, every store's database exists")
+    try:
+        pg = SystemPostgres()
+        if not pg.has_pgvector():
+            return Finding(False, "pgvector is not available on this server")
+        missing = []
+        for st in all_stores():
+            if not pg.database_exists(st.database):
+                missing.append(f"{st.name}: database {st.database} missing")
+        if missing:
+            return Finding(False, "; ".join(missing))
+        tpl = pg.template_exists()
+        su = pg.is_superuser()
+        can = pg.can_provision()
+        return Finding(True, f"reachable; pgvector present; template {'yes' if tpl else 'no'}; superuser {'yes' if su else 'no'}; every store's database exists" +
+                       ("" if can else f"; NEW stores cannot be created yet — {TEMPLATE_HINT}"))
+    except Exception as e:
+        return Finding(False, f"psql failed: {e} — is Postgres running and psql on PATH?")
 
 
 def _model() -> Finding:
@@ -92,12 +97,15 @@ def _registry() -> Finding:
 def _servers() -> Finding:
     rows = []
     bad = False
-    for st in all_stores():
-        up = srv.probe(st.port)
-        pid = srv.pid_on_port(st.port)
-        rows.append(f"{st.name}: port {st.port} {'up' if up else 'down'}" + (f" (pid {pid})" if pid else ""))
-        if pid and not up:
-            bad = True; rows[-1] += " — a process holds the port but does not answer HTTP"
+    try:
+        for st in all_stores():
+            up = srv.probe(st.port)
+            pid = srv.pid_on_port(st.port)
+            rows.append(f"{st.name}: port {st.port} {'up' if up else 'down'}" + (f" (pid {pid})" if pid else ""))
+            if pid and not up:
+                bad = True; rows[-1] += " — a process holds the port but does not answer HTTP"
+    except (FileNotFoundError, OSError) as e:
+        return Finding(False, f"ss failed: {e} — install iproute2")
     return Finding(not bad, "; ".join(rows) or "no stores")
 
 
@@ -111,14 +119,20 @@ def _harnesses() -> Finding:
 
 def _space() -> Finding:
     root = paths.home()
-    total = sum(f.stat().st_size for f in root.rglob("*") if f.is_file()) if root.exists() else 0
+    # Measure only data directories, not the venv
+    data_dirs = [paths.stores_dir(), paths.logs_dir(), root / "pg"]
+    data_total = sum(f.stat().st_size for d in data_dirs if d.exists() for f in d.rglob("*") if f.is_file())
+    # Measure venv separately
+    venv_dir = root / "venv"
+    venv_total = sum(f.stat().st_size for f in venv_dir.rglob("*") if f.is_file()) if venv_dir.exists() else 0
     free = shutil.disk_usage(root if root.exists() else Path.home()).free
     warn = []
-    if total > WARN_TOTAL_GB * 2**30:
-        warn.append(f"{root} holds {total / 2**30:.1f} GB (> {WARN_TOTAL_GB} GB)")
+    if data_total > WARN_TOTAL_GB * 2**30:
+        warn.append(f"{root} holds {data_total / 2**30:.1f} GB of data (> {WARN_TOTAL_GB} GB)")
     if free < WARN_FREE_GB * 2**30:
         warn.append(f"only {free / 2**30:.1f} GB free")
-    return Finding(not warn, "; ".join(warn) or f"{total / 2**20:.0f} MB under {root}; {free / 2**30:.0f} GB free")
+    detail = "; ".join(warn) or f"{data_total / 2**20:.0f} MB of data under {root}; install (venv) {venv_total / 2**20:.0f} MB; {free / 2**30:.0f} GB free"
+    return Finding(not warn, detail)
 
 
 def _logs() -> Finding:
@@ -126,9 +140,17 @@ def _logs() -> Finding:
     for st in all_stores():
         f = st.log_file()
         if f.exists():
-            errs = [l for l in f.read_text(errors="ignore").splitlines() if "ERROR" in l or "Traceback" in l]
-            if errs:
-                lines.append(f"{st.name}: {errs[-1][:160]}")
+            # Read only the last 64 KB to avoid loading huge logs
+            try:
+                with open(f, "rb") as log:
+                    size = log.seek(0, 2)
+                    log.seek(max(0, size - 64 * 1024))
+                    tail = log.read().decode(errors="ignore")
+                errs = [l for l in tail.splitlines() if "ERROR" in l or "Traceback" in l]
+                if errs:
+                    lines.append(f"{st.name}: {errs[-1][:160]}")
+            except Exception:
+                pass
     return Finding(True, "; ".join(lines) or "no error lines in any server log")
 
 
@@ -144,7 +166,7 @@ CHECKS: list[Check] = [
           "ls ~/.slopymemory/venv/bin/python; python3 --version", "re-run install.sh (Plan B) or the dev install script", _python),
     Check("package", "import errors on start", "slopymemory and the substrate are installed in the venv",
           "~/.slopymemory/venv/bin/python -c 'import slopymemory, agent_memory'", "re-run the install", _package),
-    Check("postgres", "init fails or a server dies on start", "Postgres reachable, pgvector available, one database per store",
+    Check("postgres", "init fails or a server dies on start", "Postgres reachable, pgvector available, template/superuser status, one database per store",
           "psql -d postgres -Atc \"select 1 from pg_available_extensions where name='vector'\"", "install pgvector / create the missing database with `slopymem init` or adopt with `link`", _postgres),
     Check("model", "the first server start is slow or fails offline", "the embedder is in the Hugging Face cache",
           "ls ~/.cache/huggingface/hub | grep nomic", "start any store once while online", _model),
@@ -154,9 +176,9 @@ CHECKS: list[Check] = [
           "slopymem list; ss -ltnp | grep 87", "slopymem start <store>; read ~/.slopymemory/logs/<store>.log", _servers),
     Check("harnesses", "the agent has no memory tools", "each detected harness has slopymem-mcp registered at user scope",
           "claude mcp list; codex mcp list", "slopymem register", _harnesses),
-    Check("space", "disk is filling", "state under ~/.slopymemory and free space on its filesystem",
+    Check("space", "disk is filling", "data under ~/.slopymemory (excluding venv), and free disk space on its filesystem; venv size shown separately",
           "du -sh ~/.slopymemory; df -h ~", "slopymem list shows per-store sizes; remove a store you no longer want", _space),
-    Check("logs", "something failed and nobody knows what", "the last error line of each server log",
+    Check("logs", "something failed and nobody knows what", "the last error line of each server log (tail of last 64 KB)",
           "tail -50 ~/.slopymemory/logs/<store>.log", "read the line; the error names its anchor", _logs),
     Check("local-paths", "a leak of the author's machine into the package", "no installed file contains a machine-local path",
           "grep -r '/home/' ~/.slopymemory/venv/lib/python3.13/site-packages/slopymemory", "report it — the export scanner missed it", _local_paths),

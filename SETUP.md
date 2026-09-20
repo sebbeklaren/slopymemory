@@ -58,7 +58,7 @@ ls ~/.slopymemory/venv/bin/python; python3 --version
 
 **Symptom:** init fails or a server dies on start
 
-**Verifies:** Postgres reachable, pgvector available, one database per store
+**Verifies:** Postgres reachable, pgvector available, template/superuser status, one database per store
 
 **See for yourself:**
 
@@ -128,7 +128,7 @@ claude mcp list; codex mcp list
 
 **Symptom:** disk is filling
 
-**Verifies:** state under ~/.slopymemory and free space on its filesystem
+**Verifies:** data under ~/.slopymemory (excluding venv), and free disk space on its filesystem; venv size shown separately
 
 **See for yourself:**
 
@@ -142,7 +142,7 @@ du -sh ~/.slopymemory; df -h ~
 
 **Symptom:** something failed and nobody knows what
 
-**Verifies:** the last error line of each server log
+**Verifies:** the last error line of each server log (tail of last 64 KB)
 
 **See for yourself:**
 
