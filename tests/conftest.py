@@ -17,13 +17,16 @@ def free_port():
 
 
 @pytest.fixture
-def fake_http_server(free_port):
+def fake_http_server():
     """Anything that answers HTTP on a port — enough for the probe."""
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(406); self.end_headers()
         def log_message(self, *a): pass
-    srv = http.server.HTTPServer(("127.0.0.1", free_port), H)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    srv = http.server.HTTPServer(("127.0.0.1", port), H)
     t = threading.Thread(target=srv.serve_forever, daemon=True); t.start()
-    yield free_port
+    yield port
     srv.shutdown()
