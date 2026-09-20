@@ -80,9 +80,17 @@ def register(harness_id: str | None, yes: bool) -> int:
         print(f"{h.name}: {' '.join(cmd)}")
         if not confirm("run it?", yes):
             rc = 1; continue
-        subprocess.run(cmd, check=True)
+        try:
+            subprocess.run(cmd, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            print(f"{h.name}: registration failed: {e} — see SETUP.md#harnesses", file=sys.stderr)
+            rc = 1; continue
         if h.instructions_file and confirm(f"append the offer line to {h.instructions_file()}?", yes):
             f = h.instructions_file(); f.parent.mkdir(parents=True, exist_ok=True)
-            with open(f, "a") as fh:
-                fh.write(f"\n# slopymemory\n{h.offer_line}\n")
+            existing = f.read_text() if f.exists() else ""
+            if h.offer_line in existing:
+                print("offer line already present")
+            else:
+                with open(f, "a") as fh:
+                    fh.write(f"\n# slopymemory\n{h.offer_line}\n")
     return rc

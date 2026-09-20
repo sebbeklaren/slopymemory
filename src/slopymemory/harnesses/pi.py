@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from . import Harness
+from . import Harness, read_config
 
 
 def _cfg() -> Path:
@@ -8,10 +8,13 @@ def _cfg() -> Path:
 
 
 def _registered(launcher: str) -> bool:
-    if not _cfg().exists():
+    d = read_config(_cfg(), json.loads)
+    if d is None:
         return False
-    d = json.loads(_cfg().read_text())
-    return any(v.get("command") == launcher for v in d.get("mcpServers", {}).values())
+    servers = d.get("mcpServers", {})
+    if not isinstance(servers, dict):
+        return False
+    return any(v.get("command") == launcher for v in servers.values())
 
 
 HARNESS = Harness(

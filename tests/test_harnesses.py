@@ -1,3 +1,4 @@
+import io, sys, subprocess
 from pathlib import Path
 from slopymemory import harnesses
 from slopymemory.harnesses import claude_code, codex
@@ -26,3 +27,59 @@ def test_registered_reads_the_config_files(tmp_path, monkeypatch):
     assert claude_code.HARNESS.registered("/other") is False
     (tmp_path / ".codex").mkdir(); (tmp_path / ".codex" / "config.toml").write_text('[mcp_servers.memory]\ncommand = "/x/slopymem-mcp"\n')
     assert codex.HARNESS.registered("/x/slopymem-mcp") is True
+
+
+def test_malformed_config_files_return_false(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Malformed JSON in claude config
+    (tmp_path / ".claude.json").write_text("{not json")
+    assert claude_code.HARNESS.registered("/x/slopymem-mcp") is False
+    captured = capsys.readouterr()
+    assert "unreadable" in captured.err and "SETUP.md#harnesses" in captured.err
+    # Non-dict mcp_servers in codex config
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "config.toml").write_text('mcp_servers = "not a dict"')
+    assert codex.HARNESS.registered("/x/slopymem-mcp") is False
+
+
+def test_register_catches_subprocess_errors(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Mock subprocess.run to raise CalledProcessError
+    def mock_run(cmd, **kwargs):
+        raise subprocess.CalledProcessError(1, "claude")
+    monkeypatch.setattr(harnesses.subprocess, "run", mock_run)
+    # Mock detect and registered to return True/False as needed
+    harness = harnesses.KNOWN[0]  # claude-code
+    monkeypatch.setattr(harness, "detect", lambda: True)
+    monkeypatch.setattr(harness, "registered", lambda x: False)
+    # Call register with yes=True to skip prompts
+    rc = harnesses.register("claude-code", yes=True)
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "registration failed" in captured.err and "SETUP.md#harnesses" in captured.err
+
+
+def test_offer_line_not_appended_twice(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Create a claude config that shows as registered
+    (tmp_path / ".claude.json").write_text('{"mcpServers": {"memory": {"command": "/x/slopymem-mcp"}}}')
+    # Create instructions file that already contains the offer line
+    (tmp_path / ".claude").mkdir()
+    instructions = tmp_path / ".claude" / "CLAUDE.md"
+    instructions.write_text(f"# Existing content\n\n# slopymemory\n{harnesses.OFFER_LINE}\n")
+    # Mock subprocess.run to succeed
+    def mock_run(cmd, **kwargs):
+        pass
+    monkeypatch.setattr(harnesses.subprocess, "run", mock_run)
+    # Mock detect and registered to make registration flow proceed
+    harness = harnesses.KNOWN[0]  # claude-code
+    monkeypatch.setattr(harness, "detect", lambda: True)
+    monkeypatch.setattr(harness, "registered", lambda x: False)
+    # Call register with yes=True
+    rc = harnesses.register("claude-code", yes=True)
+    assert rc == 0
+    # Verify file wasn't modified
+    content = instructions.read_text()
+    assert content.count(harnesses.OFFER_LINE) == 1
+    captured = capsys.readouterr()
+    assert "offer line already present" in captured.out

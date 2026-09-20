@@ -1,6 +1,6 @@
 import shutil, tomllib
 from pathlib import Path
-from . import Harness
+from . import Harness, read_config
 
 
 def _cfg() -> Path:
@@ -8,10 +8,13 @@ def _cfg() -> Path:
 
 
 def _registered(launcher: str) -> bool:
-    if not _cfg().exists():
+    d = read_config(_cfg(), tomllib.loads)
+    if d is None:
         return False
-    d = tomllib.loads(_cfg().read_text())
-    return any(v.get("command") == launcher for v in d.get("mcp_servers", {}).values())
+    servers = d.get("mcp_servers", {})
+    if not isinstance(servers, dict):
+        return False
+    return any(v.get("command") == launcher for v in servers.values())
 
 
 HARNESS = Harness(
