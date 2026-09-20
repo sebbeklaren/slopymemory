@@ -88,8 +88,6 @@ def test_slug_refuses_empty_name_with_anchor():
 
 def test_system_postgres_create_database_branches(monkeypatch):
     """Finding 2: test all three branches of create_database without real Postgres."""
-    import subprocess as sp_module
-
     calls = []
     psql_calls = []
 
@@ -118,7 +116,6 @@ def test_system_postgres_create_database_branches(monkeypatch):
     monkeypatch.setattr(provision.subprocess, "run", fake_run)
     monkeypatch.setattr(pg, "template_exists", lambda: False)
     monkeypatch.setattr(pg, "is_superuser", lambda: True)
-    original_psql = pg._psql
     def fake_psql(sql, db="postgres"):
         psql_calls.append((sql, db))
         return ""

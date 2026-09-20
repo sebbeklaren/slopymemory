@@ -1,5 +1,4 @@
-import os, socket, subprocess, sys, time, http.server, threading
-from pathlib import Path
+import os, socket, http.server, threading
 import pytest
 
 

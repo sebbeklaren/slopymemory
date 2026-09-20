@@ -1,5 +1,4 @@
 import datetime as dt
-from pathlib import Path
 import pytest
 from slopymemory.store import Store, DIALECT_ENV, allocate_port, collisions
 

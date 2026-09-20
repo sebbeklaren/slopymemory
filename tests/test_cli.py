@@ -1,5 +1,4 @@
 import io, sys
-from pathlib import Path
 import pytest
 from slopymemory import cli, provision
 from slopymemory.registry import Registry

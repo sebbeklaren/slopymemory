@@ -4,7 +4,6 @@ implementation, the CLI is the reference."""
 from __future__ import annotations
 import argparse
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from . import server as srv

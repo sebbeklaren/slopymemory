@@ -26,6 +26,28 @@ def read_config(path: Path, parse: Callable[[str], dict]) -> dict | None:
         return None
 
 
+def servers_table(path: Path, parse: Callable[[str], dict], key: str) -> dict[str, dict]:
+    """The harness's MCP-server table, `key`, as {name: entry} — only the entries that ARE tables. A top
+    level, a table or an entry of the wrong shape is noted on stderr and read as absent, never raised."""
+    d = read_config(path, parse)
+    if d is None:
+        return {}
+    if not isinstance(d, dict):
+        print(f"{path}: the top level is not an object/table — see SETUP.md#harnesses", file=sys.stderr)
+        return {}
+    servers = d.get(key, {})
+    if not isinstance(servers, dict):
+        print(f"{path}: {key} is not an object/table — see SETUP.md#harnesses", file=sys.stderr)
+        return {}
+    good = {}
+    for name, entry in servers.items():
+        if isinstance(entry, dict):
+            good[name] = entry
+        else:
+            print(f"{path}: {key}.{name} is not an object/table; skipped — see SETUP.md#harnesses", file=sys.stderr)
+    return good
+
+
 @dataclass
 class Harness:
     id: str

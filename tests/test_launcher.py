@@ -1,4 +1,4 @@
-import asyncio, os, sys
+import os, sys
 from pathlib import Path
 import pytest
 import mcp.types as types

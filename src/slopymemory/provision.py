@@ -55,8 +55,8 @@ class SystemPostgres:
 
     def template_exists(self) -> bool:
         """Check if slopymem_template exists and is usable (either is_template=true or owned by current user)."""
-        self._ident(TEMPLATE_DB)
-        return self._psql(f"select 1 from pg_database d where d.datname = '{TEMPLATE_DB}' and (d.datistemplate or d.datdba = (select oid from pg_roles where rolname = current_user))") == "1"
+        tpl = self._ident(TEMPLATE_DB)
+        return self._psql(f"select 1 from pg_database d where d.datname = '{tpl}' and (d.datistemplate or d.datdba = (select oid from pg_roles where rolname = current_user))") == "1"
 
     def is_superuser(self) -> bool:
         return self._psql("select rolsuper from pg_roles where rolname = current_user") == "t"

@@ -4,7 +4,6 @@ from __future__ import annotations
 import importlib.metadata as md
 import os
 import shutil
-import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass

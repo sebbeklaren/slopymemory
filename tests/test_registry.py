@@ -1,6 +1,6 @@
 from pathlib import Path
 import pytest
-from slopymemory.registry import Registry, Link
+from slopymemory.registry import Registry
 
 
 def test_empty_when_no_file(tmp_home):

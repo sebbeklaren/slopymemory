@@ -1,5 +1,4 @@
 import os, sys, time, threading
-from pathlib import Path
 import pytest
 from slopymemory import server
 from slopymemory.store import Store
