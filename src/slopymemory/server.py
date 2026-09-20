@@ -8,8 +8,6 @@ import os
 import signal
 import subprocess
 import time
-import warnings
-from pathlib import Path
 from . import paths
 from .store import Store
 
@@ -21,10 +19,26 @@ DEADLINE_S = 60.0
 
 
 class ServerNotUp(RuntimeError):
-    def __init__(self, store: Store, seconds: float):
-        super().__init__(
-            f"store {store.name}: no server answering on port {store.port} after {seconds:.0f}s; "
-            f"log: {store.log_file()} — see SETUP.md#servers")
+    """The store's server is not answering; the message names the store, the diagnosis and the anchor."""
+
+
+def _timed_out(store: Store, seconds: float) -> ServerNotUp:
+    return ServerNotUp(f"store {store.name}: no server answering on port {store.port} after {seconds:.0f}s; "
+                       f"log: {store.log_file()} — see SETUP.md#servers")
+
+
+def _died(store: Store, returncode: int) -> ServerNotUp:
+    return ServerNotUp(f"store {store.name}: server exited with code {returncode} before it answered — "
+                       f"last log lines: {log_tail(store)} — log: {store.log_file()} — see SETUP.md#servers")
+
+
+def log_tail(store: Store, lines: int = 5) -> str:
+    """The last lines of the store's log, or why they could not be read — never an exception."""
+    try:
+        tail = store.log_file().read_text(errors="replace").splitlines()[-lines:]
+    except OSError as e:
+        return f"(log unreadable: {e})"
+    return " | ".join(l.strip() for l in tail) or "(log empty)"
 
 
 def probe(port: int, timeout: float = 0.5) -> bool:
@@ -33,7 +47,7 @@ def probe(port: int, timeout: float = 0.5) -> bool:
         c.request("GET", "/mcp")
         c.getresponse()
         return True
-    except OSError:
+    except (OSError, http.client.HTTPException):    # refused, timed out, or answered with something not HTTP
         return False
     finally:
         try:
@@ -46,20 +60,23 @@ def server_command(store: Store) -> list[str]:
     return [str(paths.venv_python()), "-m", SERVER_MODULE]
 
 
-def spawn_detached(store: Store) -> int:
+# The servers this process started, by pid. The handle is KEPT for the life of this process: the child is
+# detached on purpose (a new session; it outlives us), and a Popen dropped while its child runs is a
+# ResourceWarning that says exactly that — holding it is the honest way to have no warning.
+_spawned: dict[int, subprocess.Popen] = {}
+
+
+def spawn_detached(store: Store) -> subprocess.Popen:
+    """Start the server in its own session and RETURN the Popen: the caller polls it, so a server that
+    dies at once is reported at once, with its exit code."""
     store.log_file().parent.mkdir(parents=True, exist_ok=True)
     store.path().mkdir(parents=True, exist_ok=True)
     env = {**os.environ, **store.server_env()}
     with open(store.log_file(), "ab") as log:
         p = subprocess.Popen(server_command(store), env=env, cwd=store.path(), stdin=subprocess.DEVNULL,
                              stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-        pid = p.pid
-    # Suppress ResourceWarning: process is intentionally detached in a new session and will outlive
-    # this Python process, so the Popen object's lack of explicit wait() is expected and safe.
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=".*subprocess.*still running", category=ResourceWarning)
-        del p
-    return pid
+    _spawned[p.pid] = p
+    return p
 
 
 def ensure_up(store: Store, deadline_s: float = DEADLINE_S) -> None:
@@ -69,14 +86,17 @@ def ensure_up(store: Store, deadline_s: float = DEADLINE_S) -> None:
     with open(store.lock_file(), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)          # the second caller waits here while the first starts
         try:
+            p = None
             if not probe(store.port):
-                spawn_detached(store)
+                p = spawn_detached(store)
             t0 = time.monotonic()
             while time.monotonic() - t0 < deadline_s:
                 if probe(store.port):
                     return
+                if p is not None and p.poll() is not None:
+                    raise _died(store, p.returncode)
                 time.sleep(0.25)
-            raise ServerNotUp(store, deadline_s)
+            raise _timed_out(store, deadline_s)
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
 

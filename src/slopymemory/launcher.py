@@ -41,6 +41,14 @@ class _FakePg:  # tests only (SLOPYMEM_FAKE_PG=1|cannot|broken): no database is 
     def describe(self): return "fake"
 
 
+def _cause(e: BaseException) -> BaseException:
+    """anyio re-raises whatever leaves a task group inside an ExceptionGroup ("unhandled errors in a
+    TaskGroup (1 sub-exception)"); the message the harness shows must be the cause, not the wrapper."""
+    while isinstance(e, BaseExceptionGroup) and len(e.exceptions) == 1:
+        e = e.exceptions[0]
+    return e
+
+
 class Launcher:
     def __init__(self) -> None:
         self.cwd = Path(os.environ.get("SLOPYMEM_CWD", os.getcwd()))
@@ -70,6 +78,7 @@ class Launcher:
         (that raised "Attempted to exit a cancel scope in a different task than it was entered in" —
         found running this against the SDK's real streamablehttp_client/ClientSession task groups).
         This task instead holds the connection open itself until `self.closing` is set at shutdown."""
+        self.store = store                     # known from here; `self.upstream` is the readiness signal
         self.connect_task = asyncio.create_task(self.connect(store))
 
     async def connect(self, store: Store) -> None:
@@ -80,11 +89,17 @@ class Launcher:
             await asyncio.to_thread(srv.ensure_up, store)
             async with streamablehttp_client(f"http://127.0.0.1:{store.port}/mcp") as (read, write, _):
                 async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    self.upstream, self.store = session, store
+                    try:                        # the port answering HTTP is not the handshake completing
+                        await asyncio.wait_for(session.initialize(), srv.DEADLINE_S)
+                    except TimeoutError:
+                        raise srv.ServerNotUp(
+                            f"store {store.name}: the server on port {store.port} answers HTTP but did not complete "
+                            f"the MCP handshake within {srv.DEADLINE_S:.0f}s — log: {store.log_file()} — see SETUP.md#servers")
+                    self.upstream = session
                     self.ready.set()
                     await self.closing.wait()          # keep the connection open until the launcher exits
         except Exception as e:             # any failure is reported through the tools, never swallowed
+            e = _cause(e)
             # ServerNotUp already names the store, its log file and an anchor (see server.py); any
             # other exception (e.g. an httpx ConnectError from the streamable-http handshake) does not,
             # so it gets the same anchor here rather than surfacing as a bare, uninvestigable message.
@@ -139,12 +154,20 @@ class Launcher:
         @s.list_prompts()
         async def list_prompts() -> list[types.Prompt]:
             await self.ready.wait()
-            return (await self.upstream.list_prompts()).prompts if self.upstream else []
+            if self.upstream is None:
+                if self.failure:                # the same message on every surface the harness may read first
+                    raise RuntimeError(self.failure)
+                return []
+            return (await self.upstream.list_prompts()).prompts
 
         @s.list_resources()
         async def list_resources() -> list[types.Resource]:
             await self.ready.wait()
-            return (await self.upstream.list_resources()).resources if self.upstream else []
+            if self.upstream is None:
+                if self.failure:
+                    raise RuntimeError(self.failure)
+                return []
+            return (await self.upstream.list_resources()).resources
 
         @s.read_resource()
         async def read_resource(uri):
@@ -202,7 +225,12 @@ class Launcher:
         finally:
             self.closing.set()
             if self.connect_task is not None:
-                await self.connect_task
+                try:                            # bounded: a wedged upstream must not keep the launcher alive
+                    await asyncio.wait_for(self.connect_task, srv.DEADLINE_S)
+                except TimeoutError:
+                    name = self.store.name if self.store else "?"
+                    print(f"slopymem-mcp: store {name}: the upstream connection did not close within "
+                          f"{srv.DEADLINE_S:.0f}s; leaving it — see SETUP.md#servers", file=sys.stderr)
 
 
 def main() -> None:

@@ -46,7 +46,7 @@ def test_ensure_up_raises_a_named_error_past_the_deadline(tmp_home, free_port, m
     monkeypatch.setattr(server, "server_command", lambda st: [sys.executable, "-c", "import time; time.sleep(30)"])
     pids = []
     real_spawn = server.spawn_detached
-    monkeypatch.setattr(server, "spawn_detached", lambda st: (pids.append(pid := real_spawn(st)), pid)[1])
+    monkeypatch.setattr(server, "spawn_detached", lambda st: (pids.append((p := real_spawn(st)).pid), p)[1])
     try:
         with pytest.raises(server.ServerNotUp) as e:
             server.ensure_up(st, deadline_s=1.5)
@@ -57,3 +57,34 @@ def test_ensure_up_raises_a_named_error_past_the_deadline(tmp_home, free_port, m
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+
+
+def test_probe_is_false_for_a_port_that_answers_but_not_with_http(free_port):
+    """A foreign process on the port (or a half-started one) answers bytes that are not HTTP; that is
+    'not up', not an exception out of `slopymem list`."""
+    import socket
+    ready = threading.Event()
+    def serve():
+        with socket.socket() as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("127.0.0.1", free_port)); s.listen(); ready.set()
+            c, _ = s.accept()
+            with c:
+                c.sendall(b"nope\n")
+    t = threading.Thread(target=serve, daemon=True); t.start(); ready.wait(2)
+    assert server.probe(free_port) is False
+    t.join(2)
+
+
+def test_ensure_up_reports_a_server_that_exits_at_once_with_its_log_tail(tmp_home, free_port, monkeypatch):
+    """A server that dies on start (missing database, import error) must not be waited on for the whole
+    deadline: the exit code and the last log lines are the diagnosis, and they are in the message."""
+    st = Store(name="dies", dialect="coding", port=free_port, database="d", postgres="system"); st.save()
+    monkeypatch.setattr(server, "server_command",
+                        lambda st: [sys.executable, "-c", "import sys; print('line one'); print('FATAL: no such database', file=sys.stderr); sys.exit(3)"])
+    t0 = time.monotonic()
+    with pytest.raises(server.ServerNotUp) as e:
+        server.ensure_up(st, deadline_s=30)
+    assert time.monotonic() - t0 < 10
+    msg = str(e.value)
+    assert "exited with code 3" in msg and "FATAL: no such database" in msg and "dies" in msg and "SETUP.md#servers" in msg

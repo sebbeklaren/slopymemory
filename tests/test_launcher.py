@@ -129,6 +129,10 @@ async def test_a_malformed_store_or_registry_file_still_answers_the_handshake_an
             with pytest.raises(McpError) as e:
                 await s.list_tools()
             assert "SETUP.md#registry" in str(e.value) and "database" in str(e.value)
+            with pytest.raises(McpError, match="SETUP.md#registry"):     # every surface raises the same message
+                await s.list_prompts()
+            with pytest.raises(McpError, match="SETUP.md#registry"):
+                await s.list_resources()
     (tmp_home / "registry.toml").write_text("link = [ { path = ")
     async with stdio_client(launcher_params(repo, tmp_home)) as (rd, wr):
         async with ClientSession(rd, wr) as s:
@@ -136,3 +140,41 @@ async def test_a_malformed_store_or_registry_file_still_answers_the_handshake_an
             with pytest.raises(McpError) as e:
                 await s.list_tools()
             assert "SETUP.md#registry" in str(e.value) and "registry.toml" in str(e.value)
+
+
+@pytest.fixture
+def hanging_mcp_server():
+    """Answers the HTTP probe but never answers the MCP handshake — a bound port with a wedged loop."""
+    import http.server, threading
+    release = threading.Event()
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self): self.send_response(406); self.end_headers()
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            release.wait()
+        def log_message(self, *a): pass
+    hs = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H); hs.daemon_threads = True
+    t = threading.Thread(target=hs.serve_forever, daemon=True); t.start()
+    yield hs.server_address[1]
+    release.set(); hs.shutdown(); hs.server_close()
+
+
+async def test_a_server_that_never_completes_the_handshake_is_a_failure_within_the_deadline(tmp_home, tmp_path, hanging_mcp_server, monkeypatch):
+    """DEADLINE_S bounds 'answers HTTP'; it must also bound the MCP handshake, or a wedged server hangs
+    every tool call with no message. In-process: the deadline is shortened and connect() is awaited."""
+    import time
+    from slopymemory.launcher import Launcher
+    repo = tmp_path / "repo"; repo.mkdir()
+    Store(name="hang", dialect="coding", port=hanging_mcp_server, database="x", postgres="system").save()
+    r = Registry.load(); r.link(repo, "hang"); r.save()
+    monkeypatch.setenv("SLOPYMEM_CWD", str(repo))
+    monkeypatch.setattr(server, "DEADLINE_S", 0.5)
+    launcher = Launcher()
+    t0 = time.monotonic()
+    await launcher.connect(launcher.resolve())
+    assert time.monotonic() - t0 < 5
+    assert launcher.ready.is_set() and launcher.upstream is None
+    assert "hang" in launcher.failure and "SETUP.md#servers" in launcher.failure and "handshake" in launcher.failure
+    handler = launcher.server.request_handlers[types.ListToolsRequest]
+    with pytest.raises(RuntimeError, match="SETUP.md#servers"):
+        await handler(types.ListToolsRequest(method="tools/list"))
