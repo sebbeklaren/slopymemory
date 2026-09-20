@@ -7,6 +7,10 @@ You are probably an agent asked to find out why memory is not working. Start her
 - **slopymem-mcp** — the launcher your harness starts in the project directory. It looks the directory up in
   the registry, starts that store's server if it is down, waits, and forwards your MCP calls to it.
 - **a store** — one project's memory: a Postgres database and a state directory `~/.slopymemory/stores/<name>/`.
+  The database is on the **system** Postgres (peer auth) or on the **embedded** one — a PostgreSQL 18 + pgvector
+  cluster from the `embedded-postgres` wheel under `~/.slopymemory/pg`, started on demand before the store's server,
+  reachable only over its unix socket (no TCP port), log at `~/.slopymemory/pg/log`. `store.toml` says which
+  (`postgres = "system" | "embedded"`); `slopymem init --postgres …` chooses for a new store.
 - **the registry** — `~/.slopymemory/registry.toml`: directory prefix → store name. Longest prefix wins.
 - **the server** — one process per store, on `127.0.0.1:<port>` (`store.toml`), log at `~/.slopymemory/logs/<name>.log`.
 - **slopymem** — the command: `init`, `link`, `unlink`, `list`, `start`, `stop`, `doctor`, `register`, `remove`.

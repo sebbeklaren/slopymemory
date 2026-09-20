@@ -9,7 +9,8 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
-from . import paths, server as srv
+from . import embedded_pg, paths, server as srv
+from .embedded_pg import EmbeddedPostgres
 from .harnesses import status as harness_status
 from .provision import InitRefused, SystemPostgres, TEMPLATE_HINT
 from .paths import ConfigError
@@ -61,27 +62,78 @@ def _package() -> Finding:
 
 
 def _postgres() -> Finding:
+    """Both backends, each when it matters: the embedded Postgres when its data dir exists or a store is on it; the
+    system one when a store is on it, or when nothing else exists yet (a fresh machine: which one will `init` get?).
+    A store whose backend cannot be reached is a FAIL naming the store. The doctor is read-only: an embedded cluster
+    that is down is reported as down, never started to look inside."""
+    stores = all_stores()
+    on_embedded = [s for s in stores if s.postgres == "embedded"]
+    on_system = [s for s in stores if s.postgres == "system"]
+    pgdir = paths.embedded_pg_dir()
+    parts, failures = [], []
+    if pgdir.exists() or on_embedded:
+        parts.append(_embedded_part(pgdir, on_embedded, failures))
+    if on_system or not (pgdir.exists() or on_embedded):
+        parts.append(_system_part(on_system, failures, fresh=not stores))
+    if failures:
+        detail = "; ".join(failures)              # a psql refusal already carries the anchor: not a second one
+        return Finding(False, detail if "SETUP.md#postgres" in detail else detail + " — see SETUP.md#postgres")
+    return Finding(True, "; ".join(parts))
+
+
+def _embedded_part(pgdir: Path, on_it: list[Store], failures: list[str]) -> str:
+    n = f"{len(on_it)} store(s)"
+    if (reason := embedded_pg.unavailable_reason()) is not None:
+        if on_it:
+            failures.append(f"{', '.join(s.name for s in on_it)}: on the embedded Postgres, but {reason}")
+        return f"embedded: unavailable — {reason}"
+    if not pgdir.exists():                        # only reachable with a store on it
+        failures.append(f"{', '.join(s.name for s in on_it)}: on the embedded Postgres, but its data dir {pgdir} does not exist")
+        return f"embedded: no data dir at {pgdir}"
+    epg = EmbeddedPostgres(pgdir)
+    size = f"data {epg.data_size() / 2**20:.0f} MB"
+    if not epg.is_running():
+        return f"embedded: not running (starts with a store's server); pgvector available; {size}; {n}, databases not verified while down"
+    try:
+        if not epg.has_pgvector():
+            failures.append("embedded Postgres is running without pgvector")
+        for st in on_it:
+            if not epg.database_exists(st.database):
+                failures.append(f"{st.name}: database {st.database} missing on the embedded Postgres")
+    except InitRefused as e:
+        failures.append(f"embedded Postgres: {e}")
+    return f"embedded: running; pgvector present; {size}; {n}"
+
+
+def _system_part(on_it: list[Store], failures: list[str], fresh: bool) -> str:
+    """The system Postgres as before. Its failure is a FAIL when a store depends on it, or when the machine has
+    nothing else to provision with; otherwise it is said, and new stores go to the embedded one."""
+    names = ", ".join(s.name for s in on_it)
     try:
         pg = SystemPostgres()
         if not pg.has_pgvector():
-            return Finding(False, "pgvector is not available on this server")
-        missing = []
-        for st in all_stores():
+            raise InitRefused("pgvector is not available on this server")
+        for st in on_it:
             if not pg.database_exists(st.database):
-                missing.append(f"{st.name}: database {st.database} missing")
-        if missing:
-            return Finding(False, "; ".join(missing))
-        tpl = pg.template_exists()
-        su = pg.is_superuser()
-        cdb = pg.can_create_databases()
-        can = pg.can_provision()
-        return Finding(True, f"reachable; pgvector present; template {'yes' if tpl else 'no'}; superuser {'yes' if su else 'no'}; "
-                       f"role can create databases: {'yes' if cdb else 'no'}; every store's database exists" +
-                       ("" if can else f"; NEW stores cannot be created yet — {TEMPLATE_HINT}"))
-    except InitRefused as e:        # carries the tool's own stderr and the anchor
-        return Finding(False, str(e))
+                failures.append(f"{st.name}: database {st.database} missing on the system Postgres")
+        tpl, su, cdb, can = pg.template_exists(), pg.is_superuser(), pg.can_create_databases(), pg.can_provision()
+        detail = (f"system: reachable; pgvector present; template {'yes' if tpl else 'no'}; superuser {'yes' if su else 'no'}; "
+                  f"role can create databases: {'yes' if cdb else 'no'}")
+        if not can:
+            detail += (f"; NEW stores cannot be created on it yet — {TEMPLATE_HINT}"
+                       + ("; new stores use the embedded Postgres" if embedded_pg.available() else ""))
+        return detail
+    except InitRefused as e:            # carries the tool's own stderr and the anchor
+        why = str(e)
     except Exception as e:
-        return Finding(False, f"psql failed: {e} — is Postgres running and psql on PATH?")
+        why = f"psql failed: {e} — is Postgres running and psql on PATH?"
+    if on_it:
+        failures.append(f"{names}: system Postgres: {why}")
+    elif fresh and embedded_pg.available():
+        return f"system: {why}; new stores use the embedded Postgres"
+    elif fresh:
+        failures.append(f"no Postgres can provision stores: system: {why}; embedded: {embedded_pg.unavailable_reason()}")
+    return f"system: {why}"
 
 
 def _model() -> Finding:
@@ -134,7 +186,7 @@ def _space() -> Finding:
     root = paths.home()
     # Store data = the state dirs, the logs, an embedded Postgres, and the files each store's env names
     # (adopted stores keep theirs elsewhere). The venv is measured separately: it is the install, not data.
-    data_paths = [paths.stores_dir(), paths.logs_dir(), root / "pg"]
+    data_paths = [paths.stores_dir(), paths.logs_dir(), paths.embedded_pg_dir()]
     for st in all_stores():
         data_paths += st.state_paths()
     data_total = measure(data_paths)
@@ -186,8 +238,12 @@ CHECKS: list[Check] = [
           "ls ~/.slopymemory/venv/bin/python; python3 --version", "re-run the installer or the dev install script", _python),
     Check("package", "import errors on start", "slopymemory and the substrate are installed in the venv",
           "~/.slopymemory/venv/bin/python -c 'import slopymemory, agent_memory'", "re-run the install", _package),
-    Check("postgres", "init fails or a server dies on start", "Postgres reachable, pgvector available, template/superuser/CREATEDB status, one database per store",
-          "psql -d postgres -Atc \"select 1 from pg_available_extensions where name='vector'\"", "install pgvector / create the missing database with `slopymem init` or adopt with `link`", _postgres),
+    Check("postgres", "init fails or a server dies on start",
+          "each backend in use: the embedded Postgres under ~/.slopymemory/pg (running or not — the doctor never starts it; pgvector; data size) when its data dir exists or a store is on it; "
+          "the system Postgres (reachable, pgvector, template/superuser/CREATEDB) when a store is on it or nothing exists yet; one database per store on its own backend. "
+          "A store whose backend is unreachable fails, by name. `slopymem init --postgres system|embedded` picks; the default is embedded when ~/.slopymemory/pg exists, else system if it can provision, else embedded",
+          "slopymem list; ls ~/.slopymemory/pg; tail ~/.slopymemory/pg/log; psql -d postgres -Atc \"select 1 from pg_available_extensions where name='vector'\"",
+          "embedded: read ~/.slopymemory/pg/log, re-run the install if the wheel is missing; system: install pgvector / the template; a missing database: `slopymem init` or adopt with `link`", _postgres),
     Check("model", "the first server start is slow or fails offline", "the embedder is in the Hugging Face cache",
           "ls ~/.cache/huggingface/hub | grep nomic", "start any store once while online", _model),
     Check("registry", "a directory resolves to the wrong store, or two stores collide", "registry parses; every linked store exists; no two stores share a port or database",

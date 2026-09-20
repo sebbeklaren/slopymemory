@@ -7,6 +7,10 @@ You are probably an agent asked to find out why memory is not working. Start her
 - **slopymem-mcp** — the launcher your harness starts in the project directory. It looks the directory up in
   the registry, starts that store's server if it is down, waits, and forwards your MCP calls to it.
 - **a store** — one project's memory: a Postgres database and a state directory `~/.slopymemory/stores/<name>/`.
+  The database is on the **system** Postgres (peer auth) or on the **embedded** one — a PostgreSQL 18 + pgvector
+  cluster from the `embedded-postgres` wheel under `~/.slopymemory/pg`, started on demand before the store's server,
+  reachable only over its unix socket (no TCP port), log at `~/.slopymemory/pg/log`. `store.toml` says which
+  (`postgres = "system" | "embedded"`); `slopymem init --postgres …` chooses for a new store.
 - **the registry** — `~/.slopymemory/registry.toml`: directory prefix → store name. Longest prefix wins.
 - **the server** — one process per store, on `127.0.0.1:<port>` (`store.toml`), log at `~/.slopymemory/logs/<name>.log`.
 - **slopymem** — the command: `init`, `link`, `unlink`, `list`, `start`, `stop`, `doctor`, `register`, `remove`.
@@ -58,15 +62,15 @@ ls ~/.slopymemory/venv/bin/python; python3 --version
 
 **Symptom:** init fails or a server dies on start
 
-**Verifies:** Postgres reachable, pgvector available, template/superuser/CREATEDB status, one database per store
+**Verifies:** each backend in use: the embedded Postgres under ~/.slopymemory/pg (running or not — the doctor never starts it; pgvector; data size) when its data dir exists or a store is on it; the system Postgres (reachable, pgvector, template/superuser/CREATEDB) when a store is on it or nothing exists yet; one database per store on its own backend. A store whose backend is unreachable fails, by name. `slopymem init --postgres system|embedded` picks; the default is embedded when ~/.slopymemory/pg exists, else system if it can provision, else embedded
 
 **See for yourself:**
 
 ```bash
-psql -d postgres -Atc "select 1 from pg_available_extensions where name='vector'"
+slopymem list; ls ~/.slopymemory/pg; tail ~/.slopymemory/pg/log; psql -d postgres -Atc "select 1 from pg_available_extensions where name='vector'"
 ```
 
-**Fix:** install pgvector / create the missing database with `slopymem init` or adopt with `link`
+**Fix:** embedded: read ~/.slopymemory/pg/log, re-run the install if the wheel is missing; system: install pgvector / the template; a missing database: `slopymem init` or adopt with `link`
 
 ## model
 

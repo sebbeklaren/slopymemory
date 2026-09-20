@@ -42,13 +42,22 @@ def test_postgres_check_with_fake_pg_ok_but_no_provision(tmp_home):
     assert "slopymem_template" in f.detail
 
 
-def test_postgres_check_with_psql_missing(tmp_home):
-    """postgres check when psql is not found -> failure with right message"""
+def test_postgres_check_with_psql_missing_and_no_embedded_wheel_fails(tmp_home, monkeypatch):
+    """No store yet, psql not found, and no embedded Postgres to fall back on: nothing can provision -> FAIL."""
+    monkeypatch.setattr(checks.embedded_pg, "unavailable_reason", lambda: "the embedded-postgres wheel is not installed")
     with patch("slopymemory.checks.SystemPostgres", side_effect=FileNotFoundError("psql")):
         f = checks.by_id("postgres").run()
-
     assert f.ok is False
-    assert "psql failed" in f.detail
+    assert "psql failed" in f.detail and "embedded" in f.detail and "not installed" in f.detail
+
+
+def test_postgres_check_without_system_postgres_passes_when_the_embedded_one_can_serve_new_stores(tmp_home):
+    """The machine this backend exists for: no psql at all, no store yet -> ok, and the detail says new stores
+    go to the embedded Postgres."""
+    with patch("slopymemory.checks.SystemPostgres", side_effect=FileNotFoundError("psql")):
+        f = checks.by_id("postgres").run()
+    assert f.ok is True
+    assert "embedded" in f.detail and "new stores" in f.detail and "psql" in f.detail
 
 
 def test_space_check_measures_data_not_venv(tmp_home, monkeypatch):
@@ -72,8 +81,9 @@ def test_space_check_measures_data_not_venv(tmp_home, monkeypatch):
 
 
 def test_postgres_check_reports_psqls_own_reason(tmp_home, broken_pg_tools):
+    Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system").save()   # a store depends on it
     f = checks.by_id("postgres").run()
-    assert f.ok is False and "FATAL: boom" in f.detail and "SETUP.md#postgres" in f.detail
+    assert f.ok is False and "FATAL: boom" in f.detail and "SETUP.md#postgres" in f.detail and "a" in f.detail
 
 
 def test_postgres_check_reports_whether_the_role_can_create_databases(tmp_home):
@@ -160,3 +170,81 @@ def test_package_check_fails_when_slopymemory_is_not_installed(monkeypatch):
     monkeypatch.setattr(checks.md, "version", version)
     f = checks._package()
     assert not f.ok and "not installed" in f.detail
+
+
+class FakeEpg:
+    """The embedded backend as the check sees it."""
+    running = True
+    pgvector = True
+    databases: set = {"e_db"}
+    size = 46 * 2**20
+
+    def __init__(self, pgdata): self.pgdata = pgdata
+    def is_running(self): return self.running
+    def has_pgvector(self): return self.pgvector
+    def database_exists(self, n): return n in self.databases
+    def data_size(self): return self.size
+
+
+def _system_ok():
+    fake = MagicMock()
+    fake.has_pgvector.return_value = True
+    fake.database_exists.return_value = True
+    fake.template_exists.return_value = True
+    fake.is_superuser.return_value = False
+    fake.can_create_databases.return_value = True
+    fake.can_provision.return_value = True
+    return fake
+
+
+def test_postgres_check_reports_both_backends_when_both_are_in_use(tmp_home, monkeypatch):
+    Store(name="s", dialect="coding", port=8780, database="s_db", postgres="system").save()
+    Store(name="e", dialect="coding", port=8781, database="e_db", postgres="embedded").save()
+    (tmp_home / "pg").mkdir(parents=True)
+    monkeypatch.setattr(checks, "EmbeddedPostgres", FakeEpg)
+    with patch("slopymemory.checks.SystemPostgres", return_value=_system_ok()):
+        f = checks.by_id("postgres").run()
+    assert f.ok is True
+    assert "embedded: running" in f.detail and "pgvector" in f.detail and "46 MB" in f.detail and "1 store" in f.detail
+    assert "system: reachable" in f.detail
+
+
+def test_postgres_check_fails_naming_an_embedded_store_whose_database_is_missing(tmp_home, monkeypatch):
+    Store(name="e", dialect="coding", port=8781, database="e_db", postgres="embedded").save()
+    Store(name="f", dialect="coding", port=8782, database="f_db", postgres="embedded").save()
+    (tmp_home / "pg").mkdir(parents=True)
+    monkeypatch.setattr(checks, "EmbeddedPostgres", FakeEpg)
+    f = checks.by_id("postgres").run()
+    assert f.ok is False and "f: database f_db missing" in f.detail and "SETUP.md#postgres" in f.detail
+    assert "system" not in f.detail                  # no store uses it: not looked at, not reported
+
+
+def test_postgres_check_reports_an_embedded_postgres_that_is_down_without_starting_it(tmp_home, monkeypatch):
+    Store(name="e", dialect="coding", port=8781, database="e_db", postgres="embedded").save()
+    (tmp_home / "pg").mkdir(parents=True)
+
+    class Down(FakeEpg):
+        running = False
+        def database_exists(self, n): raise AssertionError("the doctor must not start the embedded Postgres")
+    monkeypatch.setattr(checks, "EmbeddedPostgres", Down)
+    f = checks.by_id("postgres").run()
+    assert f.ok is True and "embedded: not running" in f.detail and "not verified" in f.detail
+
+
+def test_postgres_check_fails_when_an_embedded_stores_data_dir_or_wheel_is_gone(tmp_home, monkeypatch):
+    Store(name="e", dialect="coding", port=8781, database="e_db", postgres="embedded").save()
+    monkeypatch.setattr(checks, "EmbeddedPostgres", FakeEpg)
+    f = checks.by_id("postgres").run()                                        # no data dir at all
+    assert f.ok is False and "e" in f.detail and str(tmp_home / "pg") in f.detail and "SETUP.md#postgres" in f.detail
+    (tmp_home / "pg").mkdir(parents=True)
+    monkeypatch.setattr(checks.embedded_pg, "unavailable_reason", lambda: "the embedded-postgres wheel is not installed")
+    f = checks.by_id("postgres").run()
+    assert f.ok is False and "not installed" in f.detail and "e" in f.detail
+
+
+def test_postgres_check_reports_an_embedded_data_dir_nobody_uses_yet(tmp_home, monkeypatch):
+    """The dir exists (a first init chose it) but no store is on it yet: reported, not failed."""
+    (tmp_home / "pg").mkdir(parents=True)
+    monkeypatch.setattr(checks, "EmbeddedPostgres", FakeEpg)
+    f = checks.by_id("postgres").run()
+    assert f.ok is True and "embedded: running" in f.detail and "0 store" in f.detail
