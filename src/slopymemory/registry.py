@@ -29,13 +29,7 @@ class Registry:
     def save(self) -> None:
         f = paths.registry_file()
         f.parent.mkdir(parents=True, exist_ok=True)
-        # Generate [[link]] (array of tables) format
-        lines = []
-        for l in self.links:
-            lines.append("[[link]]")
-            lines.append(f'path = "{l.path}"')
-            lines.append(f'store = "{l.store}"')
-        f.write_text("\n".join(lines) + "\n" if lines else "")
+        f.write_text(tomli_w.dumps({"link": [{"path": str(l.path), "store": l.store} for l in self.links]}))
 
     def resolve(self, cwd: Path) -> str | None:
         cwd = cwd.resolve()

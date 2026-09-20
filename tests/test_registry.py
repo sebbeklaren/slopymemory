@@ -30,6 +30,23 @@ def test_link_refuses_a_linked_path_and_unlink_removes_it(tmp_home, tmp_path):
 
 
 def test_save_writes_toml_under_home(tmp_home, tmp_path):
+    import tomllib
+    # Test basic save: valid TOML that round-trips
     r = Registry.load(); r.link(tmp_path, "a"); r.save()
     text = (tmp_home / "registry.toml").read_text()
-    assert "[[link]]" in text and 'store = "a"' in text
+    # Contract: valid TOML that round-trips, contains the store value
+    data = tomllib.loads(text)
+    assert data.get("link") is not None and 'store = "a"' in text
+    # Round-trip: load() after save() equals the saved registry
+    r2 = Registry.load()
+    assert r2 == r
+    # Test escaping: special characters in paths round-trip correctly
+    weird_dir = tmp_path / 'we"ird\\quote'
+    weird_dir.mkdir()
+    r3 = Registry.load(); r3.link(weird_dir, "special"); r3.save()
+    text3 = (tmp_home / "registry.toml").read_text()
+    # Contract: text parses as valid TOML and round-trips exactly
+    tomllib.loads(text3)  # Must not raise
+    r4 = Registry.load()
+    assert r4 == r3
+    assert r4.resolve(weird_dir) == "special"
