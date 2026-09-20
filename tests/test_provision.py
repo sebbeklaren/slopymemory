@@ -10,6 +10,7 @@ class FakePostgres:
     def database_exists(self, n): return n in self.existing
     def create_database(self, n): self.existing.add(n); self.created.append(n)
     def has_pgvector(self): return True
+    def can_provision(self): return True
     def describe(self): return "fake"
 
 
@@ -62,6 +63,8 @@ def test_system_postgres_creates_and_drops_a_scratch_database():
     import os, subprocess
     name = f"slopymem_test_{os.getpid()}"
     pg = provision.SystemPostgres()
+    if not pg.can_provision():
+        pytest.skip("no slopymem_template and not a superuser — " + provision.TEMPLATE_HINT)
     assert pg.has_pgvector()
     assert not pg.database_exists(name)
     pg.create_database(name)

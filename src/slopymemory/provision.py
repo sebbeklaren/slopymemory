@@ -11,6 +11,9 @@ from typing import Protocol
 from .registry import Registry
 from .store import Store, all_stores, allocate_port, collisions
 
+TEMPLATE_DB = "slopymem_template"
+TEMPLATE_HINT = "one-time, as a superuser: sudo -u postgres psql -c 'CREATE DATABASE slopymem_template' -c 'GRANT ALL ON DATABASE slopymem_template TO <your role>' && sudo -u postgres psql -d slopymem_template -c 'CREATE EXTENSION vector' — see SETUP.md#postgres"
+
 
 class InitRefused(RuntimeError):
     pass
@@ -20,6 +23,7 @@ class Postgres(Protocol):
     def database_exists(self, name: str) -> bool: ...
     def create_database(self, name: str) -> None: ...
     def has_pgvector(self) -> bool: ...
+    def can_provision(self) -> bool: ...
     def describe(self) -> str: ...
 
 
@@ -30,15 +34,32 @@ class SystemPostgres:
     def database_exists(self, name: str) -> bool:
         return self._psql(f"select 1 from pg_database where datname = '{name}'") == "1"
 
+    def template_exists(self) -> bool:
+        return self._psql(f"select 1 from pg_database where datname = '{TEMPLATE_DB}'") == "1"
+
+    def is_superuser(self) -> bool:
+        return self._psql("select rolsuper from pg_roles where rolname = current_user") == "t"
+
     def create_database(self, name: str) -> None:
-        subprocess.run(["createdb", name], check=True)
-        self._psql("create extension if not exists vector", db=name)
+        if self.template_exists():
+            subprocess.run(["createdb", "-T", TEMPLATE_DB, name], check=True)
+        elif self.is_superuser():
+            subprocess.run(["createdb", name], check=True)
+            self._psql("create extension if not exists vector", db=name)
+        else:
+            raise InitRefused(f"cannot create {name}: pgvector needs a superuser or the template database — {TEMPLATE_HINT}")
 
     def has_pgvector(self) -> bool:
         return self._psql("select 1 from pg_available_extensions where name = 'vector'") == "1"
 
+    def can_provision(self) -> bool:
+        return self.has_pgvector() and (self.template_exists() or self.is_superuser())
+
     def describe(self) -> str:
-        return "system Postgres (peer auth) — " + self._psql("show server_version")
+        version = self._psql("show server_version")
+        template = "yes" if self.template_exists() else "no"
+        superuser = "yes" if self.is_superuser() else "no"
+        return f"system Postgres (peer auth) — {version} (template: {template}; superuser: {superuser})"
 
 
 @dataclass
@@ -83,8 +104,8 @@ def plan_init(cwd: Path, name: str | None, dialect: str, pg: Postgres) -> Plan:
     exists = pg.database_exists(database)
     if exists:
         raise InitRefused(f"database {database} exists but no store owns it — adopt it with `slopymem link` or pick another name — see SETUP.md#postgres")
-    if not pg.has_pgvector():
-        raise InitRefused("Postgres has no pgvector extension — see SETUP.md#postgres")
+    if not pg.can_provision():
+        raise InitRefused(f"cannot provision stores: {TEMPLATE_HINT}")
     return Plan(store=store, path=cwd, creates_database=not exists)
 
 
