@@ -106,8 +106,10 @@ async def test_a_failing_provisioning_check_still_lists_memory_init_with_the_rea
 
 
 async def test_memory_init_reports_psqls_own_reason(tmp_home, tmp_path, broken_pg_tools):
-    """With the real SystemPostgres and a psql that fails, both the NOTE on memory_init's description and
-    the memory_init error must carry psql's stderr and the anchor — not 'exit status 1'."""
+    """With the real SystemPostgres and a psql that fails, both memory_init's description and the memory_init
+    error must carry psql's stderr and the anchor — not 'exit status 1'. The description carries it whether
+    the machine then falls back to the embedded Postgres (the reason the system one was passed over) or has
+    nothing to fall back to; the call asks for the system one, so it is the refusal that answers."""
     repo = tmp_path / "psqldown"; repo.mkdir()
     params = launcher_params(repo, tmp_home)
     async with stdio_client(params) as (rd, wr):
@@ -116,9 +118,52 @@ async def test_memory_init_reports_psqls_own_reason(tmp_home, tmp_path, broken_p
             tools = (await s.list_tools()).tools
             assert [t.name for t in tools] == ["memory_init"]
             assert "FATAL: boom" in tools[0].description and "SETUP.md#postgres" in tools[0].description
-            res = await s.call_tool("memory_init", {"name": "psqldown", "dialect": "coding"})
+            assert "postgres" in tools[0].inputSchema["properties"]
+            res = await s.call_tool("memory_init", {"name": "psqldown", "dialect": "coding", "postgres": "system"})
             assert res.isError
             assert "FATAL: boom" in res.content[0].text and "SETUP.md#postgres" in res.content[0].text
+    assert not Store.exists("psqldown") and not (tmp_home / "pg").exists()
+
+
+async def test_memory_init_says_which_backend_it_will_use(tmp_home, tmp_path):
+    repo = tmp_path / "fresh"; repo.mkdir()
+    params = launcher_params(repo, tmp_home, SLOPYMEM_FAKE_PG="1")
+    async with stdio_client(params) as (rd, wr):
+        async with ClientSession(rd, wr) as s:
+            await s.initialize()
+            tools = (await s.list_tools()).tools
+            assert "system Postgres" in tools[0].description and "NOTE" not in tools[0].description
+
+
+@pytest.mark.pg
+async def test_memory_init_on_the_embedded_postgres_starts_it_and_creates_the_database(tmp_home, tmp_path):
+    """The whole path, live: memory_init asked for the embedded backend starts a real cluster under the test
+    home, creates the store's database with pgvector in it, and the store's server (the fake here) is spawned
+    after it. Both are stopped in `finally`."""
+    from slopymemory.embedded_pg import EmbeddedPostgres
+    repo = tmp_path / "emb"; repo.mkdir()
+    params = launcher_params(repo, tmp_home)
+    epg = EmbeddedPostgres(tmp_home / "pg")
+    try:
+        async with stdio_client(params) as (rd, wr):
+            async with ClientSession(rd, wr) as s:
+                await s.initialize()
+                res = await s.call_tool("memory_init", {"name": "emb", "dialect": "coding", "postgres": "embedded"})
+                assert not res.isError, res.content[0].text
+                assert "created store emb" in res.content[0].text and "embedded Postgres" in res.content[0].text
+                names = [t.name for t in (await s.list_tools()).tools]
+                assert names == ["memory_ping", "memory_session"]
+        st = Store.load("emb")
+        assert st.postgres == "embedded" and st.server_env()["DATABASE_URL"].startswith(f"host={tmp_home / 'pg'} ")
+        assert epg.is_running() and epg.database_exists("emb_memory")
+        import psycopg
+        with psycopg.connect(st.server_env()["DATABASE_URL"]) as c:
+            assert c.execute("select 1 from pg_extension where extname = 'vector'").fetchone() == (1,)
+    finally:
+        if Store.exists("emb"):
+            server.stop(Store.load("emb"))
+        epg.stop()
+    assert not epg.is_running()
 
 
 async def test_a_malformed_store_or_registry_file_still_answers_the_handshake_and_names_the_anchor(tmp_home, tmp_path):

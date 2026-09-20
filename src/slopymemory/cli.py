@@ -6,17 +6,19 @@ import argparse
 import shutil
 import sys
 from pathlib import Path
-from . import server as srv
+from . import embedded_pg, paths, server as srv
 from .checks import run_all
+from .embedded_pg import EmbeddedPostgres
 from .harnesses import register
-from .provision import InitRefused, SystemPostgres, apply_init, plan_init, refuse_unsuitable_dir
+from .provision import InitRefused, SystemPostgres, apply_init, choose_backend, plan_init, refuse_unsuitable_dir
 from .paths import ConfigError
 from .registry import Registry
 from .store import Store, all_stores, store_problems, valid_name
 
 
-def postgres():
-    return SystemPostgres()
+def postgres(backend: str = "system"):
+    """The Postgres a store is on (`store.postgres`), or the one `init` chose."""
+    return EmbeddedPostgres(paths.embedded_pg_dir()) if backend == "embedded" else SystemPostgres()
 
 
 def confirm(prompt: str, yes: bool) -> bool:
@@ -33,14 +35,17 @@ def fail(msg: str, code: int = 1) -> int:
 
 def cmd_init(a) -> int:
     try:
-        plan = plan_init(Path.cwd(), a.name, a.dialect, postgres())
+        backend, note = choose_backend(postgres("system"), embedded_pg.available(), a.postgres)
+        plan = plan_init(Path.cwd(), a.name, a.dialect, postgres(backend), backend=backend)
     except InitRefused as e:
         return fail(str(e))
+    if note:
+        print(f"note: {note}")
     print(plan.describe())
     if not confirm("create it?", a.yes):
         return fail("nothing created")
     try:
-        st = apply_init(plan, postgres())
+        st = apply_init(plan, postgres(backend))
     except InitRefused as e:
         return fail(str(e))
     print(f"created store {st.name}; its server starts on first use")
@@ -97,11 +102,16 @@ def cmd_list(a) -> int:
     problems = store_problems()
     if not stores and not problems:
         print("no stores — `slopymem init` in a project directory"); return 0
-    pg = postgres()
     for st in stores:
         up = "up" if srv.probe(st.port) else "down"
+        pg = postgres(st.postgres)
         size = pg.database_size(st.database)
-        db = f"{size // 1024} KB" if size is not None else "unknown — see SETUP.md#postgres"
+        if size is not None:
+            db = f"{size // 1024} KB"
+        elif st.postgres == "embedded" and not pg.is_running():     # idle, not broken: list never starts it
+            db = "unknown (embedded Postgres not running)"
+        else:
+            db = "unknown — see SETUP.md#postgres"
         print(f"{st.name}  {st.dialect}  port {st.port}  {up}  db {st.database}  db size {db}  state {st.state_size() // 1024} KB")
         for p in reg.paths_of(st.name):
             print(f"    {p}")
@@ -160,13 +170,14 @@ def cmd_remove(a) -> int:
         srv.stop(st)
     except RuntimeError as e:
         return fail(str(e))
+    pg = postgres(st.postgres)
     try:
-        exists = postgres().database_exists(st.database)
+        exists = pg.database_exists(st.database)
     except InitRefused as e:
         return fail(str(e))
     if exists:
         try:
-            postgres().drop_database(st.database)
+            pg.drop_database(st.database)
         except Exception as e:
             return fail(str(e))
     errors = []
@@ -191,7 +202,9 @@ def cmd_register(a) -> int:
 def build() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="slopymem")
     sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("init"); s.add_argument("name", nargs="?"); s.add_argument("--dialect", default="coding", choices=["coding", "design"]); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("init"); s.add_argument("name", nargs="?"); s.add_argument("--dialect", default="coding", choices=["coding", "design"])
+    s.add_argument("--postgres", choices=["system", "embedded"], help="default: embedded if ~/.slopymemory/pg exists, else system if it can provision, else embedded")
+    s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("link"); s.add_argument("store"); s.add_argument("--path"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_link)
     s = sub.add_parser("unlink"); s.add_argument("--path"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_unlink)
     s = sub.add_parser("list"); s.set_defaults(fn=cmd_list)

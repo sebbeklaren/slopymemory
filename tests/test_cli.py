@@ -6,7 +6,7 @@ from slopymemory.store import Store
 
 
 class FakePg:
-    def __init__(self): self.created = []; self.dropped = []; self.sizes = {}
+    def __init__(self): self.created = []; self.dropped = []; self.sizes = {}; self.asked = []; self.running = True
     def database_exists(self, n): return n in self.created
     def database_size(self, n): return self.sizes.get(n)
     def create_database(self, n): self.created.append(n)
@@ -14,11 +14,16 @@ class FakePg:
     def has_pgvector(self): return True
     def describe(self): return "fake"
     def can_provision(self): return True
+    def is_running(self): return self.running
 
 
 @pytest.fixture
 def fake_pg(monkeypatch):
-    pg = FakePg(); monkeypatch.setattr(cli, "postgres", lambda: pg); return pg
+    """One fake stands in for BOTH backends; `asked` records which one each command wanted."""
+    pg = FakePg()
+    monkeypatch.setattr(cli, "postgres", lambda backend="system": (pg.asked.append(backend), pg)[1])
+    monkeypatch.setattr(cli.embedded_pg, "available", lambda: True)          # the wheel, whatever this box has
+    return pg
 
 
 def run(argv, stdin=""):
@@ -82,7 +87,7 @@ def test_init_reports_a_failing_createdb_instead_of_a_traceback(tmp_home, tmp_pa
     class CreateFails(FakePg):
         def create_database(self, n):
             raise provision.InitRefused("createdb: FATAL: boom — see SETUP.md#postgres")
-    monkeypatch.setattr(cli, "postgres", lambda: CreateFails())
+    monkeypatch.setattr(cli, "postgres", lambda backend="system": CreateFails())
     repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
     code, out = run(["init", "--yes"])
     assert code == 1 and "FATAL: boom" in out and "SETUP.md#postgres" in out
@@ -170,3 +175,50 @@ def test_doctor_and_register_call_through(tmp_home, tmp_path, broken_pg_tools, m
     assert code in (0, 1) and "doctor:" in out and all(c.id in out for c in CHECKS) and "no checks yet" not in out
     code, out = run(["register", "nosuch"])
     assert code == 1 and "unknown harness nosuch" in out and "no harness table" not in out
+
+
+def test_init_takes_the_backend_and_the_plan_says_which(tmp_home, tmp_path, fake_pg, monkeypatch):
+    repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
+    code, out = run(["init", "--postgres", "embedded", "--yes"])
+    assert code == 0 and "on embedded Postgres" in out and Store.load("proj").postgres == "embedded"
+    assert fake_pg.asked[-1] == "embedded" and fake_pg.created == ["proj_memory"]
+    other = tmp_path / "other"; other.mkdir(); monkeypatch.chdir(other)
+    code, out = run(["init", "--postgres", "system", "--yes"])
+    assert code == 0 and "on system Postgres" in out and Store.load("other").postgres == "system"
+    third = tmp_path / "third"; third.mkdir(); monkeypatch.chdir(third)
+    code, out = run(["init", "--yes"])                        # no request: the system one can, so it is chosen
+    assert code == 0 and Store.load("third").postgres == "system"
+    with pytest.raises(SystemExit) as e:                  # argparse's own refusal of an unknown backend
+        run(["init", "--postgres", "sqlite", "--yes"])
+    assert e.value.code == 2
+
+
+def test_init_without_a_usable_system_postgres_falls_back_to_embedded_and_says_why(tmp_home, tmp_path, fake_pg, monkeypatch):
+    repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
+    monkeypatch.setattr(fake_pg, "can_provision", lambda: fake_pg.asked[-1] != "system")   # only the system one refuses
+    code, out = run(["init"], stdin="n\n")
+    assert code == 1 and "on embedded Postgres" in out and "system Postgres" in out and "SETUP.md#postgres" in out
+    assert not Store.exists("proj")
+    monkeypatch.setattr(cli.embedded_pg, "available", lambda: False)
+    code, out = run(["init", "--yes"])
+    assert code == 1 and "slopymem_template" in out and "embedded" in out and "SETUP.md#postgres" in out
+
+
+def test_list_says_when_an_embedded_stores_size_is_unknown_because_its_postgres_is_down(tmp_home, tmp_path, fake_pg, monkeypatch):
+    repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
+    assert run(["init", "--postgres", "embedded", "--yes"])[0] == 0
+    fake_pg.running = False
+    code, out = run(["list"])
+    assert code == 0 and "db size unknown (embedded Postgres not running)" in out and "SETUP.md#postgres" not in out
+    assert fake_pg.asked[-1] == "embedded"
+    fake_pg.running = True; fake_pg.sizes = {"proj_memory": 2048}
+    code, out = run(["list"])
+    assert code == 0 and "db size 2 KB" in out
+
+
+def test_remove_drops_the_database_on_the_stores_own_backend(tmp_home, tmp_path, fake_pg, monkeypatch):
+    repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
+    assert run(["init", "--postgres", "embedded", "--yes"])[0] == 0
+    fake_pg.asked.clear()
+    code, out = run(["remove", "proj"], stdin="y\nproj\n")
+    assert code == 0 and fake_pg.dropped == ["proj_memory"] and set(fake_pg.asked) == {"embedded"}

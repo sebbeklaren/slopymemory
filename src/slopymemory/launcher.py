@@ -21,8 +21,9 @@ from mcp.server.lowlevel import NotificationOptions, Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 from mcp.shared.exceptions import McpError
-from . import server as srv
-from .provision import TEMPLATE_HINT, InitRefused, SystemPostgres, apply_init, plan_init
+from . import embedded_pg, paths, server as srv
+from .embedded_pg import EmbeddedPostgres
+from .provision import TEMPLATE_HINT, InitRefused, SystemPostgres, apply_init, choose_backend, plan_init
 from .paths import ConfigError
 from .registry import Registry
 from .store import Store
@@ -30,7 +31,8 @@ from .store import Store
 INIT_DESCRIPTION = (
     "This project has no memory store. Calling this creates one: a database and a state directory "
     "under ~/.slopymemory and a registry entry for this directory. Ask the user before calling it. "
-    "name: defaults to the directory's name. dialect: 'coding' (default) or 'design'.")
+    "name: defaults to the directory's name. dialect: 'coding' (default) or 'design'. "
+    "postgres: 'system' or 'embedded' (default: the one named below).")
 
 
 TEST_HOOKS = ("SLOPYMEM_FAKE_PG", "SLOPYMEM_CWD", "SLOPYMEM_SERVER_CMD")   # env-driven fakes the tests inject
@@ -111,8 +113,22 @@ class Launcher:
         if cmd := os.environ.get("SLOPYMEM_SERVER_CMD"):      # tests: a fake upstream
             srv.server_command = lambda store, _c=shlex.split(cmd): _c
 
-    def _pg(self):
-        return _FakePg() if os.environ.get("SLOPYMEM_FAKE_PG") else SystemPostgres()
+    def _choose(self, requested: str | None = None):
+        """Which Postgres `memory_init` uses — `provision.choose_backend`; the test fake stands in for the system
+        one, in a world without the embedded one."""
+        if os.environ.get("SLOPYMEM_FAKE_PG"):
+            return choose_backend(_FakePg(), False, requested)
+        return choose_backend(SystemPostgres(), embedded_pg.available(), requested)
+
+    def _pg(self, backend: str):
+        if os.environ.get("SLOPYMEM_FAKE_PG"):
+            return _FakePg()
+        return EmbeddedPostgres(paths.embedded_pg_dir()) if backend == "embedded" else SystemPostgres()
+
+    @staticmethod
+    def _backend_sentence(backend: str, note: str | None) -> str:
+        where = f"the embedded Postgres under {paths.embedded_pg_dir()}" if backend == "embedded" else "the system Postgres"
+        return f" It will use {where}." + (f" ({note})" if note else "")
 
     def resolve(self) -> Store | None:
         name = Registry.load().resolve(self.cwd)
@@ -276,23 +292,23 @@ class Launcher:
                 if self.failure:
                     raise RuntimeError(self.failure)
                 description = INIT_DESCRIPTION
-                # can_provision() shells out to psql; with Postgres down or psql missing it can
-                # raise (check=True) instead of returning False. That must not take memory_init
-                # off the list — the whole point of the tool is to be there to explain the
-                # blocker — so the check itself is guarded, and run off the event loop.
+                # The choice shells out to psql; with Postgres down or psql missing the check can raise
+                # instead of returning False. That must not take memory_init off the list — the whole
+                # point of the tool is to be there to explain the blocker — so it is guarded, and run off
+                # the event loop. The description says which backend init will use, and why the system one
+                # was passed over when it was.
                 try:
-                    ok = await asyncio.to_thread(self._pg().can_provision)
-                    why = ""
-                except Exception as e:
-                    ok, why = False, f"{e}"
-                if not ok:
-                    description += " NOTE: this machine cannot provision a store yet — " + TEMPLATE_HINT
-                    if why:
-                        description += f" (check failed: {why})"
+                    backend, note = await asyncio.to_thread(self._choose)
+                    description += self._backend_sentence(backend, note)
+                except InitRefused as e:                  # neither backend: the message names both and the anchor
+                    description += f" NOTE: this machine cannot provision a store yet — {e}"
+                except Exception as e:                    # a check that crashed rather than refused
+                    description += f" NOTE: this machine cannot provision a store yet — {TEMPLATE_HINT} (check failed: {e})"
                 return [types.Tool(name="memory_init", description=description, inputSchema={
                     "type": "object",
                     "properties": {"name": {"type": ["string", "null"]},
-                                   "dialect": {"type": "string", "enum": ["coding", "design"], "default": "coding"}}})]
+                                   "dialect": {"type": "string", "enum": ["coding", "design"], "default": "coding"},
+                                   "postgres": {"type": ["string", "null"], "enum": ["system", "embedded", None]}}})]
             return (await self._forward(lambda u: u.list_tools())).tools
 
         @s.call_tool()
@@ -341,11 +357,16 @@ class Launcher:
                 contents.append(ReadResourceContents(content=data, mime_type=c.mimeType, meta=c.meta))
             return contents
 
+    def _provision(self, args: dict) -> Store:
+        """Choose the backend, plan, apply — psql and (for the embedded one) initdb + pg_ctl: off the event loop."""
+        backend, _ = self._choose(args.get("postgres"))
+        pg = self._pg(backend)
+        plan = plan_init(self.cwd, args.get("name"), args.get("dialect", "coding"), pg, backend=backend)
+        return apply_init(plan, pg)
+
     async def _init(self, args: dict) -> list[types.TextContent]:
-        pg = self._pg()
         try:
-            plan = plan_init(self.cwd, args.get("name"), args.get("dialect", "coding"), pg)
-            store = apply_init(plan, pg)
+            store = await asyncio.to_thread(self._provision, args)
         except InitRefused as e:
             raise RuntimeError(str(e)) from e
         self.ready.clear()
@@ -355,7 +376,8 @@ class Launcher:
             raise RuntimeError(self.failure or "the store's server did not come up — see SETUP.md#servers")
         await self.server.request_context.session.send_tool_list_changed()
         return [types.TextContent(type="text", text=f"created store {store.name} for {self.cwd} "
-                                  f"(database {store.database}, port {store.port}); the memory tools are now available")]
+                                  f"(database {store.database} on the {store.postgres} Postgres, port {store.port}); "
+                                  f"the memory tools are now available")]
 
     async def run(self) -> None:
         try:
