@@ -41,9 +41,19 @@ def test_ensure_up_spawns_once_under_the_lock_and_waits(tmp_home, free_port, mon
 
 
 def test_ensure_up_raises_a_named_error_past_the_deadline(tmp_home, free_port, monkeypatch):
+    import signal
     st = Store(name="dead", dialect="coding", port=free_port, database="d", postgres="system"); st.save()
     monkeypatch.setattr(server, "server_command", lambda st: [sys.executable, "-c", "import time; time.sleep(30)"])
-    with pytest.raises(server.ServerNotUp) as e:
-        server.ensure_up(st, deadline_s=1.5)
-    assert "SETUP.md#servers" in str(e.value) and str(st.log_file()) in str(e.value)
-    server.stop(st)
+    pids = []
+    real_spawn = server.spawn_detached
+    monkeypatch.setattr(server, "spawn_detached", lambda st: (pids.append(pid := real_spawn(st)), pid)[1])
+    try:
+        with pytest.raises(server.ServerNotUp) as e:
+            server.ensure_up(st, deadline_s=1.5)
+        assert "SETUP.md#servers" in str(e.value) and str(st.log_file()) in str(e.value)
+    finally:
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass

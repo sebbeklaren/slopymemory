@@ -30,3 +30,4 @@ def fake_http_server():
     t = threading.Thread(target=srv.serve_forever, daemon=True); t.start()
     yield port
     srv.shutdown()
+    srv.server_close()

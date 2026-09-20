@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import time
+import warnings
 from pathlib import Path
 from . import paths
 from .store import Store
@@ -52,7 +53,13 @@ def spawn_detached(store: Store) -> int:
     with open(store.log_file(), "ab") as log:
         p = subprocess.Popen(server_command(store), env=env, cwd=store.path(), stdin=subprocess.DEVNULL,
                              stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    return p.pid
+        pid = p.pid
+    # Suppress ResourceWarning: process is intentionally detached in a new session and will outlive
+    # this Python process, so the Popen object's lack of explicit wait() is expected and safe.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*subprocess.*still running", category=ResourceWarning)
+        del p
+    return pid
 
 
 def ensure_up(store: Store, deadline_s: float = DEADLINE_S) -> None:
