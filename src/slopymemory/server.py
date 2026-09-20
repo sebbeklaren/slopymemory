@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import time
+from pathlib import Path
 from . import paths
 from .store import Store
 
@@ -102,17 +103,42 @@ def ensure_up(store: Store, deadline_s: float = DEADLINE_S) -> None:
 
 
 def pid_on_port(port: int) -> int | None:
-    out = subprocess.run(["ss", "-ltnp"], capture_output=True, text=True, check=False).stdout
+    """The pid listening on the port, as `ss` shows it — only for the caller's own processes."""
+    try:
+        out = subprocess.run(["ss", "-ltnp"], capture_output=True, text=True, check=False).stdout
+    except FileNotFoundError:
+        raise RuntimeError("ss not found — install iproute2 — see SETUP.md#servers") from None
     for line in out.splitlines():
         if f":{port} " in line and "pid=" in line:
             return int(line.split("pid=")[1].split(",")[0])
     return None
 
 
+def _proc(pid: int, what: str) -> str:
+    try:
+        return Path(f"/proc/{pid}/{what}").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+    except OSError as e:
+        return f"(unreadable: {e})"
+
+
+def _owns(pid: int, store: Store) -> bool:
+    """Is the process on the store's port the store's server? Its command names the server module, or its
+    environment carries the port this store gave it (every server spawned here does; so do the test fakes)."""
+    return SERVER_MODULE in _proc(pid, "cmdline") or f"AM_MCP_PORT={store.port} " in _proc(pid, "environ")
+
+
 def stop(store: Store, wait_s: float = 10.0) -> bool:
+    """SIGTERM the store's server and wait for the port to close. False when nothing was running. Raises
+    RuntimeError (with the anchor) when the port is held by something that is not this store's server."""
     pid = pid_on_port(store.port)
     if pid is None:
+        if probe(store.port):
+            raise RuntimeError(f"store {store.name}: port {store.port} answers but no owning process found "
+                               f"(a process of another user?) — see SETUP.md#servers")
         return False
+    if not _owns(pid, store):
+        raise RuntimeError(f"store {store.name}: port {store.port} is held by pid {pid}, which is not this store's "
+                           f"server (command: {_proc(pid, 'cmdline').strip()[:120]}); not signalled — see SETUP.md#servers")
     os.kill(pid, signal.SIGTERM)
     t0 = time.monotonic()
     while time.monotonic() - t0 < wait_s:

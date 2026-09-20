@@ -135,3 +135,12 @@ def test_store_name_arguments_are_validated_and_start_checks_the_store_exists(tm
         assert code == 1 and "not a valid store name" in out and "SETUP.md#registry" in out, cmd
     code, out = run(["start", "nosuch"])
     assert code == 1 and "no store named nosuch" in out and "SETUP.md#registry" in out
+
+
+def test_stop_and_remove_report_a_missing_ss(tmp_home, tmp_path, fake_pg, monkeypatch):
+    a = tmp_path / "a"; a.mkdir(); monkeypatch.chdir(a); assert run(["init", "--yes"])[0] == 0
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    code, out = run(["stop", "a"])
+    assert code == 1 and "ss not found" in out and "SETUP.md#servers" in out
+    code, out = run(["remove", "a"], stdin="y\na\n")
+    assert code == 1 and "ss not found" in out and "SETUP.md#servers" in out and Store.exists("a")

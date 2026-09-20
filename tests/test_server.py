@@ -88,3 +88,39 @@ def test_ensure_up_reports_a_server_that_exits_at_once_with_its_log_tail(tmp_hom
     assert time.monotonic() - t0 < 10
     msg = str(e.value)
     assert "exited with code 3" in msg and "FATAL: no such database" in msg and "dies" in msg and "SETUP.md#servers" in msg
+
+
+def test_pid_on_port_names_a_missing_ss(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    with pytest.raises(RuntimeError) as e:
+        server.pid_on_port(1)
+    assert "ss not found" in str(e.value) and "iproute2" in str(e.value) and "SETUP.md#servers" in str(e.value)
+
+
+def test_stop_refuses_a_process_that_is_not_this_stores_server(tmp_home, free_port):
+    """`ss` names whatever holds the port; a foreign program that took a freed port must not be signalled."""
+    import subprocess, signal
+    st = Store(name="held", dialect="coding", port=free_port, database="h", postgres="system"); st.save()
+    p = subprocess.Popen([sys.executable, "-c",
+                          f"import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); "
+                          f"s.bind(('127.0.0.1', {free_port})); s.listen(); time.sleep(30)"])
+    try:
+        for _ in range(50):
+            if server.pid_on_port(free_port): break
+            time.sleep(0.1)
+        with pytest.raises(RuntimeError) as e:
+            server.stop(st)
+        assert "not this store's server" in str(e.value) and str(p.pid) in str(e.value) and "SETUP.md#servers" in str(e.value)
+        assert p.poll() is None, "the foreign process must not have been signalled"
+    finally:
+        p.send_signal(signal.SIGTERM); p.wait(5)
+
+
+def test_stop_reports_a_port_that_answers_with_no_visible_owner(tmp_home, fake_http_server, monkeypatch):
+    """`ss -p` shows pids only for the caller's own processes: a port that answers but shows no owner is
+    'someone else's process', reported as such — never 'was not running'."""
+    st = Store(name="ghost", dialect="coding", port=fake_http_server, database="g", postgres="system"); st.save()
+    monkeypatch.setattr(server, "pid_on_port", lambda port: None)
+    with pytest.raises(RuntimeError) as e:
+        server.stop(st)
+    assert "no owning process" in str(e.value) and "SETUP.md#servers" in str(e.value)

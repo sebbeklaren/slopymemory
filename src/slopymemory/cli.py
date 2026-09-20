@@ -133,9 +133,13 @@ def cmd_stop(a) -> int:
     if a.store is not None and not Store.exists(a.store):
         return fail(f"no store named {a.store} — see SETUP.md#registry")
     targets = all_stores() if a.all else [Store.load(a.store)]
+    rc = 0
     for st in targets:
-        print(f"{st.name}: {'stopped' if srv.stop(st) else 'was not running'}")
-    return 0
+        try:
+            print(f"{st.name}: {'stopped' if srv.stop(st) else 'was not running'}")
+        except RuntimeError as e:          # ss missing, or the port held by something that is not ours
+            rc = fail(str(e))
+    return rc
 
 
 def cmd_remove(a) -> int:
@@ -152,7 +156,10 @@ def cmd_remove(a) -> int:
     print(f"type the store name ({st.name}) to confirm: ", end="", flush=True)
     if sys.stdin.readline().strip() != st.name:
         return fail("name did not match; nothing removed")
-    srv.stop(st)
+    try:
+        srv.stop(st)
+    except RuntimeError as e:
+        return fail(str(e))
     try:
         exists = postgres().database_exists(st.database)
     except InitRefused as e:

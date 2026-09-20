@@ -98,3 +98,10 @@ def test_registry_check_fails_on_a_malformed_store_or_registry_file(tmp_home):
     (tmp_home / "registry.toml").write_text("link = [ { path = ")
     f = checks.by_id("registry").run()
     assert f.ok is False and "registry.toml" in f.detail
+
+
+def test_servers_check_fails_when_ss_is_missing(tmp_home, tmp_path, monkeypatch):
+    Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system").save()
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    f = checks.by_id("servers").run()
+    assert f.ok is False and "ss not found" in f.detail and "iproute2" in f.detail

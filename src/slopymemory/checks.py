@@ -112,7 +112,9 @@ def _servers() -> Finding:
             rows.append(f"{st.name}: port {st.port} {'up' if up else 'down'}" + (f" (pid {pid})" if pid else ""))
             if pid and not up:
                 bad = True; rows[-1] += " — a process holds the port but does not answer HTTP"
-    except (FileNotFoundError, OSError) as e:
+    except RuntimeError as e:          # pid_on_port: ss not found (the message names iproute2 and the anchor)
+        return Finding(False, str(e))
+    except OSError as e:
         return Finding(False, f"ss failed: {e} — install iproute2")
     return Finding(not bad, "; ".join(rows) or "no stores")
 
