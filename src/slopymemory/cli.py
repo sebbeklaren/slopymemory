@@ -8,10 +8,10 @@ import subprocess
 import sys
 from pathlib import Path
 from . import server as srv
-from .provision import InitRefused, SystemPostgres, apply_init, plan_init
+from .provision import InitRefused, SystemPostgres, apply_init, plan_init, refuse_unsuitable_dir
 from .paths import ConfigError
 from .registry import Registry
-from .store import Store, all_stores, store_problems
+from .store import Store, all_stores, store_problems, valid_name
 
 
 def postgres():
@@ -46,11 +46,25 @@ def cmd_init(a) -> int:
     return 0
 
 
+def _bad_name(name: str) -> int | None:
+    if not valid_name(name):
+        return fail(f"{name!r} is not a valid store name (lowercase letters, digits, underscore) — `slopymem list` — see SETUP.md#registry")
+    return None
+
+
 def cmd_link(a) -> int:
+    if (rc := _bad_name(a.store)) is not None:
+        return rc
     if not Store.exists(a.store):
         return fail(f"no store named {a.store} — `slopymem list` — see SETUP.md#registry")
     path = Path(a.path or Path.cwd()).resolve()
+    if not path.is_dir():
+        return fail(f"{path} is not an existing directory — see SETUP.md#registry")
     reg = Registry.load()
+    try:
+        refuse_unsuitable_dir(path, reg)        # the same refusals as init: home, /, an ancestor of a link
+    except InitRefused as e:
+        return fail(str(e))
     print(f"link {path} → store {a.store}")
     if not confirm("link it?", a.yes):
         return fail("nothing linked")
@@ -97,6 +111,10 @@ def cmd_list(a) -> int:
 
 
 def cmd_start(a) -> int:
+    if (rc := _bad_name(a.store)) is not None:
+        return rc
+    if not Store.exists(a.store):
+        return fail(f"no store named {a.store} — `slopymem list` — see SETUP.md#registry")
     st = Store.load(a.store)
     try:
         srv.ensure_up(st)
@@ -110,6 +128,8 @@ def cmd_stop(a) -> int:
         return fail("stop needs a store name or --all — see SETUP.md#servers")
     if a.store is not None and a.all:
         return fail("give a store name OR --all, not both — see SETUP.md#servers")
+    if a.store is not None and (rc := _bad_name(a.store)) is not None:
+        return rc
     if a.store is not None and not Store.exists(a.store):
         return fail(f"no store named {a.store} — see SETUP.md#registry")
     targets = all_stores() if a.all else [Store.load(a.store)]
@@ -121,6 +141,8 @@ def cmd_stop(a) -> int:
 def cmd_remove(a) -> int:
     if a.yes:
         return fail("remove refuses --yes: the memories are the user's", code=2)
+    if (rc := _bad_name(a.store)) is not None:
+        return rc
     if not Store.exists(a.store):
         return fail(f"no store named {a.store} — see SETUP.md#registry")
     st = Store.load(a.store)

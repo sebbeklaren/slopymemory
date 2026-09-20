@@ -3,6 +3,7 @@ The server's environment is DERIVED from the store (the per-instance paths that 
 ever sharing a file), with an explicit `[env]` table for adopted stores whose files live elsewhere."""
 from __future__ import annotations
 import datetime as dt
+import re
 import socket
 import tomllib
 from dataclasses import dataclass, field, asdict
@@ -22,6 +23,11 @@ DIALECT_ENV: dict[str, dict[str, str]] = {
     "design": {},
 }
 PORT_RANGE = range(8780, 8900)
+NAME_RE = re.compile(r"[a-z0-9_]+")     # what `provision._slug` produces; a name is also a directory under stores/
+
+
+def valid_name(name: str) -> bool:
+    return NAME_RE.fullmatch(name) is not None
 
 
 @dataclass

@@ -115,14 +115,21 @@ def _slug(name: str) -> str:
     return s
 
 
+def refuse_unsuitable_dir(path: Path, reg: Registry) -> None:
+    """The directories no store may ever be linked to — by `init` or by `link`: the home directory and `/`
+    (a link there is every unlinked directory's store, by longest prefix) and any ancestor of a linked path."""
+    path = path.resolve()
+    if path in (Path.home().resolve(), Path("/")):
+        raise InitRefused(f"{path} is not a project directory — choose a project directory (a store linked here would become every project's store) — see SETUP.md#registry")
+    for l in reg.links:
+        if path in l.path.resolve().parents:
+            raise InitRefused(f"{path} is an ancestor of {l.path} (store {l.store}) — choose a project directory — see SETUP.md#registry")
+
+
 def plan_init(cwd: Path, name: str | None, dialect: str, pg: Postgres) -> Plan:
     cwd = cwd.resolve()
-    if cwd in (Path.home().resolve(), Path("/")):
-        raise InitRefused(f"{cwd} is not a project directory — choose a project directory (a store linked here would become every project's store) — see SETUP.md#registry")
     reg = Registry.load()
-    for l in reg.links:
-        if cwd in l.path.resolve().parents:
-            raise InitRefused(f"{cwd} is an ancestor of {l.path} (store {l.store}) — choose a project directory — see SETUP.md#registry")
+    refuse_unsuitable_dir(cwd, reg)
     if (hit := reg.resolve(cwd)) is not None:
         raise InitRefused(f"{cwd} already resolves to {hit}; use `slopymem link`/`unlink` to change it — see SETUP.md#registry")
     if dialect not in ("coding", "design"):

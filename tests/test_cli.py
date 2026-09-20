@@ -109,3 +109,29 @@ def test_list_reports_a_malformed_store_and_still_lists_the_others(tmp_home, tmp
     assert code == 0 and "a  coding" in out and "registry.toml" in out and "SETUP.md#registry" in out
     code, out = run(["unlink", "--yes"])                 # any command that must read the registry: the message, exit 1
     assert code == 1 and "registry.toml" in out and "SETUP.md#registry" in out
+
+
+def test_link_refuses_home_root_an_ancestor_and_a_missing_path(tmp_home, tmp_path, fake_pg, monkeypatch):
+    """`link` writes the same registry entry `init` does, so it must refuse the same directories: a link
+    at ~ or / would make every unlinked directory resolve to that store by longest prefix."""
+    home = tmp_path / "homedir"; home.mkdir(); monkeypatch.setenv("HOME", str(home))
+    a = tmp_path / "a"; a.mkdir(); monkeypatch.chdir(a); assert run(["init", "--yes"])[0] == 0
+    monkeypatch.chdir(home)
+    code, out = run(["link", "a", "--yes"])
+    assert code == 1 and "choose a project directory" in out and "SETUP.md#registry" in out
+    assert Registry.load().resolve(home) is None
+    code, out = run(["link", "a", "--yes", "--path", "/"])
+    assert code == 1 and "SETUP.md#registry" in out
+    code, out = run(["link", "a", "--yes", "--path", str(tmp_path)])
+    assert code == 1 and "ancestor" in out and "SETUP.md#registry" in out
+    code, out = run(["link", "a", "--yes", "--path", str(tmp_path / "nope")])
+    assert code == 1 and "not an existing directory" in out and "SETUP.md#registry" in out
+    assert Registry.load().paths_of("a") == [a]
+
+
+def test_store_name_arguments_are_validated_and_start_checks_the_store_exists(tmp_home, tmp_path, fake_pg):
+    for cmd in (["start", "../x"], ["stop", "../x"], ["remove", "../x"], ["link", "../x", "--yes"]):
+        code, out = run(cmd)
+        assert code == 1 and "not a valid store name" in out and "SETUP.md#registry" in out, cmd
+    code, out = run(["start", "nosuch"])
+    assert code == 1 and "no store named nosuch" in out and "SETUP.md#registry" in out
