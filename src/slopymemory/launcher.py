@@ -27,6 +27,9 @@ INIT_DESCRIPTION = (
     "name: defaults to the directory's name. dialect: 'coding' (default) or 'design'.")
 
 
+TEST_HOOKS = ("SLOPYMEM_FAKE_PG", "SLOPYMEM_CWD", "SLOPYMEM_SERVER_CMD")   # env-driven fakes the tests inject
+
+
 class _FakePg:  # tests only (SLOPYMEM_FAKE_PG=1|cannot|broken): no database is created
     def database_exists(self, n): return False
     def create_database(self, n): pass
@@ -60,6 +63,10 @@ class Launcher:
         self.connect_task: asyncio.Task | None = None
         self.server = Server("memory")
         self._register_handlers()
+        if active := [h for h in TEST_HOOKS if os.environ.get(h)]:
+            # Never silent: with SLOPYMEM_FAKE_PG set, memory_init reports a store "created" with no
+            # database behind it. A stray variable in a user's shell must announce itself.
+            print(f"slopymem-mcp: TEST HOOK active: {', '.join(active)}", file=sys.stderr)
         if cmd := os.environ.get("SLOPYMEM_SERVER_CMD"):      # tests: a fake upstream
             srv.server_command = lambda store, _c=shlex.split(cmd): _c
 

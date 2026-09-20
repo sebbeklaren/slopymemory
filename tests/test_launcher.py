@@ -22,15 +22,22 @@ async def test_bridges_to_the_stores_server_starting_it_on_demand(tmp_home, tmp_
     Store(name="repo", dialect="coding", port=free_port, database="x", postgres="system").save()
     r = Registry.load(); r.link(repo, "repo"); r.save()
     params = launcher_params(repo, tmp_home)
+    errlog = tmp_path / "launcher.stderr"
     try:
-        async with stdio_client(params) as (rd, wr):
-            async with ClientSession(rd, wr) as s:
-                await s.initialize()                       # answered before the server is up
-                names = [t.name for t in (await s.list_tools()).tools]
-                assert names == ["memory_ping"]
-                res = await s.call_tool("memory_ping", {"text": "hi"})
-                assert res.content[0].text == "pong:hi"
+        with open(errlog, "w") as err:
+            async with stdio_client(params, errlog=err) as (rd, wr):
+                async with ClientSession(rd, wr) as s:
+                    await s.initialize()                       # answered before the server is up
+                    names = [t.name for t in (await s.list_tools()).tools]
+                    assert names == ["memory_ping"]
+                    res = await s.call_tool("memory_ping", {"text": "hi"})
+                    assert res.content[0].text == "pong:hi"
         assert server.probe(free_port), "the server outlives the session"
+        # The env-driven fakes this test relies on are production code paths; a launcher running with
+        # any of them set must say so on stderr, once, so a stray variable in a user's shell is never silent.
+        hook_lines = [l for l in errlog.read_text().splitlines() if "TEST HOOK active" in l]
+        assert len(hook_lines) == 1 and "SLOPYMEM_CWD" in hook_lines[0] and "SLOPYMEM_SERVER_CMD" in hook_lines[0]
+        assert "SLOPYMEM_FAKE_PG" not in hook_lines[0]
     finally:
         server.stop(Store.load("repo"))
 
