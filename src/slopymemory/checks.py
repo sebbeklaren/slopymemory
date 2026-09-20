@@ -145,23 +145,29 @@ def _space() -> Finding:
     return Finding(not warn, detail)
 
 
+LOG_TAIL_BYTES = 64 * 1024
+
+
 def _logs() -> Finding:
-    lines = []
+    """Error lines are REPORTED, not failed (a server that logged an error and recovered is not a broken
+    machine); a log that cannot be read IS a failure — the check would otherwise read as 'all clean'."""
+    lines, unreadable = [], False
     for st in all_stores():
         f = st.log_file()
-        if f.exists():
-            # Read only the last 64 KB to avoid loading huge logs
-            try:
-                with open(f, "rb") as log:
-                    size = log.seek(0, 2)
-                    log.seek(max(0, size - 64 * 1024))
-                    tail = log.read().decode(errors="ignore")
-                errs = [l for l in tail.splitlines() if "ERROR" in l or "Traceback" in l]
-                if errs:
-                    lines.append(f"{st.name}: {errs[-1][:160]}")
-            except Exception:
-                pass
-    return Finding(True, "; ".join(lines) or "no error lines in any server log")
+        if not f.exists():
+            continue
+        try:
+            with open(f, "rb") as log:                # only the tail: a log can be huge
+                size = log.seek(0, 2)
+                log.seek(max(0, size - LOG_TAIL_BYTES))
+                tail = log.read().decode(errors="ignore")
+        except OSError as e:
+            lines.append(f"{st.name}: log unreadable: {e}"); unreadable = True
+            continue
+        errs = [l for l in tail.splitlines() if "ERROR" in l or "Traceback" in l]
+        if errs:
+            lines.append(f"{st.name}: {len(errs)} error line(s) in the last {LOG_TAIL_BYTES // 1024} KB; last: {errs[-1][:160]}")
+    return Finding(not unreadable, "; ".join(lines) or "no error lines in any server log")
 
 
 def _local_paths() -> Finding:
@@ -188,7 +194,7 @@ CHECKS: list[Check] = [
           "claude mcp list; codex mcp list", "slopymem register", _harnesses),
     Check("space", "disk is filling", "data under ~/.slopymemory (excluding venv), and free disk space on its filesystem; venv size shown separately",
           "du -sh ~/.slopymemory; df -h ~", "slopymem list shows per-store sizes; remove a store you no longer want", _space),
-    Check("logs", "something failed and nobody knows what", "the last error line of each server log (tail of last 64 KB)",
+    Check("logs", "something failed and nobody knows what", "the last error line of each server log (tail of the last 64 KB); error lines are reported, not failed; an unreadable log fails",
           "tail -50 ~/.slopymemory/logs/<store>.log", "read the line; the error names its anchor", _logs),
     Check("local-paths", "a leak of the author's machine into the package", "no installed file contains a machine-local path",
           "grep -r '/home/' ~/.slopymemory/venv/lib/python3.13/site-packages/slopymemory", "report it — the export scanner missed it", _local_paths),

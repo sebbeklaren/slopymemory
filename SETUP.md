@@ -142,7 +142,7 @@ du -sh ~/.slopymemory; df -h ~
 
 **Symptom:** something failed and nobody knows what
 
-**Verifies:** the last error line of each server log (tail of last 64 KB)
+**Verifies:** the last error line of each server log (tail of the last 64 KB); error lines are reported, not failed; an unreadable log fails
 
 **See for yourself:**
 

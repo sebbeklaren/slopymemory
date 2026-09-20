@@ -105,3 +105,29 @@ def test_servers_check_fails_when_ss_is_missing(tmp_home, tmp_path, monkeypatch)
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     f = checks.by_id("servers").run()
     assert f.ok is False and "ss not found" in f.detail and "iproute2" in f.detail
+
+
+def test_logs_check_fails_on_an_unreadable_log_and_reports_error_lines_without_failing(tmp_home):
+    """An unreadable log used to read as 'no error lines' — the check's purpose inverted. Error lines
+    found are informational (ok stays True); a log that cannot be read is a failed check."""
+    from slopymemory import paths
+    a = Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system"); a.save()
+    paths.logs_dir().mkdir(parents=True)
+    a.log_file().write_text("INFO fine\nERROR something broke\nINFO after\n")
+    f = checks.by_id("logs").run()
+    assert f.ok is True and "ERROR something broke" in f.detail
+    b = Store(name="b", dialect="coding", port=8781, database="b_db", postgres="system"); b.save()
+    b.log_file().mkdir()                                  # a directory where the log should be: unreadable
+    f = checks.by_id("logs").run()
+    assert f.ok is False and "b: log unreadable" in f.detail and "ERROR something broke" in f.detail
+    assert "unreadable log fails" in checks.by_id("logs").verify
+
+
+def test_logs_check_reads_only_the_last_64_kb(tmp_home):
+    from slopymemory import paths
+    a = Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system"); a.save()
+    paths.logs_dir().mkdir(parents=True)
+    filler = ("INFO " + "x" * 95 + "\n") * 1000           # ~100 KB between the two error lines
+    a.log_file().write_text("ERROR early one\n" + filler + "ERROR late one\nINFO end\n")
+    f = checks.by_id("logs").run()
+    assert f.ok is True and "ERROR late one" in f.detail and "1 error line" in f.detail and "early" not in f.detail
