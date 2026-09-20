@@ -28,19 +28,28 @@ class Postgres(Protocol):
 
 
 class SystemPostgres:
+    def _ident(self, name: str) -> str:
+        """Guard against unsafe database names in SQL interpolation."""
+        if not re.fullmatch(r"[a-z0-9_]+", name):
+            raise ValueError(f"unsafe database name {name!r}")
+        return name
+
     def _psql(self, sql: str, db: str = "postgres") -> str:
         return subprocess.run(["psql", "-d", db, "-Atc", sql], capture_output=True, text=True, check=True).stdout.strip()
 
     def database_exists(self, name: str) -> bool:
+        name = self._ident(name)
         return self._psql(f"select 1 from pg_database where datname = '{name}'") == "1"
 
     def template_exists(self) -> bool:
+        self._ident(TEMPLATE_DB)
         return self._psql(f"select 1 from pg_database where datname = '{TEMPLATE_DB}'") == "1"
 
     def is_superuser(self) -> bool:
         return self._psql("select rolsuper from pg_roles where rolname = current_user") == "t"
 
     def create_database(self, name: str) -> None:
+        name = self._ident(name)
         if self.template_exists():
             subprocess.run(["createdb", "-T", TEMPLATE_DB, name], check=True)
         elif self.is_superuser():
@@ -78,7 +87,7 @@ class Plan:
 def _slug(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     if not s:
-        raise InitRefused("a store name needs at least one letter or digit")
+        raise InitRefused("a store name needs at least one letter or digit — see SETUP.md#registry")
     return s
 
 
@@ -93,7 +102,7 @@ def plan_init(cwd: Path, name: str | None, dialect: str, pg: Postgres) -> Plan:
     if (hit := reg.resolve(cwd)) is not None:
         raise InitRefused(f"{cwd} already resolves to {hit}; use `slopymem link`/`unlink` to change it — see SETUP.md#registry")
     if dialect not in ("coding", "design"):
-        raise InitRefused(f"unknown dialect {dialect!r}: coding | design")
+        raise InitRefused(f"unknown dialect {dialect!r}: coding | design — see SETUP.md#registry")
     slug = _slug(name or cwd.name)
     others = all_stores()
     database = f"{slug}_memory"

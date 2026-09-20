@@ -58,6 +58,94 @@ def test_init_refuses_a_name_in_use_and_a_foreign_database(tmp_home, tmp_path):
         provision.plan_init(b, "taken", "coding", pg)
 
 
+def test_plan_init_refuses_when_cannot_provision(tmp_home, tmp_path):
+    """Finding 1: can_provision()-false refusal must be tested."""
+    repo = tmp_path / "proj"; repo.mkdir()
+    class NoCan:
+        def database_exists(self, n): return False
+        def can_provision(self): return False
+    with pytest.raises(provision.InitRefused, match="slopymem_template"):
+        provision.plan_init(repo, None, "coding", NoCan())
+    with pytest.raises(provision.InitRefused, match="SETUP.md#postgres"):
+        provision.plan_init(repo, None, "coding", NoCan())
+
+
+def test_plan_init_refuses_unknown_dialect_with_anchor(tmp_home, tmp_path):
+    """Finding 3: unknown dialect refusal must include anchor."""
+    repo = tmp_path / "proj"; repo.mkdir()
+    pg = FakePostgres()
+    with pytest.raises(provision.InitRefused, match="SETUP.md#registry"):
+        provision.plan_init(repo, None, "unknown", pg)
+
+
+def test_slug_refuses_empty_name_with_anchor():
+    """Finding 3: _slug refusal must include anchor."""
+    with pytest.raises(provision.InitRefused, match="SETUP.md#registry"):
+        provision._slug("---")
+    with pytest.raises(provision.InitRefused, match="letter or digit"):
+        provision._slug("---")
+
+
+def test_system_postgres_create_database_branches(monkeypatch):
+    """Finding 2: test all three branches of create_database without real Postgres."""
+    import subprocess as sp_module
+
+    calls = []
+    psql_calls = []
+
+    class StubResult:
+        def __init__(self, stdout): self.stdout = stdout
+        returncode = 0
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return StubResult("")
+
+    pg = provision.SystemPostgres()
+
+    # Branch (a): template exists
+    calls.clear()
+    psql_calls.clear()
+    monkeypatch.setattr(provision.subprocess, "run", fake_run)
+    monkeypatch.setattr(pg, "template_exists", lambda: True)
+    monkeypatch.setattr(pg, "is_superuser", lambda: False)
+    pg.create_database("test_a")
+    assert calls == [["createdb", "-T", "slopymem_template", "test_a"]]
+    assert len(psql_calls) == 0
+
+    # Branch (b): no template, superuser
+    calls.clear()
+    monkeypatch.setattr(provision.subprocess, "run", fake_run)
+    monkeypatch.setattr(pg, "template_exists", lambda: False)
+    monkeypatch.setattr(pg, "is_superuser", lambda: True)
+    original_psql = pg._psql
+    def fake_psql(sql, db="postgres"):
+        psql_calls.append((sql, db))
+        return ""
+    monkeypatch.setattr(pg, "_psql", fake_psql)
+    pg.create_database("test_b")
+    assert calls == [["createdb", "test_b"]]
+    assert ("create extension if not exists vector", "test_b") in psql_calls
+
+    # Branch (c): neither template nor superuser
+    calls.clear()
+    monkeypatch.setattr(provision.subprocess, "run", fake_run)
+    monkeypatch.setattr(pg, "template_exists", lambda: False)
+    monkeypatch.setattr(pg, "is_superuser", lambda: False)
+    with pytest.raises(provision.InitRefused, match="superuser or the template"):
+        pg.create_database("test_c")
+    assert len(calls) == 0  # No createdb called
+
+
+def test_system_postgres_ident_guards_unsafe_names(monkeypatch):
+    """Finding 4: _ident must guard against unsafe names before subprocess."""
+    monkeypatch.setattr(provision.subprocess, "run", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("should not call subprocess")))
+
+    pg = provision.SystemPostgres()
+    with pytest.raises(ValueError, match="unsafe database name"):
+        pg.database_exists("bad'name")
+
+
 @pytest.mark.pg
 def test_system_postgres_creates_and_drops_a_scratch_database():
     import os, subprocess
