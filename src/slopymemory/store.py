@@ -77,6 +77,9 @@ class Store:
             raise ConfigError(f"{f}: unreadable: {e} — see SETUP.md#registry") from e
         if st.dialect not in DIALECT_ENV:
             raise ConfigError(f"{f}: unknown dialect {st.dialect!r}: coding | design — see SETUP.md#registry")
+        for key, value in (("name", st.name), ("database", st.database)):
+            if not valid_name(value):                 # the SQL identifier guard downstream would raise instead
+                raise ConfigError(f"{f}: {key} {value!r} must match [a-z0-9_]+ — see SETUP.md#registry")
         return st
 
     def save(self) -> None:

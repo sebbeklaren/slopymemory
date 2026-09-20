@@ -133,7 +133,6 @@ def test_logs_check_reads_only_the_last_64_kb(tmp_home):
 
 
 def test_space_check_follows_the_paths_each_stores_env_names(tmp_home, tmp_path, monkeypatch):
-    from slopymemory import paths
     st = Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system")
     elsewhere = tmp_path / "elsewhere"; elsewhere.mkdir()
     (elsewhere / "buf.jsonl").write_bytes(b"x" * (3 * 2**20))

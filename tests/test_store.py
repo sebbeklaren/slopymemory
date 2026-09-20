@@ -66,10 +66,14 @@ def test_a_malformed_store_toml_is_a_named_config_error_not_a_crash(tmp_home):
     (odd / "store.toml").write_text('name = "odd"\ndialect = "poetry"\nport = 8782\ndatabase = "odd_db"\npostgres = "system"\ncreated = 2026-09-20\n')
     with pytest.raises(ConfigError, match="dialect"):
         Store.load("odd")
+    dash = tmp_home / "stores" / "dash"; dash.mkdir()            # a database name outside [a-z0-9_]: list would
+    (dash / "store.toml").write_text('name = "dash"\ndialect = "coding"\nport = 8783\ndatabase = "bad-name"\npostgres = "system"\ncreated = 2026-09-20\n')
+    with pytest.raises(ConfigError, match="database"):           # otherwise crash on pg_database_size's identifier guard
+        Store.load("dash")
     assert [s.name for s in all_stores()] == ["good"]          # the good store is still served
     problems = store_problems()
-    assert len(problems) == 2 and all("SETUP.md#registry" in p for p in problems)
-    assert any("bad" in p for p in problems) and any("odd" in p for p in problems)
+    assert len(problems) == 3 and all("SETUP.md#registry" in p for p in problems)
+    assert any("bad" in p for p in problems) and any("odd" in p for p in problems) and any("dash" in p for p in problems)
 
 
 def test_save_is_atomic_no_tmp_file_remains(tmp_home):

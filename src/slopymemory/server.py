@@ -129,7 +129,8 @@ def _owns(pid: int, store: Store) -> bool:
 
 def stop(store: Store, wait_s: float = 10.0) -> bool:
     """SIGTERM the store's server and wait for the port to close. False when nothing was running. Raises
-    RuntimeError (with the anchor) when the port is held by something that is not this store's server."""
+    RuntimeError (with the anchor) when the port is held by something that is not this store's server, or
+    when the server is still listening after `wait_s`."""
     pid = pid_on_port(store.port)
     if pid is None:
         if probe(store.port):
@@ -145,4 +146,7 @@ def stop(store: Store, wait_s: float = 10.0) -> bool:
         if not probe(store.port):
             return True
         time.sleep(0.2)
-    return not probe(store.port)
+    # Not False: False means "nothing was running", and `remove` would go on to drop the database under
+    # a server that is still serving it.
+    raise RuntimeError(f"store {store.name}: server pid {pid} did not exit within {wait_s:g} s of SIGTERM; "
+                       f"still listening on port {store.port} — see SETUP.md#servers")

@@ -123,3 +123,19 @@ def test_stop_reports_a_port_that_answers_with_no_visible_owner(tmp_home, fake_h
     with pytest.raises(RuntimeError) as e:
         server.stop(st)
     assert "no owning process" in str(e.value) and "SETUP.md#servers" in str(e.value)
+
+
+def test_stop_raises_when_the_server_ignores_sigterm_so_remove_cannot_drop_a_live_database(tmp_home, monkeypatch):
+    """`stop()` used to return False both for 'nothing was running' and 'still alive after the wait' — and
+    `remove` read False as 'nothing to stop' and dropped the database under a live server. A timeout is a
+    named error with the anchor; nothing downstream proceeds."""
+    st = Store(name="stuck", dialect="coding", port=8784, database="s", postgres="system"); st.save()
+    monkeypatch.setattr(server, "pid_on_port", lambda port: 4242)
+    monkeypatch.setattr(server, "_owns", lambda pid, store: True)
+    monkeypatch.setattr(server, "probe", lambda port: True)                 # never goes down
+    sent = []
+    monkeypatch.setattr(server.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    with pytest.raises(RuntimeError) as e:
+        server.stop(st, wait_s=0.3)
+    assert sent == [(4242, server.signal.SIGTERM)]
+    assert "did not exit" in str(e.value) and "4242" in str(e.value) and "SETUP.md#servers" in str(e.value)
