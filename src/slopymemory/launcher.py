@@ -76,6 +76,12 @@ def _lost(e: BaseException) -> bool:
     return isinstance(e, (anyio.ClosedResourceError, anyio.BrokenResourceError))
 
 
+def _text(e: BaseException) -> str:
+    """str(e), or the type's name when that is empty: anyio's stream errors carry no text, and an exception
+    object is always truthy, so `e or …` would never reach the fallback."""
+    return f"{e}" or type(e).__name__
+
+
 def _cause(e: BaseException) -> BaseException:
     """anyio re-raises whatever leaves a task group inside an ExceptionGroup ("unhandled errors in a
     TaskGroup (1 sub-exception)"); the message the harness shows must be the cause, not the wrapper."""
@@ -94,6 +100,7 @@ class Launcher:
         self.closing = asyncio.Event()         # releases the CURRENT upstream connection: shutdown, or a reconnect
         self.connect_task: asyncio.Task | None = None
         self._attempts = 0                     # connect attempts started; a call compares to see if one ran since it looked
+        self._connected = False                # did the current attempt ever establish a session? (words the announcement)
         self._reconnecting = asyncio.Lock()    # concurrent callers that found the same loss share one attempt
         self.server = Server("memory")
         self._register_handlers()
@@ -123,6 +130,7 @@ class Launcher:
         self.store = store                     # known from here; `self.upstream` is the readiness signal
         self.closing = asyncio.Event()         # this connection's release
         self._attempts += 1
+        self._connected = False
         self.connect_task = asyncio.create_task(self.connect(store, self.closing))
 
     def _superseded(self) -> bool:
@@ -152,19 +160,20 @@ class Launcher:
                             f"the MCP handshake within {srv.DEADLINE_S:.0f}s — log: {store.log_file()} — see SETUP.md#servers")
                     if not self._superseded():
                         self.upstream = session
+                        self._connected = True
                         self.ready.set()
                         await closing.wait()           # keep the connection open until released
         except Exception as e:             # any failure is reported through the tools, never swallowed
             e = _cause(e)
             if closing.is_set():           # released on purpose (a reconnect, or shutdown) and the close itself failed —
-                failure = (f"store {store.name}: the released connection did not close cleanly "   # said, but it is
-                           f"({e or type(e).__name__})")                                          # not a store failure
+                failure = f"store {store.name}: the released connection did not close cleanly ({_text(e)})"   # said,
+                                                                                                    # but not a store failure
             else:
                 # ServerNotUp already names the store, its log file and an anchor (see server.py); any
                 # other exception (e.g. an httpx ConnectError from the streamable-http handshake) does not,
                 # so it gets the same anchor here rather than surfacing as a bare, uninvestigable message.
-                failure = f"{e}" if isinstance(e, srv.ServerNotUp) else (     # anyio's stream errors carry no text
-                    f"store {store.name}: {e or type(e).__name__} — log: {store.log_file()} — see SETUP.md#servers")
+                failure = f"{e}" if isinstance(e, srv.ServerNotUp) else (
+                    f"store {store.name}: {_text(e)} — log: {store.log_file()} — see SETUP.md#servers")
             print(f"slopymem-mcp: {failure}", file=sys.stderr)
             if not self._superseded():
                 self.failure = failure
@@ -191,21 +200,24 @@ class Launcher:
         """Replace the upstream connection: release the connect task that holds it (the task that opened
         it closes it — the anyio rule), start a fresh one — `ensure_up` and the handshake, each bounded by
         DEADLINE_S exactly as at startup — and wait for its outcome: a live session, or the failure raised
-        with the store, its log and the anchor. Announced on stderr once per attempt. `seen` is the
+        with the store, its log and the anchor. Announced on stderr once per attempt — as a lost session when
+        the attempt being replaced had one, as "no server connection" when it never did (a startup failure, or
+        a failed reconnect). `seen` is the
         attempt whose session the caller found lost: when a newer attempt has been made by the time the
         caller holds the lock, that attempt's outcome is the caller's — one attempt per call, never a
         loop, and never a healthy fresh connection torn down over a loss of the previous one."""
         async with self._reconnecting:
             if self._attempts == seen:
                 store = self.store
-                print(f"slopymem-mcp: store {store.name}: server session lost — reconnecting", file=sys.stderr)
+                what = "server session lost — reconnecting" if self._connected else "no server connection — trying again"
+                print(f"slopymem-mcp: store {store.name}: {what}", file=sys.stderr)
                 self.closing.set()
                 if self.connect_task is not None:
                     try:                        # bounded, as at shutdown: a wedged close must not hang the call
                         await asyncio.wait_for(self.connect_task, srv.DEADLINE_S)
                     except TimeoutError:
                         print(f"slopymem-mcp: store {store.name}: the lost connection did not close within "
-                              f"{srv.DEADLINE_S:.0f}s; leaving it — see SETUP.md#servers", file=sys.stderr)
+                              f"{srv.DEADLINE_S:.0f}s; cancelling it — see SETUP.md#servers", file=sys.stderr)
                 # Only now: the old task's close can itself fail (another call's request still in flight on
                 # it — the SDK raises BrokenResourceError on teardown) and its except path then sets `ready`
                 # and `failure`; both must be reset AFTER it has finished, or the wait below returns at once
@@ -252,7 +264,7 @@ class Launcher:
             return call.result()
         except Exception as e:
             if _lost(e):
-                raise SessionLost(f"{e}" or type(e).__name__) from e
+                raise SessionLost(_text(e)) from e
             raise
 
     def _register_handlers(self) -> None:
@@ -372,7 +384,7 @@ class Launcher:
                 except TimeoutError:
                     name = self.store.name if self.store else "?"
                     print(f"slopymem-mcp: store {name}: the upstream connection did not close within "
-                          f"{srv.DEADLINE_S:.0f}s; leaving it — see SETUP.md#servers", file=sys.stderr)
+                          f"{srv.DEADLINE_S:.0f}s; cancelling it — see SETUP.md#servers", file=sys.stderr)
 
 
 def main() -> None:

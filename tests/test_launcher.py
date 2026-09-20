@@ -305,7 +305,10 @@ async def test_a_failed_reconnect_raises_the_failure_shape_and_the_launcher_stay
                     with pytest.raises(McpError) as e:                 # still alive; the next call gets one attempt too
                         await asyncio.wait_for(s.list_tools(), 30)
                     assert "store repo" in str(e.value) and "SETUP.md#servers" in str(e.value)
-        assert len(_reconnect_lines(errlog)) == 2, errlog.read_text()   # one attempt per call, no loop
+        # one attempt per call, no loop — the first announced as a lost session, the second (no session ever
+        # came of the failed attempt) as a missing connection
+        assert len(_reconnect_lines(errlog)) == 1, errlog.read_text()
+        assert len([l for l in errlog.read_text().splitlines() if "no server connection — trying again" in l]) == 1
     finally:
         if server.probe(store.port):
             server.stop(store)
@@ -352,3 +355,31 @@ async def test_concurrent_calls_that_lose_the_session_share_one_reconnect(tmp_ho
         assert len(_reconnect_lines(errlog)) == 1, errlog.read_text()
     finally:
         server.stop(store)
+
+
+async def test_a_failure_without_text_is_named_by_its_type_on_stderr(tmp_home, tmp_path, monkeypatch, capsys):
+    """anyio's stream errors (the shapes a dying connection raises) have an empty str(); both connect-task
+    failure lines must then carry the type name — a line that names a blank failure is silent in spirit."""
+    import anyio
+    from slopymemory.launcher import Launcher
+    repo = tmp_path / "repo"; repo.mkdir()
+    store = Store(name="blank", dialect="coding", port=8782, database="x", postgres="system"); store.save()
+    r = Registry.load(); r.link(repo, "blank"); r.save()
+    monkeypatch.setenv("SLOPYMEM_CWD", str(repo))
+
+    def broken(store):
+        raise anyio.BrokenResourceError()
+    monkeypatch.setattr(server, "ensure_up", broken)
+    launcher = Launcher()
+    await launcher.connect(store)                                  # a connection that fails
+    err = capsys.readouterr().err
+    line = [l for l in err.splitlines() if "store blank" in l][-1]
+    assert "BrokenResourceError" in line and "SETUP.md#servers" in line, err
+    assert "BrokenResourceError" in launcher.failure
+
+    launcher = Launcher()
+    launcher.closing.set()                                         # a connection released while it was closing
+    await launcher.connect(store)
+    err = capsys.readouterr().err
+    line = [l for l in err.splitlines() if "store blank" in l][-1]
+    assert "did not close cleanly (BrokenResourceError)" in line, err
