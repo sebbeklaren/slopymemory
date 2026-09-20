@@ -12,7 +12,7 @@ from .registry import Registry
 from .store import Store, all_stores, allocate_port, collisions
 
 TEMPLATE_DB = "slopymem_template"
-TEMPLATE_HINT = "one-time, as a superuser: sudo -u postgres psql -c 'CREATE DATABASE slopymem_template' -c 'GRANT ALL ON DATABASE slopymem_template TO <your role>' && sudo -u postgres psql -d slopymem_template -c 'CREATE EXTENSION vector' — see SETUP.md#postgres"
+TEMPLATE_HINT = "one-time, as a superuser: sudo -u postgres psql -c 'CREATE DATABASE slopymem_template' -c 'ALTER DATABASE slopymem_template IS_TEMPLATE true' && sudo -u postgres psql -d slopymem_template -c 'CREATE EXTENSION vector' — see SETUP.md#postgres"
 
 
 class InitRefused(RuntimeError):
@@ -43,8 +43,9 @@ class SystemPostgres:
         return self._psql(f"select 1 from pg_database where datname = '{name}'") == "1"
 
     def template_exists(self) -> bool:
+        """Check if slopymem_template exists and is usable (either is_template=true or owned by current user)."""
         self._ident(TEMPLATE_DB)
-        return self._psql(f"select 1 from pg_database where datname = '{TEMPLATE_DB}'") == "1"
+        return self._psql(f"select 1 from pg_database d where d.datname = '{TEMPLATE_DB}' and (d.datistemplate or d.datdba = (select oid from pg_roles where rolname = current_user))") == "1"
 
     def is_superuser(self) -> bool:
         return self._psql("select rolsuper from pg_roles where rolname = current_user") == "t"

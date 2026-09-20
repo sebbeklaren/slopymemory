@@ -2,7 +2,6 @@
 for every project), and where its machine-wide instruction file lives for the optional offer line.
 The launcher itself knows nothing about harnesses; this table is the only place that does."""
 from __future__ import annotations
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -13,6 +12,18 @@ from ..checks import Finding
 
 OFFER_LINE = ("If the memory tools show only `memory_init`, tell the user this project has no memory yet "
               "and offer to set it up.")
+
+
+def read_config(path: Path, parse: Callable[[str], dict]) -> dict | None:
+    """Read a config file, parse it, and return the result. Returns None if missing or unparseable.
+    On parse error, prints a message to stderr and returns None."""
+    if not path.exists():
+        return None
+    try:
+        return parse(path.read_text())
+    except Exception as e:
+        print(f"{path}: unreadable ({e}) — see SETUP.md#harnesses", file=sys.stderr)
+        return None
 
 
 @dataclass

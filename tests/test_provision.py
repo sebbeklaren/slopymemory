@@ -153,6 +153,7 @@ def test_system_postgres_creates_and_drops_a_scratch_database():
     pg = provision.SystemPostgres()
     if not pg.can_provision():
         pytest.skip("no slopymem_template and not a superuser — " + provision.TEMPLATE_HINT)
+    assert pg.template_exists() or pg.is_superuser()
     assert pg.has_pgvector()
     assert not pg.database_exists(name)
     pg.create_database(name)
