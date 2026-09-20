@@ -13,7 +13,7 @@ from . import paths
 from .store import Store
 
 SERVER_MODULE = "agent_memory.mcp.server"
-# Measured cold start on this machine (Plan A Task 2 step 1): 11.1 s to the first HTTP answer,
+# Measured cold start on the development machine: 11.1 s to the first HTTP answer,
 # dominated by the embedder load. Deadline = 3× that, floored at 60 s, so a slow disk or a first
 # model fetch does not read as a failure.
 DEADLINE_S = 60.0

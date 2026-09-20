@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from .. import paths
-from ..checks import Finding
 
 OFFER_LINE = ("If the memory tools show only `memory_init`, tell the user this project has no memory yet "
               "and offer to set it up.")
@@ -73,7 +72,8 @@ def detected() -> list[Harness]:
     return [h for h in KNOWN if h.detect()]
 
 
-def status() -> Finding:
+def status() -> "Finding":
+    from ..checks import Finding     # lazy: checks imports this module's status() at its top; this breaks the cycle
     rows, bad = [], False
     lp = launcher_path()
     for h in detected():

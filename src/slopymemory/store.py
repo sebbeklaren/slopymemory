@@ -15,8 +15,8 @@ from .paths import ConfigError
 
 Dialect = Literal["coding", "design"]
 
-# coding = what the four coding stores run today; design = the substrate's defaults (the five spaces
-# with facets come from the facet-projector dir the server finds in the state directory).
+# coding = the substrate's function + semantic dialect (concept-primary retrieval, no facets); design = the
+# substrate's defaults (the five spaces with facets come from the facet-projector dir in the state directory).
 DIALECT_ENV: dict[str, dict[str, str]] = {
     "coding": {"AM_M3_RETRIEVAL_MODE": "concept_primary", "AM_M3_WORD_DEPTH_STEEPNESS": "4.0",
                "AM_M3_BOOTSTRAP_N": "12"},

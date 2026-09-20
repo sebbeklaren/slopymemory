@@ -159,3 +159,14 @@ def test_list_reports_the_state_size_from_the_env_paths_and_the_database_size(tm
     fake_pg.sizes = {}
     code, out = run(["list"])
     assert code == 0 and "db size unknown" in out and "SETUP.md#postgres" in out
+
+
+def test_doctor_and_register_call_through(tmp_home, tmp_path, broken_pg_tools, monkeypatch):
+    """`slopymem doctor` runs the check list and `slopymem register` the harness table directly — a broken
+    import there must surface as the real ImportError, never as a placeholder message."""
+    monkeypatch.setenv("HOME", str(tmp_path / "homedir")); (tmp_path / "homedir").mkdir()
+    from slopymemory.checks import CHECKS
+    code, out = run(["doctor"])
+    assert code in (0, 1) and "doctor:" in out and all(c.id in out for c in CHECKS) and "no checks yet" not in out
+    code, out = run(["register", "nosuch"])
+    assert code == 1 and "unknown harness nosuch" in out and "no harness table" not in out

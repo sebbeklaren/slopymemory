@@ -7,6 +7,8 @@ import shutil
 import sys
 from pathlib import Path
 from . import server as srv
+from .checks import run_all
+from .harnesses import register
 from .provision import InitRefused, SystemPostgres, apply_init, plan_init, refuse_unsuitable_dir
 from .paths import ConfigError
 from .registry import Registry
@@ -179,18 +181,10 @@ def cmd_remove(a) -> int:
 
 
 def cmd_doctor(a) -> int:
-    try:
-        from .checks import run_all
-    except ImportError:
-        return fail("no checks yet (Plan A Task 7)")
     return run_all()
 
 
 def cmd_register(a) -> int:
-    try:
-        from .harnesses import register
-    except ImportError:
-        return fail("no harness table yet (Plan A Task 8)")
     return register(a.harness, a.yes)
 
 

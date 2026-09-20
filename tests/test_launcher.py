@@ -63,8 +63,8 @@ async def test_init_mode_offers_memory_init_then_switches_to_the_store(tmp_home,
                 names = [t.name for t in (await s.list_tools()).tools]
                 assert names == ["memory_ping"]
         assert Registry.load().resolve(repo) == "fresh"
-        # fix round 1, item 1: the launcher must advertise tools.listChanged=True (the capability
-        # negotiated at initialize) since memory_init sends exactly this notification.
+        # The launcher must advertise tools.listChanged=True at initialize: memory_init sends exactly this
+        # notification, and a harness told the list is static may ignore it.
         assert any(isinstance(n, types.ToolListChangedNotification) for n in notifications)
     finally:
         if Store.exists("fresh"):
@@ -72,8 +72,8 @@ async def test_init_mode_offers_memory_init_then_switches_to_the_store(tmp_home,
 
 
 async def test_when_the_machine_cannot_provision_list_tools_notes_it_and_init_fails(tmp_home, tmp_path):
-    """Controller ruling (task-5 fact 3): a machine that cannot provision must say so at list_tools
-    time, before any call — and memory_init must still refuse, pointing at the same doc anchor."""
+    """A machine that cannot provision must say so at list_tools time, before any call — and memory_init
+    must still refuse, pointing at the same doc anchor."""
     repo = tmp_path / "cannot"; repo.mkdir()
     params = launcher_params(repo, tmp_home, SLOPYMEM_FAKE_PG="cannot")
     try:
@@ -92,8 +92,8 @@ async def test_when_the_machine_cannot_provision_list_tools_notes_it_and_init_fa
 
 
 async def test_a_failing_provisioning_check_still_lists_memory_init_with_the_reason(tmp_home, tmp_path):
-    """Fix round 1, item 2: can_provision() can raise (psql down, missing binary, ...) instead of
-    returning False. That must not drop memory_init off the list — it's the only way out."""
+    """can_provision() can raise (psql down, missing binary, ...) instead of returning False. That must not
+    drop memory_init off the list — it is the only way out."""
     repo = tmp_path / "broken"; repo.mkdir()
     params = launcher_params(repo, tmp_home, SLOPYMEM_FAKE_PG="broken")
     async with stdio_client(params) as (rd, wr):

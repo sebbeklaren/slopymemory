@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from . import paths, server as srv
+from .harnesses import status as harness_status
 from .provision import InitRefused, SystemPostgres, TEMPLATE_HINT
 from .paths import ConfigError
 from .registry import Registry
@@ -119,11 +120,7 @@ def _servers() -> Finding:
 
 
 def _harnesses() -> Finding:
-    try:
-        from .harnesses import status
-    except ImportError:
-        return Finding(True, "no harness table yet")
-    return status()
+    return harness_status()
 
 
 def _space() -> Finding:
@@ -179,7 +176,7 @@ def _local_paths() -> Finding:
 
 CHECKS: list[Check] = [
     Check("python", "the command or the launcher fails to start", "Python 3.13+ and the venv interpreter exist",
-          "ls ~/.slopymemory/venv/bin/python; python3 --version", "re-run install.sh (Plan B) or the dev install script", _python),
+          "ls ~/.slopymemory/venv/bin/python; python3 --version", "re-run the installer or the dev install script", _python),
     Check("package", "import errors on start", "slopymemory and the substrate are installed in the venv",
           "~/.slopymemory/venv/bin/python -c 'import slopymemory, agent_memory'", "re-run the install", _package),
     Check("postgres", "init fails or a server dies on start", "Postgres reachable, pgvector available, template/superuser/CREATEDB status, one database per store",

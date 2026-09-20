@@ -38,7 +38,7 @@ Then run `slopymem doctor`. Every failing line ends with the anchor of the secti
 ls ~/.slopymemory/venv/bin/python; python3 --version
 ```
 
-**Fix:** re-run install.sh (Plan B) or the dev install script
+**Fix:** re-run the installer or the dev install script
 
 ## package
 

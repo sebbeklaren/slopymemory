@@ -59,7 +59,7 @@ def test_init_refuses_a_name_in_use_and_a_foreign_database(tmp_home, tmp_path):
 
 
 def test_plan_init_refuses_when_cannot_provision(tmp_home, tmp_path):
-    """Finding 1: can_provision()-false refusal must be tested."""
+    """A machine that cannot provision is refused with the template hint and the anchor."""
     repo = tmp_path / "proj"; repo.mkdir()
     class NoCan:
         def database_exists(self, n): return False
@@ -71,7 +71,7 @@ def test_plan_init_refuses_when_cannot_provision(tmp_home, tmp_path):
 
 
 def test_plan_init_refuses_unknown_dialect_with_anchor(tmp_home, tmp_path):
-    """Finding 3: unknown dialect refusal must include anchor."""
+    """An unknown dialect is refused with the anchor."""
     repo = tmp_path / "proj"; repo.mkdir()
     pg = FakePostgres()
     with pytest.raises(provision.InitRefused, match="SETUP.md#registry"):
@@ -79,7 +79,7 @@ def test_plan_init_refuses_unknown_dialect_with_anchor(tmp_home, tmp_path):
 
 
 def test_slug_refuses_empty_name_with_anchor():
-    """Finding 3: _slug refusal must include anchor."""
+    """A name with no letter or digit is refused with the anchor."""
     with pytest.raises(provision.InitRefused, match="SETUP.md#registry"):
         provision._slug("---")
     with pytest.raises(provision.InitRefused, match="letter or digit"):
@@ -87,7 +87,7 @@ def test_slug_refuses_empty_name_with_anchor():
 
 
 def test_system_postgres_create_database_branches(monkeypatch):
-    """Finding 2: test all three branches of create_database without real Postgres."""
+    """The three branches of create_database (template, superuser, neither) without a real Postgres."""
     calls = []
     psql_calls = []
 
@@ -135,7 +135,7 @@ def test_system_postgres_create_database_branches(monkeypatch):
 
 
 def test_system_postgres_ident_guards_unsafe_names(monkeypatch):
-    """Finding 4: _ident must guard against unsafe names before subprocess."""
+    """_ident guards an unsafe database name before any subprocess runs."""
     monkeypatch.setattr(provision.subprocess, "run", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("should not call subprocess")))
 
     pg = provision.SystemPostgres()
