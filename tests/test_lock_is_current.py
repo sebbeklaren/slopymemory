@@ -15,4 +15,5 @@ def test_the_lock_pins_the_known_good_lines_and_the_cpu_torch():
     assert version_of("sentence-transformers").startswith("5.5.")
     assert version_of("umap-learn").startswith("0.5.")
     assert version_of("embedded-postgres").startswith("18.")
+    assert version_of("mcp").startswith("1.27.")
     assert "download.pytorch.org/whl/cpu" in lock and "+cu" not in version_of("torch")

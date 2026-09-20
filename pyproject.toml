@@ -5,7 +5,7 @@ description = "Per-project memory for coding agents: one launcher, one registry,
 requires-python = ">=3.13"
 license = "MIT"
 dependencies = [
-    "mcp>=1.27,<2",
+    "mcp>=1.27,<1.28",
     "tomli-w>=1.0",
     # the substrate (vendored under src/agent_memory)
     "psycopg[binary]>=3.2", "pgvector>=0.3", "pyyaml>=6.0", "numpy>=2.0", "scipy>=1.13",
