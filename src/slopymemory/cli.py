@@ -96,6 +96,12 @@ def cmd_start(a) -> int:
 
 
 def cmd_stop(a) -> int:
+    if a.store is None and not a.all:
+        return fail("stop needs a store name or --all — see SETUP.md#servers")
+    if a.store is not None and a.all:
+        return fail("give a store name OR --all, not both — see SETUP.md#servers")
+    if a.store is not None and not Store.exists(a.store):
+        return fail(f"no store named {a.store} — see SETUP.md#registry")
     targets = all_stores() if a.all else [Store.load(a.store)]
     for st in targets:
         print(f"{st.name}: {'stopped' if srv.stop(st) else 'was not running'}")
@@ -106,7 +112,7 @@ def cmd_remove(a) -> int:
     if a.yes:
         return fail("remove refuses --yes: the memories are the user's", code=2)
     if not Store.exists(a.store):
-        return fail(f"no store named {a.store}")
+        return fail(f"no store named {a.store} — see SETUP.md#registry")
     st = Store.load(a.store)
     print(f"REMOVE store {st.name}: drops database {st.database} and deletes {st.path()}; unlinks {Registry.load().paths_of(st.name)}")
     if not confirm("are you sure?", False):
@@ -116,9 +122,18 @@ def cmd_remove(a) -> int:
         return fail("name did not match; nothing removed")
     srv.stop(st)
     if postgres().database_exists(st.database):
-        subprocess.run(["dropdb", st.database], check=True)
-    shutil.rmtree(st.path(), ignore_errors=True)
+        try:
+            postgres().drop_database(st.database)
+        except Exception as e:
+            return fail(str(e))
+    errors = []
+    try:
+        shutil.rmtree(st.path(), onexc=lambda fn, p, e: errors.append(f"{p}: {e}"))
+    except Exception as e:
+        errors.append(f"rmtree: {e}")
     reg = Registry.load(); reg.links = [l for l in reg.links if l.store != st.name]; reg.save()
+    if errors:
+        return fail("state directory not fully removed: " + "; ".join(errors) + " — see SETUP.md#registry")
     print(f"removed {st.name}"); return 0
 
 

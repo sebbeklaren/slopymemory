@@ -22,6 +22,7 @@ class InitRefused(RuntimeError):
 class Postgres(Protocol):
     def database_exists(self, name: str) -> bool: ...
     def create_database(self, name: str) -> None: ...
+    def drop_database(self, name: str) -> None: ...
     def has_pgvector(self) -> bool: ...
     def can_provision(self) -> bool: ...
     def describe(self) -> str: ...
@@ -57,6 +58,13 @@ class SystemPostgres:
             self._psql("create extension if not exists vector", db=name)
         else:
             raise InitRefused(f"cannot create {name}: pgvector needs a superuser or the template database — {TEMPLATE_HINT}")
+
+    def drop_database(self, name: str) -> None:
+        name = self._ident(name)
+        try:
+            subprocess.run(["dropdb", name], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            raise InitRefused(f"could not drop database {name}: {e.stderr or e} — see SETUP.md#postgres")
 
     def has_pgvector(self) -> bool:
         return self._psql("select 1 from pg_available_extensions where name = 'vector'") == "1"
