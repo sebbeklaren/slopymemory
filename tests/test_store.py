@@ -94,3 +94,13 @@ def test_state_size_counts_the_files_the_server_env_names_once_each(tmp_home, tm
              "AM_MCP_INVOCATION_LOG": str(s.path() / "local.bin")}     # inside the state dir: not double-counted
     s.save()
     assert Store.load("a").state_size() == 3000 + 5000 + 2000 + s.toml_file().stat().st_size
+
+
+def test_an_unknown_postgres_backend_in_store_toml_is_a_config_error(tmp_home):
+    """A typo here would otherwise hand the server the SYSTEM DSN for a store meant for the embedded one."""
+    from slopymemory.paths import ConfigError
+    odd = tmp_home / "stores" / "odd"; odd.mkdir(parents=True)
+    (odd / "store.toml").write_text('name = "odd"\ndialect = "coding"\nport = 8782\ndatabase = "odd_db"\npostgres = "sqlite"\ncreated = 2026-09-20\n')
+    with pytest.raises(ConfigError) as e:
+        Store.load("odd")
+    assert "postgres" in str(e.value) and "system | embedded" in str(e.value) and "SETUP.md#registry" in str(e.value)

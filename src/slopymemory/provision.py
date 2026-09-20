@@ -1,19 +1,23 @@
 """`init`: plan first (pure — what would be created, or why it is refused), then apply. The database
 is created through a small Postgres protocol so tests never touch a real one; `SystemPostgres` uses
-the local peer-authenticated tools (`createdb`, `psql`). No server is started here."""
+the local peer-authenticated tools (`createdb`, `psql`); `embedded_pg.EmbeddedPostgres` is the other
+implementation. Which one a new store gets is `choose_backend`. No store server is started here."""
 from __future__ import annotations
 import datetime as dt
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import NamedTuple, Protocol
+from . import paths
 from .registry import Registry
-from .store import Store, all_stores, allocate_port, collisions
+from .store import BACKENDS, Store, all_stores, allocate_port, collisions
 
 TEMPLATE_DB = "slopymem_template"
 TEMPLATE_HINT = ("one-time, as a superuser: sudo -u postgres psql -c 'CREATE DATABASE slopymem_template' -c 'ALTER DATABASE slopymem_template IS_TEMPLATE true' && sudo -u postgres psql -d slopymem_template -c 'CREATE EXTENSION vector'. "
                  "The role that runs slopymem must be allowed to create databases: sudo -u postgres psql -c 'ALTER ROLE <user> CREATEDB;' — see SETUP.md#postgres")
+EMBEDDED_HINT = ("the embedded Postgres needs the embedded-postgres wheel (PostgreSQL + pgvector) in the slopymemory venv — "
+                 "re-run the install; `slopymem doctor` names what is missing — see SETUP.md#postgres")
 
 
 class InitRefused(RuntimeError):
@@ -29,12 +33,16 @@ class Postgres(Protocol):
     def describe(self) -> str: ...
 
 
+def ident(name: str) -> str:
+    """Guard against unsafe database names in SQL interpolation — shared by both backends."""
+    if not re.fullmatch(r"[a-z0-9_]+", name):
+        raise ValueError(f"unsafe database name {name!r}")
+    return name
+
+
 class SystemPostgres:
     def _ident(self, name: str) -> str:
-        """Guard against unsafe database names in SQL interpolation."""
-        if not re.fullmatch(r"[a-z0-9_]+", name):
-            raise ValueError(f"unsafe database name {name!r}")
-        return name
+        return ident(name)
 
     def _run(self, tool: str, args: list[str]) -> str:
         """Run one client tool; a failure carries the tool's OWN reason (its stderr) and the anchor,
@@ -103,6 +111,41 @@ class SystemPostgres:
                 f"role can create databases: {createdb})")
 
 
+class Choice(NamedTuple):
+    backend: str            # "system" | "embedded"
+    note: str | None        # why the system one was passed over when nothing was requested — said, never swallowed
+
+
+def choose_backend(system: Postgres, embedded_available: bool, requested: str | None) -> Choice:
+    """Which Postgres a new store goes on. Pure: it decides and explains, creates nothing. `requested` wins
+    ("system" needs `system.can_provision()`, "embedded" needs the wheel), else: the embedded one when its data
+    dir already exists (the user chose it once — a machine's stores stay on one backend), else the system one when
+    it can provision, else the embedded one — with the system one's reason as the note, because a store landing
+    on the other backend than the user expects must never happen without a word. Neither → InitRefused naming both."""
+    embedded_why = "" if embedded_available else f" ({EMBEDDED_HINT})"
+    if requested == "system":
+        if not system.can_provision():           # its own InitRefused (psql missing, server down) propagates as is
+            raise InitRefused(f"the system Postgres cannot provision stores: {TEMPLATE_HINT}")
+        return Choice("system", None)
+    if requested == "embedded":
+        if not embedded_available:
+            raise InitRefused(f"the embedded Postgres is not available: {EMBEDDED_HINT}")
+        return Choice("embedded", None)
+    if requested is not None:
+        raise InitRefused(f"unknown postgres backend {requested!r}: system | embedded — see SETUP.md#postgres")
+    if embedded_available and paths.embedded_pg_dir().exists():
+        return Choice("embedded", None)
+    try:
+        if system.can_provision():
+            return Choice("system", None)
+        system_why = f"the system Postgres is not set up for slopymem — {TEMPLATE_HINT}"
+    except InitRefused as e:
+        system_why = f"the system Postgres is not usable here: {e}"
+    if embedded_available:
+        return Choice("embedded", system_why)
+    raise InitRefused(f"no Postgres can provision stores: {system_why}; the embedded Postgres is not available{embedded_why}")
+
+
 @dataclass
 class Plan:
     store: Store
@@ -112,7 +155,7 @@ class Plan:
     def describe(self) -> str:
         db = "create database" if self.creates_database else "use existing database"
         return (f"store {self.store.name!r} ({self.store.dialect}) for {self.path}\n"
-                f"  {db} {self.store.database}; port {self.store.port}; state {self.store.path()}\n"
+                f"  {db} {self.store.database} on {self.store.postgres} Postgres; port {self.store.port}; state {self.store.path()}\n"
                 f"  registry link {self.path} → {self.store.name}")
 
 
@@ -134,7 +177,10 @@ def refuse_unsuitable_dir(path: Path, reg: Registry) -> None:
             raise InitRefused(f"{path} is an ancestor of {l.path} (store {l.store}) — choose a project directory — see SETUP.md#registry")
 
 
-def plan_init(cwd: Path, name: str | None, dialect: str, pg: Postgres) -> Plan:
+def plan_init(cwd: Path, name: str | None, dialect: str, pg: Postgres, backend: str = "system") -> Plan:
+    """`pg` is the backend named by `backend` (see `choose_backend`); the store records which one it is on."""
+    if backend not in BACKENDS:
+        raise InitRefused(f"unknown postgres backend {backend!r}: system | embedded — see SETUP.md#postgres")
     cwd = cwd.resolve()
     reg = Registry.load()
     refuse_unsuitable_dir(cwd, reg)
@@ -146,14 +192,14 @@ def plan_init(cwd: Path, name: str | None, dialect: str, pg: Postgres) -> Plan:
     others = all_stores()
     database = f"{slug}_memory"
     store = Store(name=slug, dialect=dialect, port=allocate_port({o.port for o in others}),
-                  database=database, postgres="system", created=dt.date.today())
+                  database=database, postgres=backend, created=dt.date.today())
     if (msgs := collisions(store, others)):
         raise InitRefused("; ".join(msgs) + " — see SETUP.md#registry")
     exists = pg.database_exists(database)
     if exists:
         raise InitRefused(f"database {database} exists but no store owns it — adopt it with `slopymem link` or pick another name — see SETUP.md#postgres")
     if not pg.can_provision():
-        raise InitRefused(f"cannot provision stores: {TEMPLATE_HINT}")
+        raise InitRefused(f"cannot provision stores on the {backend} Postgres: {TEMPLATE_HINT if backend == 'system' else EMBEDDED_HINT}")
     return Plan(store=store, path=cwd, creates_database=not exists)
 
 

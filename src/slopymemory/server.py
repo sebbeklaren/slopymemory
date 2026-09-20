@@ -10,6 +10,8 @@ import subprocess
 import time
 from pathlib import Path
 from . import paths
+from .embedded_pg import EmbeddedPostgres
+from .provision import InitRefused
 from .store import Store
 
 SERVER_MODULE = "agent_memory.mcp.server"
@@ -89,6 +91,11 @@ def ensure_up(store: Store, deadline_s: float = DEADLINE_S) -> None:
         try:
             p = None
             if not probe(store.port):
+                if store.postgres == "embedded":          # the server's database must be answering before the server is
+                    try:
+                        EmbeddedPostgres(paths.embedded_pg_dir()).ensure_running()
+                    except InitRefused as e:              # names the tool's reason and #postgres; the store is added here
+                        raise ServerNotUp(f"store {store.name}: {e}") from e
                 p = spawn_detached(store)
             t0 = time.monotonic()
             while time.monotonic() - t0 < deadline_s:

@@ -21,6 +21,12 @@ def logs_dir() -> Path:
     return home() / "logs"
 
 
+def embedded_pg_dir() -> Path:
+    """The embedded Postgres cluster (PGDATA, its log, its unix socket) — the ONE place its location is defined:
+    the server, the doctor, `init` and the space check all ask here."""
+    return home() / "pg"
+
+
 def venv_python() -> Path:
     """The interpreter the store servers run under (the slopymemory venv)."""
     return Path(os.environ.get("SLOPYMEM_PYTHON", home() / "venv" / "bin" / "python")).expanduser()

@@ -212,3 +212,33 @@ def test_database_size_is_a_number_or_none_never_a_crash(broken_pg_tools, monkey
     assert pg.database_size("x_memory") == 123456
     with pytest.raises(ValueError):
         pg.database_size("bad'name")
+
+
+def test_plan_init_records_the_backend_and_says_it(tmp_home, tmp_path):
+    repo = tmp_path / "proj"; repo.mkdir()
+    pg = FakePostgres()
+    plan = provision.plan_init(repo, None, "coding", pg, backend="embedded")
+    assert plan.store.postgres == "embedded" and "embedded Postgres" in plan.describe()
+    provision.apply_init(plan, pg)
+    assert Store.load("proj").postgres == "embedded" and pg.created == ["proj_memory"]
+    other = tmp_path / "other"; other.mkdir()
+    plan = provision.plan_init(other, None, "coding", FakePostgres())          # the default is the system one
+    assert plan.store.postgres == "system" and "system Postgres" in plan.describe()
+
+
+def test_plan_init_refuses_an_embedded_backend_that_cannot_provision_with_its_own_hint(tmp_home, tmp_path):
+    repo = tmp_path / "proj"; repo.mkdir()
+    class NoCan:
+        def database_exists(self, n): return False
+        def can_provision(self): return False
+    with pytest.raises(provision.InitRefused) as e:
+        provision.plan_init(repo, None, "coding", NoCan(), backend="embedded")
+    assert "embedded" in str(e.value) and "SETUP.md#postgres" in str(e.value) and "slopymem_template" not in str(e.value)
+    with pytest.raises(provision.InitRefused, match="system \\| embedded"):
+        provision.plan_init(repo, None, "coding", FakePostgres(), backend="sqlite")
+
+
+def test_ident_is_the_shared_guard(monkeypatch):
+    assert provision.ident("ok_name_1") == "ok_name_1"
+    with pytest.raises(ValueError, match="unsafe database name"):
+        provision.ident("Bad-Name")

@@ -139,3 +139,65 @@ def test_stop_raises_when_the_server_ignores_sigterm_so_remove_cannot_drop_a_liv
         server.stop(st, wait_s=0.3)
     assert sent == [(4242, server.signal.SIGTERM)]
     assert "did not exit" in str(e.value) and "4242" in str(e.value) and "SETUP.md#servers" in str(e.value)
+
+
+def _http_fake(tmp_home):
+    fake = tmp_home / "fake_server.py"
+    fake.write_text(
+        "import os,http.server\n"
+        "class H(http.server.BaseHTTPRequestHandler):\n"
+        "    def do_GET(s): s.send_response(406); s.end_headers()\n"
+        "    def log_message(s,*a): pass\n"
+        "http.server.HTTPServer(('127.0.0.1', int(os.environ['AM_MCP_PORT'])), H).serve_forever()\n")
+    return fake
+
+
+def test_ensure_up_starts_the_embedded_postgres_before_an_embedded_stores_server(tmp_home, free_port, monkeypatch):
+    from slopymemory import paths
+    events = []
+
+    class FakeEpg:
+        def __init__(self, pgdata): events.append(("new", pgdata))
+        def ensure_running(self): events.append(("ensure", None))
+    monkeypatch.setattr(server, "EmbeddedPostgres", FakeEpg)
+    monkeypatch.setattr(server, "server_command", lambda st: [sys.executable, str(_http_fake(tmp_home))])
+    real_spawn = server.spawn_detached
+    monkeypatch.setattr(server, "spawn_detached", lambda st: (events.append(("spawn", None)), real_spawn(st))[1])
+    st = Store(name="e", dialect="coding", port=free_port, database="e_memory", postgres="embedded"); st.save()
+    try:
+        server.ensure_up(st, deadline_s=15)
+        assert events == [("new", paths.embedded_pg_dir()), ("ensure", None), ("spawn", None)]
+        assert paths.embedded_pg_dir() == tmp_home / "pg"
+        server.ensure_up(st)                        # already up: no second look at Postgres
+        assert len(events) == 3
+    finally:
+        server.stop(st)
+
+
+def test_ensure_up_reports_an_embedded_postgres_that_will_not_start_and_spawns_nothing(tmp_home, free_port, monkeypatch):
+    from slopymemory.provision import InitRefused
+
+    class Refuses:
+        def __init__(self, pgdata): pass
+        def ensure_running(self): raise InitRefused("initdb: boom — see SETUP.md#postgres")
+    monkeypatch.setattr(server, "EmbeddedPostgres", Refuses)
+    spawned = []
+    monkeypatch.setattr(server, "spawn_detached", lambda st: spawned.append(st))
+    st = Store(name="e", dialect="coding", port=free_port, database="e_memory", postgres="embedded"); st.save()
+    with pytest.raises(server.ServerNotUp) as e:
+        server.ensure_up(st, deadline_s=2)
+    assert "store e" in str(e.value) and "initdb: boom" in str(e.value) and "SETUP.md#postgres" in str(e.value)
+    assert spawned == []
+
+
+def test_ensure_up_leaves_the_embedded_postgres_alone_for_a_system_store(tmp_home, free_port, monkeypatch):
+    class Never:
+        def __init__(self, pgdata): raise AssertionError("a system store must not touch the embedded Postgres")
+    monkeypatch.setattr(server, "EmbeddedPostgres", Never)
+    monkeypatch.setattr(server, "server_command", lambda st: [sys.executable, str(_http_fake(tmp_home))])
+    st = Store(name="s", dialect="coding", port=free_port, database="s_memory", postgres="system"); st.save()
+    try:
+        server.ensure_up(st, deadline_s=15)
+        assert server.probe(free_port)
+    finally:
+        server.stop(st)

@@ -24,6 +24,7 @@ DIALECT_ENV: dict[str, dict[str, str]] = {
 }
 PORT_RANGE = range(8780, 8900)
 NAME_RE = re.compile(r"[a-z0-9_]+")     # what `provision._slug` produces; a name is also a directory under stores/
+BACKENDS = ("system", "embedded")       # `postgres`: the system Postgres (peer auth), or the embedded one under paths.embedded_pg_dir()
 
 
 def valid_name(name: str) -> bool:
@@ -77,6 +78,8 @@ class Store:
             raise ConfigError(f"{f}: unreadable: {e} — see SETUP.md#registry") from e
         if st.dialect not in DIALECT_ENV:
             raise ConfigError(f"{f}: unknown dialect {st.dialect!r}: coding | design — see SETUP.md#registry")
+        if st.postgres not in BACKENDS:                # a typo here would hand the server the OTHER backend's DSN
+            raise ConfigError(f"{f}: unknown postgres {st.postgres!r}: system | embedded — see SETUP.md#registry")
         for key, value in (("name", st.name), ("database", st.database)):
             if not valid_name(value):                 # the SQL identifier guard downstream would raise instead
                 raise ConfigError(f"{f}: {key} {value!r} must match [a-z0-9_]+ — see SETUP.md#registry")
@@ -95,11 +98,19 @@ class Store:
     def state_size(self) -> int:
         return measure(self.state_paths())
 
+    def database_url(self) -> str:
+        """The conninfo the server connects with: the system Postgres over peer auth (no role: the current OS
+        user), or the embedded cluster's unix socket."""
+        if self.postgres == "embedded":
+            from .embedded_pg import uri            # here, not at the top: embedded_pg imports provision, which imports this module
+            return uri(paths.embedded_pg_dir(), self.database)
+        return f"postgresql:///{self.database}"
+
     def server_env(self) -> dict[str, str]:
         d = str(self.path())
         env = {
             "AM_MCP_HOST": "127.0.0.1", "AM_MCP_PORT": str(self.port),
-            "DATABASE_URL": f"postgresql:///{self.database}",
+            "DATABASE_URL": self.database_url(),
             "AM_M3_BUFFER_PATH": f"{d}/m3_buffer.jsonl",
             "AM_M3_PROJECTOR_PATH": f"{d}/projector.pkl",
             "AM_M3_FACET_PROJECTOR_DIR": f"{d}/multispace_projectors",
