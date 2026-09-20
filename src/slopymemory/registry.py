@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import tomli_w
 from . import paths
+from .paths import ConfigError
 
 
 @dataclass(frozen=True)
@@ -23,13 +24,21 @@ class Registry:
         f = paths.registry_file()
         if not f.exists():
             return cls()
-        data = tomllib.loads(f.read_text())
-        return cls([Link(Path(l["path"]), l["store"]) for l in data.get("link", [])])
+        try:
+            data = tomllib.loads(f.read_text())
+            return cls([Link(Path(l["path"]), l["store"]) for l in data.get("link", [])])
+        except tomllib.TOMLDecodeError as e:
+            raise ConfigError(f"{f}: not valid TOML: {e} — see SETUP.md#registry") from e
+        except KeyError as e:
+            raise ConfigError(f"{f}: a link is missing the key {e} — see SETUP.md#registry") from e
+        except (TypeError, AttributeError) as e:
+            raise ConfigError(f"{f}: `link` must be a list of {{path, store}} tables: {e} — see SETUP.md#registry") from e
+        except OSError as e:
+            raise ConfigError(f"{f}: unreadable: {e} — see SETUP.md#registry") from e
 
     def save(self) -> None:
-        f = paths.registry_file()
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(tomli_w.dumps({"link": [{"path": str(l.path), "store": l.store} for l in self.links]}))
+        paths.write_atomic(paths.registry_file(),
+                           tomli_w.dumps({"link": [{"path": str(l.path), "store": l.store} for l in self.links]}))
 
     def resolve(self, cwd: Path) -> str | None:
         cwd = cwd.resolve()

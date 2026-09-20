@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 import tomli_w
 from . import paths
+from .paths import ConfigError
 
 Dialect = Literal["coding", "design"]
 
@@ -55,13 +56,25 @@ class Store:
 
     @classmethod
     def load(cls, name: str) -> "Store":
-        d = tomllib.loads((cls.dir_of(name) / "store.toml").read_text())
-        return cls(name=d["name"], dialect=d["dialect"], port=int(d["port"]), database=d["database"],
-                   postgres=d["postgres"], env=dict(d.get("env", {})), created=d["created"])
+        f = cls.dir_of(name) / "store.toml"
+        try:
+            d = tomllib.loads(f.read_text())
+            st = cls(name=d["name"], dialect=d["dialect"], port=int(d["port"]), database=d["database"],
+                     postgres=d["postgres"], env=dict(d.get("env", {})), created=d["created"])
+        except tomllib.TOMLDecodeError as e:
+            raise ConfigError(f"{f}: not valid TOML: {e} — see SETUP.md#registry") from e
+        except KeyError as e:
+            raise ConfigError(f"{f}: missing the key {e} — see SETUP.md#registry") from e
+        except (TypeError, ValueError, AttributeError) as e:
+            raise ConfigError(f"{f}: {e} — see SETUP.md#registry") from e
+        except OSError as e:
+            raise ConfigError(f"{f}: unreadable: {e} — see SETUP.md#registry") from e
+        if st.dialect not in DIALECT_ENV:
+            raise ConfigError(f"{f}: unknown dialect {st.dialect!r}: coding | design — see SETUP.md#registry")
+        return st
 
     def save(self) -> None:
-        self.path().mkdir(parents=True, exist_ok=True)
-        self.toml_file().write_text(tomli_w.dumps(asdict(self)))
+        paths.write_atomic(self.toml_file(), tomli_w.dumps(asdict(self)))
 
     def server_env(self) -> dict[str, str]:
         d = str(self.path())
@@ -102,8 +115,26 @@ def collisions(new: Store, others: list[Store]) -> list[str]:
     return msgs
 
 
-def all_stores() -> list[Store]:
+def _walk() -> list[tuple[Store | None, str | None]]:
+    """Every store directory: (the store, None) when its file reads, (None, the error) when it does not."""
     root = paths.stores_dir()
     if not root.exists():
         return []
-    return [Store.load(p.name) for p in sorted(root.iterdir()) if (p / "store.toml").exists()]
+    out: list[tuple[Store | None, str | None]] = []
+    for p in sorted(root.iterdir()):
+        if (p / "store.toml").exists():
+            try:
+                out.append((Store.load(p.name), None))
+            except ConfigError as e:
+                out.append((None, str(e)))
+    return out
+
+
+def all_stores() -> list[Store]:
+    """The stores whose files read. The ones that do not are in `store_problems()` — a caller that lists or
+    diagnoses must show both; a caller that serves one store loads it by name and gets the ConfigError."""
+    return [st for st, _ in _walk() if st is not None]
+
+
+def store_problems() -> list[str]:
+    return [err for _, err in _walk() if err is not None]

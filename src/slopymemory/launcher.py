@@ -17,6 +17,7 @@ from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 from . import server as srv
 from .provision import TEMPLATE_HINT, InitRefused, SystemPostgres, apply_init, plan_init
+from .paths import ConfigError
 from .registry import Registry
 from .store import Store
 
@@ -180,11 +181,17 @@ class Launcher:
                                   f"(database {store.database}, port {store.port}); the memory tools are now available")]
 
     async def run(self) -> None:
-        store = self.resolve()
-        if store is None:
-            self.ready.set()                       # init mode: answer immediately
-        else:
+        try:
+            store = self.resolve()
+        except ConfigError as e:                   # a hand-edited registry/store.toml with a typo: the
+            self.failure = str(e)                  # handshake is still answered; the tools raise the message
+            self.ready.set()
+            print(f"slopymem-mcp: {self.failure}", file=sys.stderr)
+            store = None
+        if store is not None:
             self._start_connecting(store)           # handshake first, the wait happens under the tools
+        elif self.failure is None:
+            self.ready.set()                       # init mode: answer immediately
         try:
             async with stdio_server() as (read, write):
                 # tools_changed=True: _init sends notifications/tools/list_changed once a store is

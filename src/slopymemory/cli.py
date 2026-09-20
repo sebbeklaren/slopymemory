@@ -9,8 +9,9 @@ import sys
 from pathlib import Path
 from . import server as srv
 from .provision import InitRefused, SystemPostgres, apply_init, plan_init
+from .paths import ConfigError
 from .registry import Registry
-from .store import Store, all_stores
+from .store import Store, all_stores, store_problems
 
 
 def postgres():
@@ -77,15 +78,21 @@ def _dir_size(p: Path) -> int:
 
 
 def cmd_list(a) -> int:
-    reg = Registry.load()
+    try:
+        reg = Registry.load()
+    except ConfigError as e:                        # list what can be listed; the problem is shown, not fatal
+        print(f"?? {e}"); reg = Registry()
     stores = all_stores()
-    if not stores:
+    problems = store_problems()
+    if not stores and not problems:
         print("no stores — `slopymem init` in a project directory"); return 0
     for st in stores:
         up = "up" if srv.probe(st.port) else "down"
         print(f"{st.name}  {st.dialect}  port {st.port}  {up}  db {st.database}  state {_dir_size(st.path()) // 1024} KB")
         for p in reg.paths_of(st.name):
             print(f"    {p}")
+    for problem in problems:
+        print(f"?? {problem}")
     return 0
 
 
@@ -177,7 +184,10 @@ def build() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     a = build().parse_args(argv)
-    return a.fn(a)
+    try:
+        return a.fn(a)
+    except ConfigError as e:            # a registry/store file that does not read: the message, not a traceback
+        return fail(str(e))
 
 
 if __name__ == "__main__":

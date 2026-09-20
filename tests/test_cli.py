@@ -96,3 +96,16 @@ def test_remove_reports_a_failing_psql_instead_of_a_traceback(tmp_home, tmp_path
     monkeypatch.setattr(fake_pg, "database_exists", boom)
     code, out = run(["remove", "a"], stdin="y\na\n")
     assert code == 1 and "FATAL: boom" in out and "SETUP.md#postgres" in out and Store.exists("a")
+
+
+def test_list_reports_a_malformed_store_and_still_lists_the_others(tmp_home, tmp_path, fake_pg, monkeypatch):
+    a = tmp_path / "a"; a.mkdir(); monkeypatch.chdir(a); run(["init", "--yes"])
+    bad = tmp_home / "stores" / "bad"; bad.mkdir()
+    (bad / "store.toml").write_text("not toml ][")
+    code, out = run(["list"])
+    assert code == 0 and "a  coding" in out and "?? " in out and "bad" in out and "SETUP.md#registry" in out
+    (tmp_home / "registry.toml").write_text("link = [ { path = ")
+    code, out = run(["list"])
+    assert code == 0 and "a  coding" in out and "registry.toml" in out and "SETUP.md#registry" in out
+    code, out = run(["unlink", "--yes"])                 # any command that must read the registry: the message, exit 1
+    assert code == 1 and "registry.toml" in out and "SETUP.md#registry" in out

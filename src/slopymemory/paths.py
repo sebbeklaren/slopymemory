@@ -23,4 +23,18 @@ def logs_dir() -> Path:
 
 def venv_python() -> Path:
     """The interpreter the store servers run under (the slopymemory venv)."""
-    return Path(os.environ.get("SLOPYMEM_PYTHON", home() / "venv" / "bin" / "python"))
+    return Path(os.environ.get("SLOPYMEM_PYTHON", home() / "venv" / "bin" / "python")).expanduser()
+
+
+class ConfigError(RuntimeError):
+    """A registry or store file that cannot be read as what it must be. Named, anchored, never a traceback:
+    SETUP.md tells users to hand-edit these files, so a typo is an expected failure."""
+
+
+def write_atomic(f: Path, text: str) -> None:
+    """Write `<file>.tmp` and rename it over the file, so a crash mid-write never leaves a half-written
+    registry or store.toml for every launcher on the machine to trip over."""
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, f)

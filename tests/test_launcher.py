@@ -112,3 +112,27 @@ async def test_memory_init_reports_psqls_own_reason(tmp_home, tmp_path, broken_p
             res = await s.call_tool("memory_init", {"name": "psqldown", "dialect": "coding"})
             assert res.isError
             assert "FATAL: boom" in res.content[0].text and "SETUP.md#postgres" in res.content[0].text
+
+
+async def test_a_malformed_store_or_registry_file_still_answers_the_handshake_and_names_the_anchor(tmp_home, tmp_path):
+    """SETUP.md tells users to hand-edit these files; a typo must not turn every launcher on the machine into a
+    traceback before the handshake — the harness connects, list_tools raises the message with the anchor."""
+    from mcp.shared.exceptions import McpError
+    repo = tmp_path / "repo"; repo.mkdir()
+    Store(name="repo", dialect="coding", port=8781, database="x", postgres="system").save()
+    r = Registry.load(); r.link(repo, "repo"); r.save()
+    toml = Store.dir_of("repo") / "store.toml"
+    toml.write_text(toml.read_text().replace('database = "x"\n', ""))
+    async with stdio_client(launcher_params(repo, tmp_home)) as (rd, wr):
+        async with ClientSession(rd, wr) as s:
+            await s.initialize()
+            with pytest.raises(McpError) as e:
+                await s.list_tools()
+            assert "SETUP.md#registry" in str(e.value) and "database" in str(e.value)
+    (tmp_home / "registry.toml").write_text("link = [ { path = ")
+    async with stdio_client(launcher_params(repo, tmp_home)) as (rd, wr):
+        async with ClientSession(rd, wr) as s:
+            await s.initialize()
+            with pytest.raises(McpError) as e:
+                await s.list_tools()
+            assert "SETUP.md#registry" in str(e.value) and "registry.toml" in str(e.value)

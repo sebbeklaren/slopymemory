@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Callable
 from . import paths, server as srv
 from .provision import InitRefused, SystemPostgres, TEMPLATE_HINT
+from .paths import ConfigError
 from .registry import Registry
-from .store import Store, all_stores
+from .store import Store, all_stores, store_problems
 
 WARN_TOTAL_GB = 1.0
 WARN_FREE_GB = 2.0
@@ -82,13 +83,16 @@ def _model() -> Finding:
 
 
 def _registry() -> Finding:
-    problems = []
+    problems = store_problems()          # store.toml files that do not read, each with its reason
     stores = all_stores()
     for k in ("port", "database"):
         for v, n in Counter(getattr(s, k) for s in stores).items():
             if n > 1:
                 problems.append(f"{k} {v} shared by {n} stores")
-    reg = Registry.load()
+    try:
+        reg = Registry.load()
+    except ConfigError as e:
+        problems.append(str(e)); reg = Registry()
     for l in reg.links:
         if not Store.exists(l.store):
             problems.append(f"{l.path} links to missing store {l.store}")

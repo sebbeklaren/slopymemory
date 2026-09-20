@@ -87,3 +87,14 @@ def test_postgres_check_reports_whether_the_role_can_create_databases(tmp_home):
     with patch("slopymemory.checks.SystemPostgres", return_value=fake_pg):
         f = checks.by_id("postgres").run()
     assert f.ok is True and "role can create databases: no" in f.detail and "CREATEDB" in f.detail
+
+
+def test_registry_check_fails_on_a_malformed_store_or_registry_file(tmp_home):
+    Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system").save()
+    bad = tmp_home / "stores" / "bad"; bad.mkdir()
+    (bad / "store.toml").write_text("not toml ][")
+    f = checks.by_id("registry").run()
+    assert f.ok is False and "bad" in f.detail and "SETUP.md#registry" in f.detail
+    (tmp_home / "registry.toml").write_text("link = [ { path = ")
+    f = checks.by_id("registry").run()
+    assert f.ok is False and "registry.toml" in f.detail

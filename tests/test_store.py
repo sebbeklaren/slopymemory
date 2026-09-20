@@ -49,3 +49,31 @@ def test_collisions_name_every_shared_thing(tmp_home):
     msgs = collisions(b, [a])
     assert any("port 8780" in m for m in msgs) and any("database same_db" in m for m in msgs)
     assert collisions(mk("c", 8781, "c_db"), [a]) == []
+
+
+def test_a_malformed_store_toml_is_a_named_config_error_not_a_crash(tmp_home):
+    from slopymemory.paths import ConfigError
+    from slopymemory.store import all_stores, store_problems
+    mk("good").save()
+    bad = tmp_home / "stores" / "bad"; bad.mkdir(parents=True)
+    (bad / "store.toml").write_text('name = "bad"\ndialect = "coding"\nport = 8781\npostgres = "system"\ncreated = 2026-09-20\n')  # no database
+    with pytest.raises(ConfigError) as e:
+        Store.load("bad")
+    assert "database" in str(e.value) and "SETUP.md#registry" in str(e.value) and str(bad / "store.toml") in str(e.value)
+    (bad / "store.toml").write_text("this is not toml ][")
+    with pytest.raises(ConfigError, match="SETUP.md#registry"):
+        Store.load("bad")
+    odd = tmp_home / "stores" / "odd"; odd.mkdir()
+    (odd / "store.toml").write_text('name = "odd"\ndialect = "poetry"\nport = 8782\ndatabase = "odd_db"\npostgres = "system"\ncreated = 2026-09-20\n')
+    with pytest.raises(ConfigError, match="dialect"):
+        Store.load("odd")
+    assert [s.name for s in all_stores()] == ["good"]          # the good store is still served
+    problems = store_problems()
+    assert len(problems) == 2 and all("SETUP.md#registry" in p for p in problems)
+    assert any("bad" in p for p in problems) and any("odd" in p for p in problems)
+
+
+def test_save_is_atomic_no_tmp_file_remains(tmp_home):
+    s = mk(); s.save()
+    assert Store.load("a") == s
+    assert [p.name for p in (tmp_home / "stores" / "a").iterdir()] == ["store.toml"]

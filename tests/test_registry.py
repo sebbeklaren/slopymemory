@@ -50,3 +50,21 @@ def test_save_writes_toml_under_home(tmp_home, tmp_path):
     r4 = Registry.load()
     assert r4 == r3
     assert r4.resolve(weird_dir) == "special"
+
+
+def test_a_malformed_registry_is_a_named_config_error_not_a_crash(tmp_home):
+    from slopymemory.paths import ConfigError
+    tmp_home.mkdir(parents=True)
+    (tmp_home / "registry.toml").write_text("link = [ { path = ")
+    with pytest.raises(ConfigError) as e:
+        Registry.load()
+    assert "SETUP.md#registry" in str(e.value) and str(tmp_home / "registry.toml") in str(e.value)
+    (tmp_home / "registry.toml").write_text('link = [ { path = "/x" } ]')          # no store key
+    with pytest.raises(ConfigError, match="store"):
+        Registry.load()
+
+
+def test_save_is_atomic_no_tmp_file_remains(tmp_home, tmp_path):
+    r = Registry.load(); r.link(tmp_path, "a"); r.save()
+    assert Registry.load() == r
+    assert [p.name for p in tmp_home.iterdir()] == ["registry.toml"]
