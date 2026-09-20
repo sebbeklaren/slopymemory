@@ -1,4 +1,4 @@
-import os, sys
+import asyncio, os, sys
 from pathlib import Path
 import pytest
 import mcp.types as types
@@ -29,7 +29,7 @@ async def test_bridges_to_the_stores_server_starting_it_on_demand(tmp_home, tmp_
                 async with ClientSession(rd, wr) as s:
                     await s.initialize()                       # answered before the server is up
                     names = [t.name for t in (await s.list_tools()).tools]
-                    assert names == ["memory_ping"]
+                    assert names == ["memory_ping", "memory_session"]
                     res = await s.call_tool("memory_ping", {"text": "hi"})
                     assert res.content[0].text == "pong:hi"
         assert server.probe(free_port), "the server outlives the session"
@@ -61,7 +61,7 @@ async def test_init_mode_offers_memory_init_then_switches_to_the_store(tmp_home,
                 res = await s.call_tool("memory_init", {"name": "fresh", "dialect": "coding"})
                 assert "created store fresh" in res.content[0].text
                 names = [t.name for t in (await s.list_tools()).tools]
-                assert names == ["memory_ping"]
+                assert names == ["memory_ping", "memory_session"]
         assert Registry.load().resolve(repo) == "fresh"
         # The launcher must advertise tools.listChanged=True at initialize: memory_init sends exactly this
         # notification, and a harness told the list is static may ignore it.
@@ -205,3 +205,150 @@ async def test_a_server_that_exits_at_once_is_reported_through_the_tools_at_once
     assert time.monotonic() - t0 < 15
     msg = str(e.value)
     assert "exited with code 3" in msg and "FATAL: no such database" in msg and "SETUP.md#servers" in msg
+
+
+# --- the store's server restarted or crashed under an open session -------------------------------------
+# Observed against the SDK with the fake server killed mid-session: a new server on the same port answers
+# the stale session id with 404, which the transport turns into McpError('Session terminated') on every call
+# (the harness shows "connected" while nothing works); with no server on the port the first call's POST fails
+# inside the transport, its task group crashes, and that call HANGS (the SDK's pending-request cleanup is
+# itself cancelled) while later calls raise anyio.ClosedResourceError. The launcher must serve the next
+# call in every one of these states, or fail loud — never hang, never stay dead.
+
+def _linked_store(tmp_path: Path, port: int) -> tuple[Path, Store]:
+    repo = tmp_path / "repo"; repo.mkdir()
+    store = Store(name="repo", dialect="coding", port=port, database="x", postgres="system"); store.save()
+    r = Registry.load(); r.link(repo, "repo"); r.save()
+    return repo, store
+
+
+def _reconnect_lines(errlog: Path) -> list[str]:
+    return [l for l in errlog.read_text().splitlines() if "server session lost — reconnecting" in l]
+
+
+async def _session_seen_by_the_server(s: ClientSession) -> str:
+    res = await s.call_tool("memory_session", {})
+    assert not res.isError, res.content[0].text
+    return res.content[0].text
+
+
+async def test_a_server_restarted_under_the_session_is_reconnected_on_the_next_call(tmp_home, tmp_path, free_port, monkeypatch):
+    """`slopymem stop && slopymem start` while a harness session is open: the next call goes through, and
+    stderr says so exactly once."""
+    repo, store = _linked_store(tmp_path, free_port)
+    errlog = tmp_path / "launcher.stderr"
+    monkeypatch.setattr(server, "server_command", lambda s: [sys.executable, FAKE])   # for the restart below
+    try:
+        with open(errlog, "w") as err:
+            async with stdio_client(launcher_params(repo, tmp_home), errlog=err) as (rd, wr):
+                async with ClientSession(rd, wr) as s:
+                    await s.initialize()
+                    first = await _session_seen_by_the_server(s)
+                    assert server.stop(store)                       # killed under the open session...
+                    server.ensure_up(store)                         # ...and a NEW server on the same port
+                    res = await s.call_tool("memory_ping", {"text": "again"})
+                    assert not res.isError, res.content[0].text
+                    assert res.content[0].text == "pong:again"
+                    assert await _session_seen_by_the_server(s) != first
+                    assert [t.name for t in (await s.list_tools()).tools] == ["memory_ping", "memory_session"]
+        assert len(_reconnect_lines(errlog)) == 1, errlog.read_text()
+        assert "store repo" in _reconnect_lines(errlog)[0]
+    finally:
+        server.stop(store)
+
+
+async def test_a_server_crashed_under_the_session_is_restarted_and_reconnected_on_the_next_call(tmp_home, tmp_path, free_port):
+    """A crash (nothing on the port any more): the next call brings the server back through ensure_up and is
+    served — this is the shape where the SDK would otherwise hang the call forever."""
+    repo, store = _linked_store(tmp_path, free_port)
+    errlog = tmp_path / "launcher.stderr"
+    try:
+        with open(errlog, "w") as err:
+            async with stdio_client(launcher_params(repo, tmp_home), errlog=err) as (rd, wr):
+                async with ClientSession(rd, wr) as s:
+                    await s.initialize()
+                    res = await s.call_tool("memory_ping", {"text": "one"})
+                    assert res.content[0].text == "pong:one"
+                    assert server.stop(store)
+                    assert not server.probe(store.port)
+                    res = await asyncio.wait_for(s.call_tool("memory_ping", {"text": "two"}), 30)
+                    assert not res.isError, res.content[0].text
+                    assert res.content[0].text == "pong:two"
+        assert server.probe(store.port), "the reconnect started the server again"
+        assert len(_reconnect_lines(errlog)) == 1, errlog.read_text()
+    finally:
+        server.stop(store)
+
+
+async def test_a_failed_reconnect_raises_the_failure_shape_and_the_launcher_stays_alive(tmp_home, tmp_path, free_port):
+    """The server is gone and cannot come back (its command now exits at once): the call fails at once with the
+    store, the log and the anchor — no hang, no loop — and the launcher is still there for the next call,
+    which gets its own single attempt."""
+    import time
+    from mcp.shared.exceptions import McpError
+    repo, store = _linked_store(tmp_path, free_port)
+    errlog = tmp_path / "launcher.stderr"
+    marker = tmp_path / "started-once"
+    try:
+        with open(errlog, "w") as err:
+            async with stdio_client(launcher_params(repo, tmp_home, FAKE_MCP_ONCE=str(marker)), errlog=err) as (rd, wr):
+                async with ClientSession(rd, wr) as s:
+                    await s.initialize()
+                    assert (await s.call_tool("memory_ping", {"text": "one"})).content[0].text == "pong:one"
+                    assert server.stop(store)
+                    t0 = time.monotonic()
+                    res = await asyncio.wait_for(s.call_tool("memory_ping", {"text": "two"}), 30)
+                    assert time.monotonic() - t0 < 15
+                    assert res.isError
+                    msg = res.content[0].text
+                    assert "store repo" in msg and "exited with code 3" in msg and "SETUP.md#servers" in msg
+                    with pytest.raises(McpError) as e:                 # still alive; the next call gets one attempt too
+                        await asyncio.wait_for(s.list_tools(), 30)
+                    assert "store repo" in str(e.value) and "SETUP.md#servers" in str(e.value)
+        assert len(_reconnect_lines(errlog)) == 2, errlog.read_text()   # one attempt per call, no loop
+    finally:
+        if server.probe(store.port):
+            server.stop(store)
+
+
+async def test_a_healthy_session_makes_no_reconnect_attempt(tmp_home, tmp_path, free_port):
+    """Control: calls on a live server all arrive on the one MCP session the launcher opened, and nothing is announced."""
+    repo, store = _linked_store(tmp_path, free_port)
+    errlog = tmp_path / "launcher.stderr"
+    try:
+        with open(errlog, "w") as err:
+            async with stdio_client(launcher_params(repo, tmp_home), errlog=err) as (rd, wr):
+                async with ClientSession(rd, wr) as s:
+                    await s.initialize()
+                    first = await _session_seen_by_the_server(s)
+                    assert (await s.call_tool("memory_ping", {"text": "one"})).content[0].text == "pong:one"
+                    assert [t.name for t in (await s.list_tools()).tools] == ["memory_ping", "memory_session"]
+                    assert await _session_seen_by_the_server(s) == first
+        assert _reconnect_lines(errlog) == [], errlog.read_text()
+    finally:
+        server.stop(store)
+
+
+async def test_concurrent_calls_that_lose_the_session_share_one_reconnect(tmp_home, tmp_path, free_port, monkeypatch):
+    """Parallel tool calls both find the session gone: one reconnect, both served — the second must take
+    the first's fresh connection, never tear it down over its own loss of the OLD one."""
+    repo, store = _linked_store(tmp_path, free_port)
+    errlog = tmp_path / "launcher.stderr"
+    monkeypatch.setattr(server, "server_command", lambda s: [sys.executable, FAKE])
+    try:
+        with open(errlog, "w") as err:
+            async with stdio_client(launcher_params(repo, tmp_home), errlog=err) as (rd, wr):
+                async with ClientSession(rd, wr) as s:
+                    await s.initialize()
+                    first = await _session_seen_by_the_server(s)
+                    assert server.stop(store)
+                    server.ensure_up(store)
+                    a, b = await asyncio.gather(s.call_tool("memory_ping", {"text": "a"}),
+                                                s.call_tool("memory_ping", {"text": "b"}))
+                    assert [a.content[0].text, b.content[0].text] == ["pong:a", "pong:b"], (a, b)
+                    second = await _session_seen_by_the_server(s)
+                    assert second != first
+                    assert await _session_seen_by_the_server(s) == second      # and it stayed
+        assert len(_reconnect_lines(errlog)) == 1, errlog.read_text()
+    finally:
+        server.stop(store)
