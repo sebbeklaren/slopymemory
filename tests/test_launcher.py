@@ -185,3 +185,23 @@ async def test_a_server_that_never_completes_the_handshake_is_a_failure_within_t
     handler = launcher.server.request_handlers[types.ListToolsRequest]
     with pytest.raises(RuntimeError, match="SETUP.md#servers"):
         await handler(types.ListToolsRequest(method="tools/list"))
+
+
+async def test_a_server_that_exits_at_once_is_reported_through_the_tools_at_once(tmp_home, tmp_path, free_port):
+    """Through the bridge: the store's server command exits 3 immediately; list_tools must raise the exit
+    code, the log tail and the anchor well before DEADLINE_S, not hang for a minute."""
+    import time
+    from mcp.shared.exceptions import McpError
+    repo = tmp_path / "repo"; repo.mkdir()
+    Store(name="repo", dialect="coding", port=free_port, database="x", postgres="system").save()
+    r = Registry.load(); r.link(repo, "repo"); r.save()
+    params = launcher_params(repo, tmp_home, SLOPYMEM_SERVER_CMD=f"{sys.executable} -c \"import sys; print('FATAL: no such database'); sys.exit(3)\"")
+    t0 = time.monotonic()
+    async with stdio_client(params) as (rd, wr):
+        async with ClientSession(rd, wr) as s:
+            await s.initialize()
+            with pytest.raises(McpError) as e:
+                await s.list_tools()
+    assert time.monotonic() - t0 < 15
+    msg = str(e.value)
+    assert "exited with code 3" in msg and "FATAL: no such database" in msg and "SETUP.md#servers" in msg
