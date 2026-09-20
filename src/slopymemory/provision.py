@@ -12,7 +12,8 @@ from .registry import Registry
 from .store import Store, all_stores, allocate_port, collisions
 
 TEMPLATE_DB = "slopymem_template"
-TEMPLATE_HINT = "one-time, as a superuser: sudo -u postgres psql -c 'CREATE DATABASE slopymem_template' -c 'ALTER DATABASE slopymem_template IS_TEMPLATE true' && sudo -u postgres psql -d slopymem_template -c 'CREATE EXTENSION vector' — see SETUP.md#postgres"
+TEMPLATE_HINT = ("one-time, as a superuser: sudo -u postgres psql -c 'CREATE DATABASE slopymem_template' -c 'ALTER DATABASE slopymem_template IS_TEMPLATE true' && sudo -u postgres psql -d slopymem_template -c 'CREATE EXTENSION vector'. "
+                 "The role that runs slopymem must be allowed to create databases: sudo -u postgres psql -c 'ALTER ROLE <user> CREATEDB;' — see SETUP.md#postgres")
 
 
 class InitRefused(RuntimeError):
@@ -60,6 +61,10 @@ class SystemPostgres:
     def is_superuser(self) -> bool:
         return self._psql("select rolsuper from pg_roles where rolname = current_user") == "t"
 
+    def can_create_databases(self) -> bool:
+        """SUPERUSER or CREATEDB — what `createdb` itself needs, template or not."""
+        return self._psql("select rolsuper or rolcreatedb from pg_roles where rolname = current_user") == "t"
+
     def create_database(self, name: str) -> None:
         name = self._ident(name)
         if self.template_exists():
@@ -78,13 +83,16 @@ class SystemPostgres:
         return self._psql("select 1 from pg_available_extensions where name = 'vector'") == "1"
 
     def can_provision(self) -> bool:
-        return self.has_pgvector() and (self.template_exists() or self.is_superuser())
+        return (self.has_pgvector() and (self.template_exists() or self.is_superuser())
+                and self.can_create_databases())
 
     def describe(self) -> str:
         version = self._psql("show server_version")
         template = "yes" if self.template_exists() else "no"
         superuser = "yes" if self.is_superuser() else "no"
-        return f"system Postgres (peer auth) — {version} (template: {template}; superuser: {superuser})"
+        createdb = "yes" if self.can_create_databases() else "no"
+        return (f"system Postgres (peer auth) — {version} (template: {template}; superuser: {superuser}; "
+                f"role can create databases: {createdb})")
 
 
 @dataclass

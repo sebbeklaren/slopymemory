@@ -183,3 +183,26 @@ def test_system_postgres_names_a_missing_tool(tmp_path, monkeypatch):
     with pytest.raises(provision.InitRefused) as e:
         provision.SystemPostgres().database_exists("x_memory")
     assert "psql not found" in str(e.value) and "SETUP.md#postgres" in str(e.value)
+
+
+def _psql_answering(*, createdb: str, superuser: str = "f", template: str = "1"):
+    def fake_psql(sql, db="postgres"):
+        if "server_version" in sql: return "17.0"
+        if "rolcreatedb" in sql: return createdb
+        if "rolsuper" in sql: return superuser
+        if "datistemplate" in sql: return template
+        return "1"
+    return fake_psql
+
+
+def test_can_provision_needs_createdb_and_the_hint_says_so(monkeypatch):
+    """A role with the template but neither SUPERUSER nor CREATEDB cannot run `createdb -T`; the predicate
+    the doctor and the installer build on must say so before createdb fails."""
+    pg = provision.SystemPostgres()
+    monkeypatch.setattr(pg, "_psql", _psql_answering(createdb="f"))
+    assert pg.can_provision() is False
+    assert "CREATEDB" in provision.TEMPLATE_HINT
+    assert "role can create databases: no" in pg.describe()
+    monkeypatch.setattr(pg, "_psql", _psql_answering(createdb="t"))
+    assert pg.can_provision() is True
+    assert "role can create databases: yes" in pg.describe()

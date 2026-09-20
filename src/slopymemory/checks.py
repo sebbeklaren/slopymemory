@@ -65,8 +65,10 @@ def _postgres() -> Finding:
             return Finding(False, "; ".join(missing))
         tpl = pg.template_exists()
         su = pg.is_superuser()
+        cdb = pg.can_create_databases()
         can = pg.can_provision()
-        return Finding(True, f"reachable; pgvector present; template {'yes' if tpl else 'no'}; superuser {'yes' if su else 'no'}; every store's database exists" +
+        return Finding(True, f"reachable; pgvector present; template {'yes' if tpl else 'no'}; superuser {'yes' if su else 'no'}; "
+                       f"role can create databases: {'yes' if cdb else 'no'}; every store's database exists" +
                        ("" if can else f"; NEW stores cannot be created yet — {TEMPLATE_HINT}"))
     except InitRefused as e:        # carries the tool's own stderr and the anchor
         return Finding(False, str(e))
@@ -168,7 +170,7 @@ CHECKS: list[Check] = [
           "ls ~/.slopymemory/venv/bin/python; python3 --version", "re-run install.sh (Plan B) or the dev install script", _python),
     Check("package", "import errors on start", "slopymemory and the substrate are installed in the venv",
           "~/.slopymemory/venv/bin/python -c 'import slopymemory, agent_memory'", "re-run the install", _package),
-    Check("postgres", "init fails or a server dies on start", "Postgres reachable, pgvector available, template/superuser status, one database per store",
+    Check("postgres", "init fails or a server dies on start", "Postgres reachable, pgvector available, template/superuser/CREATEDB status, one database per store",
           "psql -d postgres -Atc \"select 1 from pg_available_extensions where name='vector'\"", "install pgvector / create the missing database with `slopymem init` or adopt with `link`", _postgres),
     Check("model", "the first server start is slow or fails offline", "the embedder is in the Hugging Face cache",
           "ls ~/.cache/huggingface/hub | grep nomic", "start any store once while online", _model),

@@ -75,3 +75,15 @@ def test_space_check_measures_data_not_venv(tmp_home, monkeypatch):
 def test_postgres_check_reports_psqls_own_reason(tmp_home, broken_pg_tools):
     f = checks.by_id("postgres").run()
     assert f.ok is False and "FATAL: boom" in f.detail and "SETUP.md#postgres" in f.detail
+
+
+def test_postgres_check_reports_whether_the_role_can_create_databases(tmp_home):
+    fake_pg = MagicMock()
+    fake_pg.has_pgvector.return_value = True
+    fake_pg.template_exists.return_value = True
+    fake_pg.is_superuser.return_value = False
+    fake_pg.can_create_databases.return_value = False
+    fake_pg.can_provision.return_value = False
+    with patch("slopymemory.checks.SystemPostgres", return_value=fake_pg):
+        f = checks.by_id("postgres").run()
+    assert f.ok is True and "role can create databases: no" in f.detail and "CREATEDB" in f.detail

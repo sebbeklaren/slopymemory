@@ -58,7 +58,7 @@ ls ~/.slopymemory/venv/bin/python; python3 --version
 
 **Symptom:** init fails or a server dies on start
 
-**Verifies:** Postgres reachable, pgvector available, template/superuser status, one database per store
+**Verifies:** Postgres reachable, pgvector available, template/superuser/CREATEDB status, one database per store
 
 **See for yourself:**
 
