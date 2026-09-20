@@ -70,3 +70,8 @@ def test_space_check_measures_data_not_venv(tmp_home, monkeypatch):
     # Space check should pass (data is tiny), and detail should show install (venv) separately
     assert f.ok is True
     assert "install (venv)" in f.detail
+
+
+def test_postgres_check_reports_psqls_own_reason(tmp_home, broken_pg_tools):
+    f = checks.by_id("postgres").run()
+    assert f.ok is False and "FATAL: boom" in f.detail and "SETUP.md#postgres" in f.detail

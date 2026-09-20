@@ -161,3 +161,25 @@ def test_system_postgres_creates_and_drops_a_scratch_database():
         assert pg.database_exists(name)
     finally:
         subprocess.run(["dropdb", name], check=True)
+
+
+def test_system_postgres_reports_the_tools_stderr_and_the_anchor(broken_pg_tools, monkeypatch):
+    """A failing psql/createdb must surface ITS reason (the stderr), not 'exit status 1', and name the anchor."""
+    pg = provision.SystemPostgres()
+    with pytest.raises(provision.InitRefused) as e:
+        pg.database_exists("x_memory")
+    assert "FATAL: boom" in str(e.value) and "SETUP.md#postgres" in str(e.value) and "psql" in str(e.value)
+    monkeypatch.setattr(pg, "template_exists", lambda: True)
+    with pytest.raises(provision.InitRefused) as e:
+        pg.create_database("x_memory")
+    assert "FATAL: boom" in str(e.value) and "SETUP.md#postgres" in str(e.value) and "createdb" in str(e.value)
+    with pytest.raises(provision.InitRefused) as e:
+        pg.drop_database("x_memory")
+    assert "FATAL: boom" in str(e.value) and "SETUP.md#postgres" in str(e.value)
+
+
+def test_system_postgres_names_a_missing_tool(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    with pytest.raises(provision.InitRefused) as e:
+        provision.SystemPostgres().database_exists("x_memory")
+    assert "psql not found" in str(e.value) and "SETUP.md#postgres" in str(e.value)

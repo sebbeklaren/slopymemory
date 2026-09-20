@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from . import paths, server as srv
-from .provision import SystemPostgres, TEMPLATE_HINT
+from .provision import InitRefused, SystemPostgres, TEMPLATE_HINT
 from .registry import Registry
 from .store import Store, all_stores
 
@@ -68,6 +68,8 @@ def _postgres() -> Finding:
         can = pg.can_provision()
         return Finding(True, f"reachable; pgvector present; template {'yes' if tpl else 'no'}; superuser {'yes' if su else 'no'}; every store's database exists" +
                        ("" if can else f"; NEW stores cannot be created yet — {TEMPLATE_HINT}"))
+    except InitRefused as e:        # carries the tool's own stderr and the anchor
+        return Finding(False, str(e))
     except Exception as e:
         return Finding(False, f"psql failed: {e} — is Postgres running and psql on PATH?")
 
@@ -196,7 +198,8 @@ def run_all() -> int:
             f = c.run()
         except Exception as e:      # a check that crashes is a failed check with the exception as its detail
             f = Finding(False, f"check crashed: {e!r}")
-        print(f"{'ok  ' if f.ok else 'FAIL'} {c.id:<12} {f.detail}" + ("" if f.ok else f"  — see SETUP.md#{c.id}"))
+        anchored = f.ok or "SETUP.md#" in f.detail       # a detail that already names its anchor is not given a second
+        print(f"{'ok  ' if f.ok else 'FAIL'} {c.id:<12} {f.detail}" + ("" if anchored else f"  — see SETUP.md#{c.id}"))
         bad += not f.ok
     print("doctor: all checks passed" if not bad else f"doctor: {bad} check(s) failed")
     return 0 if not bad else 1

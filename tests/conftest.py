@@ -31,3 +31,15 @@ def fake_http_server():
     yield port
     srv.shutdown()
     srv.server_close()
+
+
+@pytest.fixture
+def broken_pg_tools(tmp_path, monkeypatch):
+    """psql/createdb/dropdb on PATH that fail at once with 'FATAL: boom' on stderr — the shape of a
+    Postgres that is down, a role without rights, or a missing database."""
+    bin_dir = tmp_path / "fakebin"; bin_dir.mkdir()
+    for tool in ("psql", "createdb", "dropdb"):
+        f = bin_dir / tool
+        f.write_text("#!/bin/sh\necho 'FATAL: boom' >&2\nexit 1\n"); f.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    return bin_dir

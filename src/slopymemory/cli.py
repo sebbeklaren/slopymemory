@@ -37,7 +37,10 @@ def cmd_init(a) -> int:
     print(plan.describe())
     if not confirm("create it?", a.yes):
         return fail("nothing created")
-    st = apply_init(plan, postgres())
+    try:
+        st = apply_init(plan, postgres())
+    except InitRefused as e:
+        return fail(str(e))
     print(f"created store {st.name}; its server starts on first use")
     return 0
 
@@ -121,7 +124,11 @@ def cmd_remove(a) -> int:
     if sys.stdin.readline().strip() != st.name:
         return fail("name did not match; nothing removed")
     srv.stop(st)
-    if postgres().database_exists(st.database):
+    try:
+        exists = postgres().database_exists(st.database)
+    except InitRefused as e:
+        return fail(str(e))
+    if exists:
         try:
             postgres().drop_database(st.database)
         except Exception as e:

@@ -76,3 +76,23 @@ def test_remove_asks_twice_and_refuses_yes(tmp_home, tmp_path, fake_pg, monkeypa
     assert code == 1 and Store.exists("a")
     code, out = run(["remove", "a"], stdin="y\na\n")     # the second question wants the name typed
     assert code == 0 and not Store.exists("a") and Registry.load().resolve(a) is None and fake_pg.dropped == ["a_memory"]
+
+
+def test_init_reports_a_failing_createdb_instead_of_a_traceback(tmp_home, tmp_path, monkeypatch):
+    class CreateFails(FakePg):
+        def create_database(self, n):
+            raise provision.InitRefused("createdb: FATAL: boom — see SETUP.md#postgres")
+    monkeypatch.setattr(cli, "postgres", lambda: CreateFails())
+    repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
+    code, out = run(["init", "--yes"])
+    assert code == 1 and "FATAL: boom" in out and "SETUP.md#postgres" in out
+    assert not Store.exists("proj") and Registry.load().resolve(repo) is None
+
+
+def test_remove_reports_a_failing_psql_instead_of_a_traceback(tmp_home, tmp_path, fake_pg, monkeypatch):
+    a = tmp_path / "a"; a.mkdir(); monkeypatch.chdir(a); run(["init", "--yes"])
+    def boom(n):
+        raise provision.InitRefused("psql: FATAL: boom — see SETUP.md#postgres")
+    monkeypatch.setattr(fake_pg, "database_exists", boom)
+    code, out = run(["remove", "a"], stdin="y\na\n")
+    assert code == 1 and "FATAL: boom" in out and "SETUP.md#postgres" in out and Store.exists("a")

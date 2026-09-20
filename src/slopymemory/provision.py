@@ -35,8 +35,18 @@ class SystemPostgres:
             raise ValueError(f"unsafe database name {name!r}")
         return name
 
+    def _run(self, tool: str, args: list[str]) -> str:
+        """Run one client tool; a failure carries the tool's OWN reason (its stderr) and the anchor,
+        never `returned non-zero exit status N`."""
+        try:
+            return subprocess.run([tool, *args], capture_output=True, text=True, check=True).stdout
+        except subprocess.CalledProcessError as e:
+            raise InitRefused(f"{tool}: {(e.stderr or '').strip() or e} — see SETUP.md#postgres") from e
+        except FileNotFoundError as e:
+            raise InitRefused(f"{tool} not found — install the PostgreSQL client tools — see SETUP.md#postgres") from e
+
     def _psql(self, sql: str, db: str = "postgres") -> str:
-        return subprocess.run(["psql", "-d", db, "-Atc", sql], capture_output=True, text=True, check=True).stdout.strip()
+        return self._run("psql", ["-d", db, "-Atc", sql]).strip()
 
     def database_exists(self, name: str) -> bool:
         name = self._ident(name)
@@ -53,19 +63,16 @@ class SystemPostgres:
     def create_database(self, name: str) -> None:
         name = self._ident(name)
         if self.template_exists():
-            subprocess.run(["createdb", "-T", TEMPLATE_DB, name], check=True)
+            self._run("createdb", ["-T", TEMPLATE_DB, name])
         elif self.is_superuser():
-            subprocess.run(["createdb", name], check=True)
+            self._run("createdb", [name])
             self._psql("create extension if not exists vector", db=name)
         else:
             raise InitRefused(f"cannot create {name}: pgvector needs a superuser or the template database — {TEMPLATE_HINT}")
 
     def drop_database(self, name: str) -> None:
         name = self._ident(name)
-        try:
-            subprocess.run(["dropdb", name], check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as e:
-            raise InitRefused(f"could not drop database {name}: {e.stderr or e} — see SETUP.md#postgres")
+        self._run("dropdb", [name])
 
     def has_pgvector(self) -> bool:
         return self._psql("select 1 from pg_available_extensions where name = 'vector'") == "1"

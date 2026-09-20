@@ -96,3 +96,19 @@ async def test_a_failing_provisioning_check_still_lists_memory_init_with_the_rea
             assert [t.name for t in tools] == ["memory_init"]
             assert "slopymem_template" in tools[0].description
             assert "connection refused" in tools[0].description
+
+
+async def test_memory_init_reports_psqls_own_reason(tmp_home, tmp_path, broken_pg_tools):
+    """With the real SystemPostgres and a psql that fails, both the NOTE on memory_init's description and
+    the memory_init error must carry psql's stderr and the anchor — not 'exit status 1'."""
+    repo = tmp_path / "psqldown"; repo.mkdir()
+    params = launcher_params(repo, tmp_home)
+    async with stdio_client(params) as (rd, wr):
+        async with ClientSession(rd, wr) as s:
+            await s.initialize()
+            tools = (await s.list_tools()).tools
+            assert [t.name for t in tools] == ["memory_init"]
+            assert "FATAL: boom" in tools[0].description and "SETUP.md#postgres" in tools[0].description
+            res = await s.call_tool("memory_init", {"name": "psqldown", "dialect": "coding"})
+            assert res.isError
+            assert "FATAL: boom" in res.content[0].text and "SETUP.md#postgres" in res.content[0].text
