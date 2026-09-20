@@ -4,6 +4,7 @@ bridges stdio ↔ the server's streamable HTTP. Holds no session state of its ow
 resolved it offers exactly one tool, `memory_init`, and switches to the store once it is provisioned."""
 from __future__ import annotations
 import asyncio
+import base64
 import os
 import shlex
 import sys
@@ -11,7 +12,8 @@ from pathlib import Path
 import mcp.types as types
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
-from mcp.server.lowlevel import Server
+from mcp.server.lowlevel import NotificationOptions, Server
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 from . import server as srv
 from .provision import TEMPLATE_HINT, InitRefused, SystemPostgres, apply_init, plan_init
@@ -24,11 +26,17 @@ INIT_DESCRIPTION = (
     "name: defaults to the directory's name. dialect: 'coding' (default) or 'design'.")
 
 
-class _FakePg:  # tests only (SLOPYMEM_FAKE_PG=1|cannot): no database is created
+class _FakePg:  # tests only (SLOPYMEM_FAKE_PG=1|cannot|broken): no database is created
     def database_exists(self, n): return False
     def create_database(self, n): pass
     def has_pgvector(self): return True
-    def can_provision(self): return os.environ.get("SLOPYMEM_FAKE_PG") != "cannot"
+
+    def can_provision(self):
+        mode = os.environ.get("SLOPYMEM_FAKE_PG")
+        if mode == "broken":
+            raise RuntimeError("psql: connection refused")
+        return mode != "cannot"
+
     def describe(self): return "fake"
 
 
@@ -76,8 +84,12 @@ class Launcher:
                     self.ready.set()
                     await self.closing.wait()          # keep the connection open until the launcher exits
         except Exception as e:             # any failure is reported through the tools, never swallowed
-            self.failure = f"{e}"
-            print(f"slopymem-mcp: {e}", file=sys.stderr)
+            # ServerNotUp already names the store, its log file and an anchor (see server.py); any
+            # other exception (e.g. an httpx ConnectError from the streamable-http handshake) does not,
+            # so it gets the same anchor here rather than surfacing as a bare, uninvestigable message.
+            self.failure = f"{e}" if isinstance(e, srv.ServerNotUp) else (
+                f"store {store.name}: {e} — log: {store.log_file()} — see SETUP.md#servers")
+            print(f"slopymem-mcp: {self.failure}", file=sys.stderr)
             self.ready.set()
 
     def _register_handlers(self) -> None:
@@ -90,8 +102,19 @@ class Launcher:
                 if self.failure:
                     raise RuntimeError(self.failure)
                 description = INIT_DESCRIPTION
-                if not self._pg().can_provision():
+                # can_provision() shells out to psql; with Postgres down or psql missing it can
+                # raise (check=True) instead of returning False. That must not take memory_init
+                # off the list — the whole point of the tool is to be there to explain the
+                # blocker — so the check itself is guarded, and run off the event loop.
+                try:
+                    ok = await asyncio.to_thread(self._pg().can_provision)
+                    why = ""
+                except Exception as e:
+                    ok, why = False, f"{e}"
+                if not ok:
                     description += " NOTE: this machine cannot provision a store yet — " + TEMPLATE_HINT
+                    if why:
+                        description += f" (check failed: {why})"
                 return [types.Tool(name="memory_init", description=description, inputSchema={
                     "type": "object",
                     "properties": {"name": {"type": ["string", "null"]},
@@ -122,6 +145,24 @@ class Launcher:
             await self.ready.wait()
             return (await self.upstream.list_resources()).resources if self.upstream else []
 
+        @s.read_resource()
+        async def read_resource(uri):
+            await self.ready.wait()
+            if self.upstream is None:
+                raise RuntimeError(self.failure or f"no memory store for {self.cwd} — call memory_init first — see SETUP.md#registry")
+            # mcp 1.27.1's read_resource decorator (read from lowlevel/server.py) does not accept a
+            # ReadResourceResult or a plain list of TextResourceContents/BlobResourceContents back —
+            # only str, bytes, or Iterable[ReadResourceContents] (mcp.server.lowlevel.helper_types).
+            # So the upstream's ReadResourceResult.contents is unpacked into that shape; a blob's
+            # base64 text is decoded back to bytes so the decorator re-encodes it as a blob again
+            # rather than as text.
+            result = await self.upstream.read_resource(uri)
+            contents = []
+            for c in result.contents:
+                data = base64.b64decode(c.blob) if isinstance(c, types.BlobResourceContents) else c.text
+                contents.append(ReadResourceContents(content=data, mime_type=c.mimeType, meta=c.meta))
+            return contents
+
     async def _init(self, args: dict) -> list[types.TextContent]:
         pg = self._pg()
         try:
@@ -146,7 +187,11 @@ class Launcher:
             self._start_connecting(store)           # handshake first, the wait happens under the tools
         try:
             async with stdio_server() as (read, write):
-                await self.server.run(read, write, self.server.create_initialization_options())
+                # tools_changed=True: _init sends notifications/tools/list_changed once a store is
+                # provisioned, so the capability advertised at initialize must say the tool list can
+                # change — the default (False) would have every harness believe list_tools is static.
+                init_options = self.server.create_initialization_options(NotificationOptions(tools_changed=True))
+                await self.server.run(read, write, init_options)
         finally:
             self.closing.set()
             if self.connect_task is not None:
