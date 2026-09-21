@@ -214,6 +214,16 @@ def check_free_space(path: Path) -> tuple[bool, str]:
     return True, f"{free / 2**30:.0f} GB free on the filesystem of {path}"
 
 
+def check_tools() -> tuple[bool, str]:
+    """The one system tool the package shells out to and cannot do without: `ss` (iproute2) finds the process that
+    holds a store's port — `slopymem stop`, `remove`, and the doctor's servers check. A slim container or a minimal
+    image lacks it; said here, before a byte is downloaded, rather than by a FAIL line after the install."""
+    if shutil.which("ss") is None:
+        return False, ("ss not found — slopymem uses it (from iproute2) to find the process on a store's port: `slopymem stop`, "
+                       "`remove` and the doctor's servers check. Install iproute2 (e.g. apt install iproute2) and re-run — see SETUP.md#servers")
+    return True, f"ss (iproute2): {shutil.which('ss')}"
+
+
 def find_python() -> str | None:
     """A Python 3.13+: what `uv python find --system 3.13` names, else one on PATH that reports 3.13+.
     `install.sh` step 1 does the same in bash (it has no Python yet at that point); this is the tested reference
@@ -259,14 +269,15 @@ def run_step(step_id: str, text: str, fn: Callable[[], object], already: Callabl
 # --- step 2's preflight: the size, the space, the question — before anything is downloaded -------------------------
 
 def preflight(venv: Path, yes: bool, lock: Path | None = None, cache: Path | None = None) -> int:
-    """Print what `uv sync` will download (from the lock, minus uv's cache, sizes the lock lacks asked of their
-    server), refuse below 4 GB free, and ask. Exit code: 0 to go on, 1 to stop."""
+    """Refuse without the system tool the package needs (`ss`), print what `uv sync` will download (from the lock,
+    minus uv's cache, sizes the lock lacks asked of their server), refuse below 4 GB free, and ask. Exit code: 0 to go
+    on, 1 to stop."""
     venv = Path(venv)
     lock = Path(lock) if lock is not None else checkout_lock()
-    ok, msg = check_free_space(venv)
-    print(msg)
-    if not ok:
-        return 1
+    for ok, msg in (check_tools(), check_free_space(venv)):
+        print(msg)
+        if not ok:
+            return 1
     wheels = locked_wheels(lock, platform_tags(), root=ROOT_PACKAGE)
     cached = cached_wheels(cache if cache is not None else uv_cache_dir(), wheels)
     sizes = {w.name: size for w in wheels if w.size is None if (size := remote_size(w.url)) is not None}

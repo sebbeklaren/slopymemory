@@ -203,6 +203,23 @@ def test_preflight_says_which_sizes_it_could_not_find_out(tmp_path, monkeypatch,
     assert "unknown size" in out and "torch" in out and "0 MB" in out
 
 
+def test_preflight_refuses_without_ss_before_any_download_and_names_iproute2(tmp_path, monkeypatch, capsys):
+    """Seen on a slim container: everything installed, then `slopymem stop` and the doctor's servers check had no
+    `ss` to find the process on a store's port. The preflight says so before a byte is fetched."""
+    lock = tmp_path / "uv.lock"; lock.write_text(LOCK)
+    monkeypatch.setattr(s, "free_bytes", lambda p: 10 * 1024**3)
+    monkeypatch.setattr(s.shutil, "which", lambda name: None if name == "ss" else f"/usr/bin/{name}")
+    assert s.preflight(tmp_path / "venv", yes=True, lock=lock, cache=tmp_path / "empty-cache") == 1
+    out = capsys.readouterr().out
+    assert "ss" in out and "iproute2" in out and "SETUP.md#servers" in out and "download:" not in out
+
+
+def test_check_tools_passes_when_ss_is_there(monkeypatch):
+    monkeypatch.setattr(s.shutil, "which", lambda name: f"/usr/bin/{name}")
+    ok, msg = s.check_tools()
+    assert ok and "ss" in msg
+
+
 def test_preflight_refuses_without_space_and_names_the_anchor(tmp_path, monkeypatch, capsys):
     lock = tmp_path / "uv.lock"; lock.write_text(LOCK)
     monkeypatch.setattr(s, "free_bytes", lambda p: 1 * 1024**3)

@@ -9,11 +9,14 @@ git clone <the repository URL> slopymemory && cd slopymemory
 ./install.sh                      # asks before each step; --yes answers them; --help lists the flags
 ```
 
-Linux, no root. Six announced steps, each idempotent — a second run repairs what is missing and leaves what is
+Linux, no root. From the system it needs three tools: `git` (the clone above), `curl` (only to fetch `uv` when it
+is not installed), and `ss` from `iproute2` (to find the process on a store's port — `slopymem stop`, `remove`, the
+doctor); a minimal image may lack them — the installer stops before downloading anything when `ss` is missing.
+Six announced steps, each idempotent — a second run repairs what is missing and leaves what is
 right alone: **1** `uv` (installed into `~/.local/bin` only if absent; your shell rc files are never edited) and a
 Python 3.13 (`uv python install 3.13` when there is none); **2** the package into a venv at `~/.slopymemory/venv`
-from `uv.lock` exactly — the real download size is read from the lock (minus what uv already has cached) and
-printed **before** anything is fetched, and the install refuses below 4 GB free; **3** Postgres — the system one
+from `uv.lock` exactly — the tool check, then the real download size read from the lock (minus what uv already has
+cached), printed **before** anything is fetched, and the install refuses below 4 GB free; **3** Postgres — the system one
 is probed and offered when it can provision, else the embedded one, either verified with a scratch database
 (`slopymem install-postgres`); **4** the embedder model, once, about 0.5 GB, at the pinned revision, into the
 shared Hugging Face cache (`slopymem install-model`); **5** the launcher registered in every harness found
