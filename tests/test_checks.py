@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from slopymemory import checks
@@ -374,3 +375,13 @@ def test_loader_refusal_is_the_embedders_own_resolution_of_both_pins(tmp_path, m
     def refuse(repo, revision, what): raise RuntimeError(f"{what}: not in the cache")
     monkeypatch.setattr(nomic.NomicEmbedder, "_local_snapshot", staticmethod(refuse))
     assert checks._loader_refusal(tmp_path) == "weights: not in the cache"
+
+
+def test_python_check_says_which_home_is_in_use_and_why(tmp_home, monkeypatch):
+    (tmp_home / "venv" / "bin").mkdir(parents=True); (tmp_home / "venv" / "bin" / "python").write_text("")
+    f = checks.by_id("python").run()
+    assert f.ok and f"home {tmp_home}" in f.detail and "SLOPYMEM_HOME" in f.detail
+    monkeypatch.delenv("SLOPYMEM_HOME"); monkeypatch.setattr(sys, "prefix", str(tmp_home / "venv"))
+    (tmp_home / "registry.toml").write_text("")
+    f = checks.by_id("python").run()
+    assert f.ok and f"home {tmp_home} (the parent of the venv this interpreter runs from, {tmp_home / 'venv'}; SLOPYMEM_HOME is unset)" in f.detail

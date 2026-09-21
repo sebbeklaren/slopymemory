@@ -20,8 +20,10 @@ cached), printed **before** anything is fetched, and the install refuses below 4
 (`slopymem install-postgres`, `--postgres system|embedded` picks); **4** the embedder model, once, about 0.5 GB, at
 the pinned revision, into the shared Hugging Face cache (`slopymem install-model`); **5** the launcher registered
 in every harness found (`slopymem register --detected`; `--no-harness` skips it); **6** `slopymem doctor`.
-`SLOPYMEM_HOME` moves everything (venv, stores, embedded Postgres) elsewhere; the checkout can be deleted after
-the install.
+`SLOPYMEM_HOME` at install time moves everything (venv, stores, embedded Postgres) elsewhere; from then on the
+command and the launcher find that home from the venv they run in (its parent, when it holds the registry), so a
+harness needs no variable — only a shell that runs `slopymem` from somewhere else does. The checkout can be
+deleted after the install.
 
 Step 3, in full — two paths, verified either way with a scratch database:
 
@@ -81,17 +83,17 @@ Then run `slopymem doctor`. Every failing line ends with the anchor of the secti
 
 ## python
 
-**Symptom:** the command or the launcher fails to start
+**Symptom:** the command or the launcher fails to start, or finds no stores where they were installed
 
-**Verifies:** Python 3.13+ and the venv interpreter exist
+**Verifies:** Python 3.13+ and the venv interpreter exist; which home is in use and why — SLOPYMEM_HOME when set, else the parent of the venv this interpreter runs from when that is a slopymemory home (~/.slopymemory itself, or it holds a registry or a stores dir), else ~/.slopymemory. The launcher a harness starts has no SLOPYMEM_HOME, so an install put elsewhere is found by that layout, not by the variable
 
 **See for yourself:**
 
 ```bash
-ls ~/.slopymemory/venv/bin/python; python3 --version
+ls ~/.slopymemory/venv/bin/python; python3 --version; echo ${SLOPYMEM_HOME:-unset}
 ```
 
-**Fix:** re-run the installer or the dev install script
+**Fix:** re-run the installer or the dev install script; to use an install elsewhere from a shell, export SLOPYMEM_HOME=<that home>
 
 ## package
 

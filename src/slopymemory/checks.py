@@ -40,11 +40,12 @@ class Check:
 
 def _python() -> Finding:
     py = paths.venv_python()
+    home, why = paths.home_and_why()
     if sys.version_info < (3, 13):
         return Finding(False, f"python {sys.version.split()[0]} < 3.13")
     if not py.exists():
-        return Finding(False, f"venv python missing: {py}")
-    return Finding(True, f"{py} ({sys.version.split()[0]})")
+        return Finding(False, f"venv python missing: {py}; home {home} ({why})")
+    return Finding(True, f"{py} ({sys.version.split()[0]}); home {home} ({why})")
 
 
 def _package() -> Finding:
@@ -325,8 +326,13 @@ def _local_paths() -> Finding:
 
 
 CHECKS: list[Check] = [
-    Check("python", "the command or the launcher fails to start", "Python 3.13+ and the venv interpreter exist",
-          "ls ~/.slopymemory/venv/bin/python; python3 --version", "re-run the installer or the dev install script", _python),
+    Check("python", "the command or the launcher fails to start, or finds no stores where they were installed",
+          "Python 3.13+ and the venv interpreter exist; which home is in use and why — SLOPYMEM_HOME when set, else the parent "
+          "of the venv this interpreter runs from when that is a slopymemory home (~/.slopymemory itself, or it holds a registry "
+          "or a stores dir), else ~/.slopymemory. The launcher a harness starts has no SLOPYMEM_HOME, so an install put "
+          "elsewhere is found by that layout, not by the variable",
+          "ls ~/.slopymemory/venv/bin/python; python3 --version; echo ${SLOPYMEM_HOME:-unset}", "re-run the installer or the dev install script; "
+          "to use an install elsewhere from a shell, export SLOPYMEM_HOME=<that home>", _python),
     Check("package", "import errors on start", "slopymemory and the substrate are installed in the venv",
           "~/.slopymemory/venv/bin/python -c 'import slopymemory, agent_memory'", "re-run the install", _package),
     Check("postgres", "init fails or a server dies on start",

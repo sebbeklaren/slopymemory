@@ -1,12 +1,34 @@
 """Where slopymemory keeps its state. Everything lives under one root: `SLOPYMEM_HOME` if set
-(tests point it at a temp dir), else `~/.slopymemory`. Nothing is ever written into a project."""
+(tests point it at a temp dir), else the parent of the venv this interpreter runs from when that parent is a
+slopymemory home, else `~/.slopymemory`. Nothing is ever written into a project."""
 from __future__ import annotations
 import os
+import sys
 from pathlib import Path
+
+DEFAULT_HOME = Path.home() / ".slopymemory"
 
 
 def home() -> Path:
-    return Path(os.environ.get("SLOPYMEM_HOME", Path.home() / ".slopymemory")).expanduser()
+    return home_and_why()[0]
+
+
+def home_and_why() -> tuple[Path, str]:
+    """The root, and where it came from (the doctor prints both). `SLOPYMEM_HOME` when set. Otherwise the layout
+    decides: `slopymem` and `slopymem-mcp` always run from `<home>/venv/bin`, and a launcher registered in a
+    harness — or a fresh shell — carries no variable, so an install put elsewhere (`SLOPYMEM_HOME=/data/mem
+    ./install.sh`) would otherwise split silently into a second tree under `~/.slopymemory`. The venv's parent is
+    the home when it is `~/.slopymemory` itself or holds a registry or a stores dir; a `venv` under anything else
+    (someone's own project venv) is not. Else `~/.slopymemory`."""
+    told = os.environ.get("SLOPYMEM_HOME")
+    if told:
+        return Path(told).expanduser(), "SLOPYMEM_HOME"
+    prefix = Path(sys.prefix)
+    if prefix.name == "venv":
+        parent = prefix.parent
+        if parent == DEFAULT_HOME or (parent / "registry.toml").is_file() or (parent / "stores").is_dir():
+            return parent, f"the parent of the venv this interpreter runs from, {prefix}; SLOPYMEM_HOME is unset"
+    return DEFAULT_HOME, "the default; SLOPYMEM_HOME is unset and this interpreter is not under a <home>/venv"
 
 
 def registry_file() -> Path:

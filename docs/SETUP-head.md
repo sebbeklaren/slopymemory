@@ -20,8 +20,10 @@ cached), printed **before** anything is fetched, and the install refuses below 4
 (`slopymem install-postgres`, `--postgres system|embedded` picks); **4** the embedder model, once, about 0.5 GB, at
 the pinned revision, into the shared Hugging Face cache (`slopymem install-model`); **5** the launcher registered
 in every harness found (`slopymem register --detected`; `--no-harness` skips it); **6** `slopymem doctor`.
-`SLOPYMEM_HOME` moves everything (venv, stores, embedded Postgres) elsewhere; the checkout can be deleted after
-the install.
+`SLOPYMEM_HOME` at install time moves everything (venv, stores, embedded Postgres) elsewhere; from then on the
+command and the launcher find that home from the venv they run in (its parent, when it holds the registry), so a
+harness needs no variable — only a shell that runs `slopymem` from somewhere else does. The checkout can be
+deleted after the install.
 
 Step 3, in full — two paths, verified either way with a scratch database:
 
