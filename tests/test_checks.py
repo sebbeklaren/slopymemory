@@ -285,20 +285,45 @@ def test_secrets_check_is_quiet_when_nothing_was_refused_and_fails_on_an_unreada
     assert "scan-store" in checks.by_id("secrets").verify and "scan-store" in checks.by_id("secrets").command
 
 
-# --- model: the cache must hold the PINNED snapshot, not merely some snapshot ---
+# --- model: the cache must hold the PINNED snapshot (complete), and the model's code at ITS pin ---
+
+def _model_cache(monkeypatch, complete: dict, dirs: list, code_repos=("nomic-ai/nomic-bert-2048",)):
+    """`complete` = {(revision, repo): path} the strict check finds; `dirs` = snapshot dirs of the weights present."""
+    from slopymemory import install_steps
+    def model_cached(rev, model=install_steps.MODEL, allow_patterns=None):
+        return complete.get((rev, model))
+    monkeypatch.setattr(install_steps, "model_cached", model_cached)
+    monkeypatch.setattr(install_steps, "cached_revisions", lambda model=install_steps.MODEL: list(dirs))
+    monkeypatch.setattr(install_steps, "remote_code_repos", lambda snapshot_dir: list(code_repos))
+
 
 def test_model_check_compares_the_cached_snapshot_to_the_pin(monkeypatch):
-    from slopymemory import install_steps
+    from slopymemory import install_steps as s
     from agent_memory.config import settings
-    pin = settings.embed_revision
-    monkeypatch.setattr(install_steps, "cached_revisions", lambda model=install_steps.MODEL: [])
+    pin, code = settings.embed_revision, settings.embed_code_revision
+    other = "0123456789abcdef0123456789abcdef01234567"
+    _model_cache(monkeypatch, complete={}, dirs=[])
     f = checks.by_id("model").run()
     assert not f.ok and "slopymem install-model" in f.detail
-    monkeypatch.setattr(install_steps, "cached_revisions", lambda model=install_steps.MODEL: [pin])
+    _model_cache(monkeypatch, complete={(pin, s.MODEL): "/hub/w", (code, "nomic-ai/nomic-bert-2048"): "/hub/c"}, dirs=[pin])
     f = checks.by_id("model").run()
-    assert f.ok and pin[:12] in f.detail
-    monkeypatch.setattr(install_steps, "cached_revisions", lambda model=install_steps.MODEL: ["0123456789abcdef0123456789abcdef01234567"])
+    assert f.ok and pin[:12] in f.detail and code[:12] in f.detail and "nomic-bert-2048" in f.detail
+    _model_cache(monkeypatch, complete={(other, s.MODEL): "/hub/o"}, dirs=[other])
     f = checks.by_id("model").run()
-    assert not f.ok and "migration" in f.detail and pin[:12] in f.detail and "0123456789ab" in f.detail
-    monkeypatch.setattr(install_steps, "cached_revisions", lambda model=install_steps.MODEL: ["0123456789abcdef0123456789abcdef01234567", pin])
+    assert not f.ok and "migration" in f.detail and pin[:12] in f.detail and other[:12] in f.detail
+    _model_cache(monkeypatch, complete={(pin, s.MODEL): "/hub/w", (code, "nomic-ai/nomic-bert-2048"): "/hub/c"}, dirs=[other, pin])
     assert checks.by_id("model").run().ok               # the pin is there; another snapshot beside it is no failure
+
+
+def test_model_check_fails_on_an_incomplete_snapshot_or_missing_code(monkeypatch):
+    """A snapshot directory that exists but is not complete (an interrupted download) is not the model; the code
+    repository at its pin is as necessary as the weights for an offline first start."""
+    from slopymemory import install_steps as s
+    from agent_memory.config import settings
+    pin, code = settings.embed_revision, settings.embed_code_revision
+    _model_cache(monkeypatch, complete={}, dirs=[pin])
+    f = checks.by_id("model").run()
+    assert not f.ok and "incomplete" in f.detail and "slopymem install-model" in f.detail
+    _model_cache(monkeypatch, complete={(pin, s.MODEL): "/hub/w"}, dirs=[pin])
+    f = checks.by_id("model").run()
+    assert not f.ok and "nomic-bert-2048" in f.detail and code[:12] in f.detail and "slopymem install-model" in f.detail

@@ -24,7 +24,13 @@ MIN_FREE_BYTES = 4 * 2**30
 MB = 2**20
 HEAD_TIMEOUT_S = 8
 ROOT_PACKAGE = "slopymemory"
-REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def checkout_lock() -> Path:
+    """`uv.lock` of the checkout `install.sh` runs from: beside this file's `src/` when run from the checkout, else
+    the working directory's (the installer cd's to the checkout). An installed copy has no lock of its own."""
+    beside = Path(__file__).resolve().parents[2] / "uv.lock"
+    return beside if beside.exists() else Path.cwd() / "uv.lock"
 
 
 # --- the lock: which wheels this platform will download, and how big they are -----------------------------------
@@ -166,10 +172,13 @@ def uv_cache_dir() -> Path | None:
 
 def cached_wheels(cache: Path | None, wheels: list[Wheel]) -> set[str] | None:
     """The names of `wheels` already unpacked in uv's cache: an entry `<cache>/wheels-v*/<index>/<name>/<version>-<tags>`
-    (a link into `archive-v*`) whose target exists. None when the cache has no such layout at all — then the
-    caller prints the full size and says 'less if cached' rather than asserting that nothing is."""
-    if cache is None or not any(cache.glob("wheels-v*")):
+    (a link into `archive-v*`) whose target exists. An empty set when the cache exists but holds no wheels yet (the
+    first run on a machine). None only when uv did not say where its cache is — then the caller prints the full
+    size and says 'less if cached' rather than asserting that nothing is."""
+    if cache is None:
         return None
+    if not any(cache.glob("wheels-v*")):
+        return set()
     hit = set()
     for w in wheels:
         name = w.name.lower().replace("_", "-")
@@ -199,15 +208,18 @@ def free_bytes(path: Path) -> int:
 def check_free_space(path: Path) -> tuple[bool, str]:
     free = free_bytes(path)
     if free < MIN_FREE_BYTES:
-        return False, (f"only {free / 2**30:.1f} GB free on the filesystem of {path}; the install needs 4 GB "
-                       f"(the packages, the model, and room for the stores) — see SETUP.md#space")
+        return False, (f"only {free / 2**30:.1f} GB free on the filesystem of {path}; the install wants 4 GB there "
+                       f"(the venv is about 1.3 GB, the embedded Postgres and the stores grow beside it; the model's 0.5 GB "
+                       f"goes to the Hugging Face cache, which may be another filesystem) — see SETUP.md#space")
     return True, f"{free / 2**30:.0f} GB free on the filesystem of {path}"
 
 
 def find_python() -> str | None:
-    """A Python 3.13+: what `uv python find 3.13` names, else one on PATH that reports 3.13+."""
+    """A Python 3.13+: what `uv python find --system 3.13` names, else one on PATH that reports 3.13+.
+    `install.sh` step 1 does the same in bash (it has no Python yet at that point); this is the tested reference
+    for the message and the order, kept in step with the script by hand."""
     try:
-        out = subprocess.run(["uv", "python", "find", "3.13"], capture_output=True, text=True, check=True, timeout=60).stdout.strip()
+        out = subprocess.run(["uv", "python", "find", "--system", "3.13"], capture_output=True, text=True, check=True, timeout=60).stdout.strip()
         if out:
             return out
     except (OSError, subprocess.SubprocessError):
@@ -234,7 +246,8 @@ def check_python() -> tuple[bool, str]:
 
 def run_step(step_id: str, text: str, fn: Callable[[], object], already: Callable[[], bool]) -> bool:
     """Announce one step by its id and text; skip it when `already()` says it is done; else do it. Returns
-    whether `fn` ran. Idempotence is the step's own (`already`), not a marker file."""
+    whether `fn` ran. Idempotence is the step's own (`already`), not a marker file. The reference shape of a step;
+    `install.sh` announces its six in bash the same way (`say`), each idempotent on its own state."""
     print(f"{step_id}: {text}")
     if already():
         print("  already done")
@@ -249,7 +262,7 @@ def preflight(venv: Path, yes: bool, lock: Path | None = None, cache: Path | Non
     """Print what `uv sync` will download (from the lock, minus uv's cache, sizes the lock lacks asked of their
     server), refuse below 4 GB free, and ask. Exit code: 0 to go on, 1 to stop."""
     venv = Path(venv)
-    lock = Path(lock) if lock is not None else REPO_ROOT / "uv.lock"
+    lock = Path(lock) if lock is not None else checkout_lock()
     ok, msg = check_free_space(venv)
     print(msg)
     if not ok:
@@ -260,7 +273,9 @@ def preflight(venv: Path, yes: bool, lock: Path | None = None, cache: Path | Non
     full, per_all = download_size(lock, platform_tags(), set(), sizes, root=ROOT_PACKAGE)
     unknown = sorted(n for n, v in per_all.items() if v is None)
     if cached is None:
-        print(f"download: about {full / MB:.0f} MB for {len(per_all)} package(s) (less if cached — uv's cache could not be read)")
+        print(f"download: about {full / MB:.0f} MB for {len(per_all)} package(s) (less if cached — `uv cache dir` did not answer)")
+    elif not cached:
+        print(f"download: about {full / MB:.0f} MB for {len(per_all)} package(s) (nothing in uv's cache yet)")
     else:
         # Both numbers: what uv's cache appears to hold is subtracted, but uv refetches a wheel it holds and cannot
         # verify against the lock's hash, so the full size is the ceiling and the subtracted one the floor.
@@ -322,27 +337,29 @@ def remote_code_repos(snapshot_dir: Path) -> list[str]:
     return sorted(repos)
 
 
-def model_cached(revision: str, model: str = MODEL) -> str | None:
+def model_cached(revision: str, model: str = MODEL, allow_patterns: list[str] | None = None) -> str | None:
+    """The snapshot's local path when it is complete in the cache (huggingface_hub's own test), else None."""
     try:
-        return snapshot_download()(model, revision=revision, local_files_only=True)
+        return snapshot_download()(model, revision=revision, local_files_only=True, allow_patterns=allow_patterns)
     except Exception:           # huggingface_hub raises its own family of errors for "not in the cache"
         return None
 
 
-def download_model(revision: str, model: str = MODEL) -> str:
-    """The pinned snapshot into the shared Hugging Face cache, once; then the remote code its config names.
-    Returns the snapshot's local path. Errors from the hub propagate: the caller names the anchor."""
+def download_model(revision: str, model: str = MODEL, code_revision: str | None = None) -> str:
+    """The pinned snapshot into the shared Hugging Face cache, once; then the remote code its config names, at
+    `code_revision` (the substrate's `embed_code_revision`; None = the code repository's head). The code step
+    runs even when the weights are cached, so an interrupted first run is repaired by the next call. Returns the
+    snapshot's local path. Errors from the hub propagate: the caller names the anchor."""
     sd = snapshot_download()
     local = model_cached(revision, model)
     if local is None:
         print(f"downloading {model} at revision {revision[:12]} — {MODEL_SIZE_NOTE}")
         local = sd(model, revision=revision)
-    else:
-        print(f"{model} at revision {revision[:12]} is already in the Hugging Face cache: {local}")
-    for repo in remote_code_repos(Path(local)):
+    for repo in remote_code_repos(Path(local)):                # quiet when everything is there: the caller reports
         try:
-            sd(repo, allow_patterns=["*.py"], local_files_only=True)
+            sd(repo, revision=code_revision, allow_patterns=["*.py"], local_files_only=True)
         except Exception:
-            print(f"fetching the model's code from {repo} (a few small files)")
-            sd(repo, allow_patterns=["*.py"])
+            at = f" at revision {code_revision[:12]}" if code_revision else ""
+            print(f"fetching the model's code from {repo}{at} (a few small files)")
+            sd(repo, revision=code_revision, allow_patterns=["*.py"])
     return local

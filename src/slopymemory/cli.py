@@ -286,19 +286,24 @@ def cmd_install_postgres(a) -> int:
     if not confirm("go on?", a.yes):
         return fail("nothing verified")
     was_running = pg.is_running() if choice.backend == "embedded" else True
-    vector = None
+    vector, failure = None, None
     try:
         pg.create_database(scratch)
-        try:
-            vector = pg.vector_installed(scratch)
-        finally:
-            pg.drop_database(scratch)
+        vector = pg.vector_installed(scratch)
     except InitRefused as e:
-        return fail(str(e))
+        failure = str(e)
     except Exception as e:
-        return fail(f"{choice.backend} Postgres: the scratch database check failed: {e} — see SETUP.md#postgres")
-    if choice.backend == "embedded" and not was_running:
-        pg.stop()                                   # the check started it; a store's server starts it again when needed
+        failure = f"{choice.backend} Postgres: the scratch database check failed: {e} — see SETUP.md#postgres"
+    finally:                                        # on every path: no scratch database left behind, the cluster as it was
+        try:
+            if pg.database_exists(scratch):
+                pg.drop_database(scratch)
+        except Exception as e:
+            failure = (failure + "; " if failure else "") + f"the scratch database {scratch} was not dropped: {e} — see SETUP.md#postgres"
+        if choice.backend == "embedded" and not was_running:
+            pg.stop()                               # the check started it; a store's server starts it again when needed
+    if failure:
+        return fail(failure)
     if not vector:
         return fail(f"{choice.backend} Postgres: the scratch database was created but pgvector did not install in it — see SETUP.md#postgres")
     print(f"{choice.backend} Postgres verified: {pg.describe()}; new stores go on it")
@@ -307,16 +312,16 @@ def cmd_install_postgres(a) -> int:
 
 def cmd_install_model(a) -> int:
     """The embedder at its pinned revision into the shared Hugging Face cache — once. Cached: nothing asked."""
-    from agent_memory.config import settings          # the substrate's own model name and pin: one source of truth
-    model, pin = settings.embed_model, settings.embed_revision
-    if install_steps.model_cached(pin, model) is not None:
-        print(f"{model} at revision {pin[:12]} is already in the Hugging Face cache")
-        return 0
-    print(f"download {model} at revision {pin[:12]} — {install_steps.MODEL_SIZE_NOTE}")
-    if not confirm("go on?", a.yes):
-        return fail("nothing downloaded; the first server start will need it — see SETUP.md#model")
-    try:
-        local = install_steps.download_model(pin, model)
+    from agent_memory.config import settings          # the substrate's own model name and pins: one source of truth
+    model, pin, code_pin = settings.embed_model, settings.embed_revision, settings.embed_code_revision
+    if install_steps.model_cached(pin, model) is None:      # the weights: the question is about their size
+        print(f"download {model} at revision {pin[:12]} — {install_steps.MODEL_SIZE_NOTE}")
+        if not confirm("go on?", a.yes):
+            return fail("nothing downloaded; the first server start will need it — see SETUP.md#model")
+    else:
+        print(f"{model} at revision {pin[:12]} is already in the Hugging Face cache; checking its code")
+    try:                                                    # cached or not: the code the config names is fetched too
+        local = install_steps.download_model(pin, model, code_revision=code_pin)
     except Exception as e:
         return fail(f"the model download failed: {e} — see SETUP.md#model")
     print(f"model ready: {local}")
@@ -344,6 +349,8 @@ def cmd_uninstall(a) -> int:
     if not home.exists() and not to_unregister and not offer_files:
         print(f"nothing to uninstall: {home} does not exist and no harness has the launcher registered"); return 0
     print("uninstall will remove:")
+    if pgdir.exists():                      # its binaries live in the venv: a cluster left running would outlive them
+        print("  (first: stop the embedded Postgres if it is running — its data is kept" + ("" if a.data else " unless --data") + ")")
     print(f"  the venv {venv}" + ("" if venv.exists() else " (not there)"))
     print("  harness registrations: " + (", ".join(h.name for h in to_unregister) or "none"))
     print("  the offer line in: " + (", ".join(str(f) for _, f in offer_files) or "none present"))
@@ -376,11 +383,12 @@ def cmd_uninstall(a) -> int:
                     print(f"dropped database {st.database} ({st.postgres} Postgres)")
             except Exception as e:              # InitRefused carries its anchor; anything else is said as it is
                 rc = fail(f"{st.name}: database {st.database} not dropped: {e}")
-        if pgdir.exists():
-            try:
-                postgres("embedded").stop()
-            except Exception as e:
-                rc = fail(f"the embedded Postgres did not stop: {e}")
+    if pgdir.exists():                      # in both modes, before the venv: pg_ctl and the postmaster binary live there
+        try:
+            print("embedded Postgres stopped" if postgres("embedded").stop() else "embedded Postgres was not running")
+        except Exception as e:
+            rc = fail(f"the embedded Postgres did not stop: {e}")
+    if a.data:
         rc |= _rmtree(stores_dir) | _rmtree(pgdir) | _rmtree(pgdir.with_name(pgdir.name + ".lock"))
     for h in to_unregister:
         rc |= harnesses.unregister(h, lp)

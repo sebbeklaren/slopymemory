@@ -137,24 +137,34 @@ def _system_part(on_it: list[Store], failures: list[str], fresh: bool) -> str:
 
 
 def _model() -> Finding:
-    """The PINNED snapshot must be in the cache — every stored coordinate was embedded with it. Another snapshot of
-    the same model is not the model the stores were built with: loading it would shift every coordinate, so that is
-    a FAIL naming the migration, not a warning."""
+    """The PINNED snapshot must be COMPLETE in the cache (huggingface_hub's own test, not a directory listing) — every
+    stored coordinate was embedded with it — and the model's code repository at ITS pin beside it, or the first
+    offline start fails. Another snapshot of the same model is not the model the stores were built with: loading it
+    would shift every coordinate, so that is a FAIL naming the migration, not a warning."""
     try:
         from agent_memory.config import settings
     except ImportError as e:
         return Finding(False, f"the vendored substrate does not import, so the pin cannot be read: {e} — see SETUP.md#package")
-    model, pin = settings.embed_model, settings.embed_revision
+    model, pin, code_pin = settings.embed_model, settings.embed_revision, settings.embed_code_revision
     where = install_steps.model_cache_dir(model)
-    present = install_steps.cached_revisions(model)
-    if pin in present:
-        return Finding(True, f"{model} at revision {pin[:12]} in {where}")
-    if not present:
-        return Finding(False, f"{model} is not in {where} — run `slopymem install-model` (once, about 0.5 GB); a server started offline fails without it")
-    others = ", ".join(r[:12] for r in present)
-    return Finding(False, f"{where} holds revision(s) {others} but not the pinned {pin[:12]} the stores' coordinates were embedded with. "
-                          f"Changing the model or its revision is a migration (every store re-embedded), not a config edit: "
-                          f"run `slopymem install-model` to fetch the pinned snapshot, or set AM_EMBED_REVISION only as part of that migration")
+    fetch = "run `slopymem install-model`"
+    local = install_steps.model_cached(pin, model)
+    if local is None:
+        present = install_steps.cached_revisions(model)
+        if not present:
+            return Finding(False, f"{model} is not in {where} — {fetch} (once, about 0.5 GB); a server started offline fails without it")
+        if pin in present:
+            return Finding(False, f"{where}/snapshots/{pin[:12]}… exists but the snapshot is incomplete (an interrupted download?) — {fetch}")
+        others = ", ".join(r[:12] for r in present)
+        return Finding(False, f"{where} holds revision(s) {others} but not the pinned {pin[:12]} the stores' coordinates were embedded with. "
+                              f"Changing the model or its revision is a migration (every store re-embedded), not a config edit: "
+                              f"{fetch} to fetch the pinned snapshot, or set AM_EMBED_REVISION only as part of that migration")
+    repos = install_steps.remote_code_repos(Path(local))
+    missing = [r for r in repos if install_steps.model_cached(code_pin, r, allow_patterns=["*.py"]) is None]
+    if missing:
+        return Finding(False, f"the model's code ({', '.join(missing)}) at its pinned revision {code_pin[:12]} is not in the cache — {fetch}")
+    code = f"; code {', '.join(repos)} at {code_pin[:12]}" if repos else ""
+    return Finding(True, f"{model} at revision {pin[:12]} in {where}{code}")
 
 
 def _registry() -> Finding:
@@ -305,9 +315,11 @@ CHECKS: list[Check] = [
           "~/.slopymemory/venv/lib/python3.13/site-packages/embedded_postgres/pginstall/bin/pg_ctl -D ~/.slopymemory/pg -m fast stop; "
           "system: install pgvector / the template; a missing database: `slopymem init` or adopt with `link`", _postgres),
     Check("model", "the first server start is slow or fails offline, or every retrieval comes back subtly wrong",
-          "the embedder (nomic-embed-text-v1.5) is in the Hugging Face cache AT THE PINNED REVISION the stores' coordinates were embedded with "
-          "(AM_EMBED_REVISION; `slopymem install-model` fetches exactly that snapshot). Another snapshot of the same model fails: changing the model is a migration (re-embed every store), not a config edit",
-          "ls ~/.cache/huggingface/hub/models--nomic-ai--nomic-embed-text-v1.5/snapshots", "slopymem install-model (once, about 0.5 GB, needs the network)", _model),
+          "the embedder (nomic-embed-text-v1.5) is COMPLETE in the Hugging Face cache AT THE PINNED REVISION the stores' coordinates were embedded with "
+          "(AM_EMBED_REVISION), and its code repository (nomic-bert-2048, which trust_remote_code loads) at ITS pin (AM_EMBED_CODE_REVISION); "
+          "`slopymem install-model` fetches exactly those. Another snapshot of the same model fails: changing the model is a migration (re-embed every store), not a config edit",
+          "ls ~/.cache/huggingface/hub/models--nomic-ai--nomic-embed-text-v1.5/snapshots ~/.cache/huggingface/hub/models--nomic-ai--nomic-bert-2048/snapshots",
+          "slopymem install-model (once, about 0.5 GB, needs the network)", _model),
     Check("registry", "a directory resolves to the wrong store, or two stores collide", "registry parses; every linked store exists; no two stores share a port or database",
           "cat ~/.slopymemory/registry.toml; slopymem list", "slopymem unlink / link; fix the port in store.toml", _registry),
     Check("servers", "tools hang or the launcher reports 'no server answering'", "each store's server answers HTTP on its port",

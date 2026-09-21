@@ -32,13 +32,12 @@ def fake_pg(monkeypatch):
 
 
 def run(argv, stdin=""):
-    sys.stdin = io.StringIO(stdin)
     out = io.StringIO(); err = io.StringIO()
-    old = sys.stdout, sys.stderr; sys.stdout, sys.stderr = out, err
+    old = sys.stdin, sys.stdout, sys.stderr; sys.stdin, sys.stdout, sys.stderr = io.StringIO(stdin), out, err
     try:
         code = cli.main(argv)
     finally:
-        sys.stdout, sys.stderr = old
+        sys.stdin, sys.stdout, sys.stderr = old
     return code, out.getvalue() + err.getvalue()
 
 
@@ -73,6 +72,14 @@ def test_install_postgres_fails_when_pgvector_did_not_install_and_says_the_ancho
     assert code == 1 and "pgvector" in out and "SETUP.md#postgres" in out and fake_pg.dropped == fake_pg.created
 
 
+def test_install_postgres_drops_the_scratch_database_and_stops_the_cluster_even_when_the_check_fails(tmp_home, fake_pg, monkeypatch):
+    def boom(n): raise provision.InitRefused("embedded Postgres: out of disk — see SETUP.md#postgres")
+    monkeypatch.setattr(fake_pg, "vector_installed", boom)
+    code, out = run(["install-postgres", "--postgres", "embedded", "--yes"])
+    assert code == 1 and "out of disk" in out and fake_pg.dropped == fake_pg.created and len(fake_pg.created) == 1
+    assert fake_pg.stops == 1                    # down before, down after — on the failure path too
+
+
 def test_install_postgres_says_no_when_told_no(tmp_home, fake_pg):
     code, out = run(["install-postgres"], stdin="y\nn\n")
     assert code == 1 and fake_pg.created == []
@@ -81,19 +88,19 @@ def test_install_postgres_says_no_when_told_no(tmp_home, fake_pg):
 # --- install-model ------------------------------------------------------------------------------------------------
 
 def test_install_model_downloads_the_pin_once_and_names_the_anchor_on_failure(tmp_home, monkeypatch):
+    from agent_memory.config import settings
     calls = []
     monkeypatch.setattr(install_steps, "model_cached", lambda rev, model=install_steps.MODEL: None)
-    monkeypatch.setattr(install_steps, "download_model", lambda rev, model=install_steps.MODEL: (calls.append(rev), "/hub/snap")[1])
+    monkeypatch.setattr(install_steps, "download_model", lambda rev, model=install_steps.MODEL, code_revision=None: (calls.append((rev, code_revision)), "/hub/snap")[1])
     code, out = run(["install-model"], stdin="n\n")
     assert code == 1 and calls == [] and "0.5 GB" in out
     code, out = run(["install-model", "--yes"])
-    from agent_memory.config import settings
-    assert code == 0 and calls == [settings.embed_revision] and "/hub/snap" in out
+    assert code == 0 and calls == [(settings.embed_revision, settings.embed_code_revision)] and "/hub/snap" in out
     monkeypatch.setattr(install_steps, "model_cached", lambda rev, model=install_steps.MODEL: "/hub/snap")
-    code, out = run(["install-model"])                       # cached: nothing to ask
-    assert code == 0 and "already" in out and len(calls) == 1
+    code, out = run(["install-model"])                       # cached: nothing asked, but download_model still runs (the code repo)
+    assert code == 0 and "already" in out and len(calls) == 2
     monkeypatch.setattr(install_steps, "model_cached", lambda rev, model=install_steps.MODEL: None)
-    def boom(rev, model=install_steps.MODEL): raise OSError("no network")
+    def boom(rev, model=install_steps.MODEL, code_revision=None): raise OSError("no network")
     monkeypatch.setattr(install_steps, "download_model", boom)
     code, out = run(["install-model", "--yes"])
     assert code == 1 and "no network" in out and "SETUP.md#model" in out
@@ -105,14 +112,14 @@ def _fake_harnesses(tmp_path, monkeypatch, ran):
     def runner(cmd, **kw): ran.append(list(cmd))
     monkeypatch.setattr(harnesses.subprocess, "run", runner)
     instr = tmp_path / "instructions.md"
-    hs = [Harness(id="a", name="A", detect=lambda: True, registered=lambda lp: False,
-                  register_cmd=lambda lp: ["a-add", lp], unregister_cmd=lambda: ["a-remove"],
+    hs = [Harness(id="a", name="A", detect=lambda: True, registered=lambda lp: False, registered_as=lambda lp: None,
+                  register_cmd=lambda lp: ["a-add", lp], unregister_cmd=lambda name: ["a-remove", name],
                   config_hint="a hint", instructions_file=lambda: instr),
-          Harness(id="b", name="B", detect=lambda: True, registered=lambda lp: True,
-                  register_cmd=lambda lp: ["b-add", lp], unregister_cmd=lambda: ["b-remove"],
+          Harness(id="b", name="B", detect=lambda: True, registered=lambda lp: True, registered_as=lambda lp: "mem2",
+                  register_cmd=lambda lp: ["b-add", lp], unregister_cmd=lambda name: ["b-remove", name],
                   config_hint="b hint", instructions_file=None),
-          Harness(id="c", name="C", detect=lambda: False, registered=lambda lp: True,
-                  register_cmd=lambda lp: ["c-add", lp], unregister_cmd=lambda: ["c-remove"],
+          Harness(id="c", name="C", detect=lambda: False, registered=lambda lp: True, registered_as=lambda lp: "memory",
+                  register_cmd=lambda lp: ["c-add", lp], unregister_cmd=lambda name: ["c-remove", name],
                   config_hint="c hint", instructions_file=None)]
     monkeypatch.setattr(harnesses, "KNOWN", hs)
     return hs, instr
@@ -153,17 +160,20 @@ def test_uninstall_lists_first_asks_twice_and_keeps_the_data(tmp_home, tmp_path,
     ran = []
     hs, instr = _fake_harnesses(tmp_path, monkeypatch, ran)
     instr.write_text(f"# mine\nkeep this\n\n# slopymemory\n{harnesses.OFFER_LINE}\n")
+    fake_pg.running = True                                                        # the embedded cluster is up, as it usually is
     code, out = run(["uninstall"], stdin="y\nn\n")
-    assert code == 1 and (tmp_home / "venv").exists() and ran == []
+    assert code == 1 and (tmp_home / "venv").exists() and ran == [] and fake_pg.stops == 0
     head = out[:out.index("remove these?")]                                       # the list comes BEFORE the first question
     assert str(tmp_home / "venv") in head and "B" in head and str(instr) in head and str(tmp_home / "logs") in head
     assert "KEPT" in head and "one, two" in head and "--data" in head
+    assert "stop the embedded Postgres" in head and "kept" in head                # its binaries live in the venv that goes
     code, out = run(["uninstall"], stdin="y\ny\n")
     assert code == 0
+    assert fake_pg.stops == 1 and out.index("embedded Postgres stopped") < out.index(f"removed {tmp_home / 'venv'}")
     assert not (tmp_home / "venv").exists() and not (tmp_home / "logs").exists() and not (tmp_home / "registry.toml").exists()
     assert Store.exists("one") and Store.exists("two") and (tmp_home / "pg" / "PG_VERSION").exists()
     assert fake_pg.dropped == []
-    assert ran == [["b-remove"]]                                                 # registered and detected: B only
+    assert ran == [["b-remove", "mem2"]]                                         # registered and detected: B only, by the name OUR entry has
     assert instr.read_text() == "# mine\nkeep this\n"                            # the line and its heading, nothing else
 
 
@@ -212,7 +222,7 @@ def test_uninstall_on_a_home_that_is_not_there_says_so(tmp_home, fake_pg, monkey
     assert code == 0 and "nothing to uninstall" in out and "remove these?" not in out
     monkeypatch.setattr(harnesses, "KNOWN", hs)                                  # a registration alone IS something to remove
     code, out = run(["uninstall"], stdin="y\ny\n")
-    assert code == 0 and "B: b-remove" in out
+    assert code == 0 and "B: b-remove mem2" in out
 
 
 def test_remove_offer_line_takes_the_line_and_its_heading_only(tmp_path):
@@ -230,6 +240,6 @@ def test_remove_offer_line_takes_the_line_and_its_heading_only(tmp_path):
 
 def test_known_harnesses_have_an_unregister_where_they_have_a_register():
     from slopymemory.harnesses import claude_code, codex, pi
-    assert claude_code.HARNESS.unregister_cmd()[:3] == ["claude", "mcp", "remove"] and "user" in claude_code.HARNESS.unregister_cmd()
-    assert codex.HARNESS.unregister_cmd()[:3] == ["codex", "mcp", "remove"]
-    assert pi.HARNESS.unregister_cmd is None
+    assert claude_code.HARNESS.unregister_cmd("mem2") == ["claude", "mcp", "remove", "--scope", "user", "mem2"]
+    assert codex.HARNESS.unregister_cmd("ours") == ["codex", "mcp", "remove", "ours"]
+    assert pi.HARNESS.unregister_cmd is None and all(h.registered_as is not None for h in (claude_code.HARNESS, codex.HARNESS, pi.HARNESS))

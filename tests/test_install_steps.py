@@ -145,8 +145,8 @@ def test_cached_wheels_reads_uvs_cache_layout_and_says_when_it_cannot(tmp_path):
     lock = tmp_path / "uv.lock"; lock.write_text(LOCK)
     wheels = s.locked_wheels(lock, TAGS)
     cache = tmp_path / "uv-cache"
-    assert s.cached_wheels(cache, wheels) is None                      # no cache dir at all
-    assert s.cached_wheels(None, wheels) is None                       # `uv cache dir` did not answer
+    assert s.cached_wheels(cache, wheels) == set()                     # a cache with no wheels yet: the first run, nothing cached
+    assert s.cached_wheels(None, wheels) is None                       # `uv cache dir` did not answer: unknown, not "nothing"
     archive = cache / "archive-v0" / "abc"; archive.mkdir(parents=True)
     entry = cache / "wheels-v5" / "index" / "e1d1" / "torch"; entry.mkdir(parents=True)     # another index: one level deeper
     (entry / "2.12.0+cpu-cp313-cp313-manylinux_2_28_x86_64").symlink_to(archive)
@@ -173,6 +173,14 @@ def test_preflight_prints_the_size_before_asking_and_refuses_a_no(tmp_path, monk
     assert rc == 1 and "183 MB" in out and "less if cached" in out and out.index("183 MB") < out.index("continue")
     rc = s.preflight(tmp_path / "venv", yes=True, lock=lock)
     assert rc == 0
+
+
+def test_preflight_on_a_fresh_machine_says_nothing_is_cached_yet_not_an_error(tmp_path, monkeypatch, capsys):
+    lock = tmp_path / "uv.lock"; lock.write_text(LOCK)
+    monkeypatch.setattr(s, "free_bytes", lambda p: 10 * 1024**3)
+    assert s.preflight(tmp_path / "venv", yes=True, lock=lock, cache=tmp_path / "empty-cache") == 0
+    out = capsys.readouterr().out
+    assert "about 191 MB for 2 package(s) (nothing in uv's cache yet)" in out and "could not" not in out
 
 
 def test_preflight_gives_both_numbers_when_the_cache_is_readable(tmp_path, monkeypatch, capsys):
@@ -232,7 +240,7 @@ def test_download_model_skips_when_the_pin_is_cached(monkeypatch, capsys, tmp_pa
     monkeypatch.setattr(s, "snapshot_download", lambda: fake_snapshot_download)
     path = s.download_model("e9b6")
     assert path == str(tmp_path) and calls[0] == (s.MODEL, "e9b6", True)
-    assert "already" in capsys.readouterr().out
+    assert capsys.readouterr().out == ""                        # nothing fetched, nothing said: the caller reports
 
 
 def test_download_model_says_the_size_once_then_fetches(monkeypatch, capsys, tmp_path):
@@ -244,11 +252,29 @@ def test_download_model_says_the_size_once_then_fetches(monkeypatch, capsys, tmp
         (tmp_path / "config.json").write_text(json.dumps({"auto_map": {"AutoModel": "nomic-ai/nomic-bert-2048--m.M"}}))
         return str(tmp_path)
     monkeypatch.setattr(s, "snapshot_download", lambda: fake_snapshot_download)
-    path = s.download_model("e9b6")
+    path = s.download_model("e9b6", code_revision="7710")
     out = capsys.readouterr().out
     assert path == str(tmp_path) and "this happens once (about 0.5 GB)" in out
     assert (s.MODEL, "e9b6", False) in calls
-    assert any(c[0] == "nomic-ai/nomic-bert-2048" and c[2] is False for c in calls)   # the remote code the config names
+    assert ("nomic-ai/nomic-bert-2048", "7710", False) in calls          # the remote code the config names, at ITS pin
+
+
+def test_download_model_fetches_the_code_even_when_the_weights_are_cached(monkeypatch, capsys, tmp_path):
+    """An interrupted first run (weights done, code not) is repaired by the next install-model."""
+    (tmp_path / "config.json").write_text(json.dumps({"auto_map": {"AutoModel": "nomic-ai/nomic-bert-2048--m.M"}}))
+    calls = []
+    def fake_snapshot_download(repo_id, revision=None, local_files_only=False, **kw):
+        calls.append((repo_id, revision, local_files_only))
+        if repo_id == s.MODEL:
+            return str(tmp_path)
+        if local_files_only:
+            raise FileNotFoundError("code not cached")
+        return "/hub/code"
+    monkeypatch.setattr(s, "snapshot_download", lambda: fake_snapshot_download)
+    assert s.download_model("e9b6", code_revision="7710") == str(tmp_path)
+    assert ("nomic-ai/nomic-bert-2048", "7710", True) in calls and ("nomic-ai/nomic-bert-2048", "7710", False) in calls
+    out = capsys.readouterr().out
+    assert "fetching the model's code" in out and "7710" in out and "0.5 GB" not in out
 
 
 def test_an_extra_pulls_the_packages_optional_group(tmp_path):
