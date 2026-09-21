@@ -385,3 +385,33 @@ def test_python_check_says_which_home_is_in_use_and_why(tmp_home, monkeypatch):
     (tmp_home / "registry.toml").write_text("")
     f = checks.by_id("python").run()
     assert f.ok and f"home {tmp_home} (the parent of the venv this interpreter runs from, {tmp_home / 'venv'}; SLOPYMEM_HOME is unset)" in f.detail
+
+
+def test_local_paths_check_scans_both_packages_for_home_paths_and_a_private_mailbox(tmp_path):
+    """The vendored substrate is the package that ever carried the author's machine; the check reads it too, for
+    three shapes — a Linux home path, a macOS home path, a private mailbox — and a hit names the file and the shape.
+    The fixtures are assembled from halves: the repository's own scanner refuses these shapes as text, in tests too."""
+    linux, mac, mailbox = "/home/" + "someone/x", "/Users/" + "someone/x", "someone@" + "gmail.com"
+    wiring = tmp_path / "slopymemory"; substrate = tmp_path / "agent_memory"
+    for d in (wiring, substrate): d.mkdir()
+    (wiring / "ok.py").write_text('p = "~/.slopymemory"  # grep -r "/home/" is not a path\n')
+    (substrate / "ok.py").write_text('x = 1\n')
+    f = checks._local_paths([wiring, substrate])
+    assert f.ok and "2 packages" in f.detail, f.detail
+    (substrate / "a.py").write_text(f'p = "{linux}"\n')
+    f = checks._local_paths([wiring, substrate])
+    assert not f.ok and str(substrate / "a.py") in f.detail and "home path" in f.detail and linux[:7] in f.detail
+    (substrate / "a.py").write_text(f'p = "{mac}"\n')
+    f = checks._local_paths([wiring, substrate])
+    assert not f.ok and str(substrate / "a.py") in f.detail and mac[:8] in f.detail
+    (substrate / "a.py").write_text('x = 1\n'); (wiring / "b.py").write_text(f'# ask {mailbox}\n')
+    f = checks._local_paths([wiring, substrate])
+    assert not f.ok and str(wiring / "b.py") in f.detail and "mailbox" in f.detail and mailbox in f.detail
+    assert str(substrate / "a.py") not in f.detail
+
+
+def test_local_paths_check_is_clean_on_the_installed_packages_including_checks_py_itself():
+    """No self-exclusion: the shapes are written so that this module's own pattern text is not a hit, and the two
+    installed packages carry no home path and no mailbox."""
+    f = checks.by_id("local-paths").run()
+    assert f.ok, f.detail

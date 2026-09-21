@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.metadata as md
 import json
+import re
 import shutil
 import sys
 from collections import Counter
@@ -318,11 +319,26 @@ def _secrets() -> Finding:
     return Finding(not unreadable, "; ".join(rows) or "no save refused as a secret in any store's invocation log")
 
 
-def _local_paths() -> Finding:
-    import slopymemory
-    root = Path(slopymemory.__file__).parent
-    hits = [str(p) for p in root.rglob("*.py") if "/home/" in p.read_text(errors="ignore") and "checks.py" not in p.name]
-    return Finding(not hits, "; ".join(hits) or "no machine-local path in the installed package")
+# Shapes, not names — the same three the repository's own scanner refuses. Written so that this module's own text
+# (these patterns, the grep in the check's command) is not a hit: no self-exclusion, so a leak here would show too.
+_LOCAL_SHAPES = [("a home path", re.compile(r"/home/[A-Za-z]")), ("a macOS home path", re.compile(r"/Users/[A-Za-z]")),
+                 ("a private mailbox", re.compile(r"[A-Za-z0-9._%+-]+@(gmail|googlemail|hotmail|outlook|live|yahoo|icloud|proton|protonmail|gmx|aol|yandex|fastmail)\.[a-z]{2,}"))]
+
+
+def _local_paths(roots: list[Path] | None = None) -> Finding:
+    """Both installed packages — the wiring and the vendored substrate, the one that ever carried the author's
+    machine — against `_LOCAL_SHAPES`. A hit names the file, the shape and the matched text."""
+    if roots is None:
+        import slopymemory, agent_memory
+        roots = [Path(slopymemory.__file__).parent, Path(agent_memory.__file__).parent]
+    hits = []
+    for root in roots:
+        for f in sorted(root.rglob("*.py")):
+            text = f.read_text(errors="ignore")
+            for what, rx in _LOCAL_SHAPES:
+                if m := rx.search(text):
+                    hits.append(f"{f}: {what} ({m.group(0)})")
+    return Finding(not hits, "; ".join(hits) or f"no machine-local path or private mailbox in {len(roots)} packages ({', '.join(r.name for r in roots)})")
 
 
 CHECKS: list[Check] = [
@@ -366,8 +382,11 @@ CHECKS: list[Check] = [
           "refused saves per store from the invocation logs (count, kinds, first/last time; the texts were never logged); "
           "existing stores can be scanned with `slopymem scan-store <name>`, which reports and never deletes",
           "slopymem scan-store <name>", "remove the memory by hand; tell the agent to save where the secret lives", _secrets),
-    Check("local-paths", "a leak of the author's machine into the package", "no installed file contains a machine-local path",
-          "grep -r '/home/' ~/.slopymemory/venv/lib/python3.13/site-packages/slopymemory", "report it — the export scanner missed it", _local_paths),
+    Check("local-paths", "a leak of the author's machine into the package",
+          "no file of the two installed packages (slopymemory and the vendored agent_memory) contains a home path (/home/<user>, /Users/<user>) "
+          "or a private mailbox; a hit names the file and the shape",
+          "grep -rE '/home/[A-Za-z]|/Users/[A-Za-z]|@(gmail|outlook|hotmail|yahoo|icloud|proton)' ~/.slopymemory/venv/lib/python3.13/site-packages/slopymemory ~/.slopymemory/venv/lib/python3.13/site-packages/agent_memory",
+          "report it — the export scanner missed it", _local_paths),
 ]
 
 

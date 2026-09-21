@@ -225,12 +225,12 @@ slopymem scan-store <name>
 
 **Symptom:** a leak of the author's machine into the package
 
-**Verifies:** no installed file contains a machine-local path
+**Verifies:** no file of the two installed packages (slopymemory and the vendored agent_memory) contains a home path (/home/<user>, /Users/<user>) or a private mailbox; a hit names the file and the shape
 
 **See for yourself:**
 
 ```bash
-grep -r '/home/' ~/.slopymemory/venv/lib/python3.13/site-packages/slopymemory
+grep -rE '/home/[A-Za-z]|/Users/[A-Za-z]|@(gmail|outlook|hotmail|yahoo|icloud|proton)' ~/.slopymemory/venv/lib/python3.13/site-packages/slopymemory ~/.slopymemory/venv/lib/python3.13/site-packages/agent_memory
 ```
 
 **Fix:** report it — the export scanner missed it
