@@ -16,12 +16,27 @@ Six announced steps, each idempotent — a second run repairs what is missing an
 right alone: **1** `uv` (installed into `~/.local/bin` only if absent; your shell rc files are never edited) and a
 Python 3.13 (`uv python install 3.13` when there is none); **2** the package into a venv at `~/.slopymemory/venv`
 from `uv.lock` exactly — the tool check, then the real download size read from the lock (minus what uv already has
-cached), printed **before** anything is fetched, and the install refuses below 4 GB free; **3** Postgres — the system one
-is probed and offered when it can provision, else the embedded one, either verified with a scratch database
-(`slopymem install-postgres`); **4** the embedder model, once, about 0.5 GB, at the pinned revision, into the
-shared Hugging Face cache (`slopymem install-model`); **5** the launcher registered in every harness found
-(`slopymem register --detected`; `--no-harness` skips it); **6** `slopymem doctor`. `SLOPYMEM_HOME` moves
-everything (venv, stores, embedded Postgres) elsewhere; the checkout can be deleted after the install.
+cached), printed **before** anything is fetched, and the install refuses below 4 GB free; **3** Postgres
+(`slopymem install-postgres`, `--postgres system|embedded` picks); **4** the embedder model, once, about 0.5 GB, at
+the pinned revision, into the shared Hugging Face cache (`slopymem install-model`); **5** the launcher registered
+in every harness found (`slopymem register --detected`; `--no-harness` skips it); **6** `slopymem doctor`.
+`SLOPYMEM_HOME` moves everything (venv, stores, embedded Postgres) elsewhere; the checkout can be deleted after
+the install.
+
+Step 3, in full — two paths, verified either way with a scratch database:
+
+- **System Postgres** (probed first; offered when it can provision). A one-time, as-a-superuser setup makes a
+  template database pgvector is installed into, and lets the role that runs slopymem create databases from it:
+  ```
+  sudo -u postgres psql -c 'CREATE DATABASE slopymem_template' -c 'ALTER DATABASE slopymem_template IS_TEMPLATE true'
+  sudo -u postgres psql -d slopymem_template -c 'CREATE EXTENSION vector'
+  sudo -u postgres psql -c 'ALTER ROLE <user> CREATEDB;'
+  ```
+  Every store after that gets its own database on this Postgres, no further superuser steps.
+- **Embedded Postgres** (used when the system one can't provision, or when asked for). A PostgreSQL + pgvector
+  build from the `embedded-postgres` wheel, about 15 MB, living entirely under `~/.slopymemory/pg`, started on
+  demand, reachable only over its own unix socket — nothing on the network, nothing shared with any system
+  Postgres.
 
 `slopymem uninstall` lists what it will remove — the venv (stopping the embedded Postgres first, whose binaries
 live there; its data stays), the registrations (each harness's own remove command, on the entry whose command is
