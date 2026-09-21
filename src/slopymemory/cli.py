@@ -301,7 +301,10 @@ def cmd_install_postgres(a) -> int:
         except Exception as e:
             failure = (failure + "; " if failure else "") + f"the scratch database {scratch} was not dropped: {e} — see SETUP.md#postgres"
         if choice.backend == "embedded" and not was_running:
-            pg.stop()                               # the check started it; a store's server starts it again when needed
+            try:
+                pg.stop()                           # the check started it; a store's server starts it again when needed
+            except Exception as e:                  # said beside the check's own failure, never a traceback over it
+                failure = (failure + "; " if failure else "") + f"the embedded Postgres was not stopped after the check: {e}"
     if failure:
         return fail(failure)
     if not vector:

@@ -74,6 +74,16 @@ def test_stop_stops_a_postmaster_that_is_up_but_not_answering(tmp_home, monkeypa
     assert _postmasters_for(tmp_home / "pg") == []
 
 
+def test_stop_on_a_directory_that_is_not_a_cluster_is_nothing_to_stop(tmp_path, monkeypatch):
+    """No PG_VERSION, no postmaster: stop() answers False without asking pg_ctl — whose `status` on a missing data
+    dir exits 4 and would otherwise surface as a refusal on top of whatever refused first (the install's check
+    stopping a cluster that a long socket path kept it from ever creating)."""
+    monkeypatch.setattr(embedded_pg.subprocess, "run", lambda *a, **k: pytest.fail("pg_ctl was run"))
+    assert embedded_pg.EmbeddedPostgres(tmp_path / "absent").stop() is False
+    (tmp_path / "empty").mkdir()
+    assert embedded_pg.EmbeddedPostgres(tmp_path / "empty").stop() is False
+
+
 def test_ensure_running_refuses_a_socket_path_too_long_for_unix_sockets_without_starting(tmp_path):
     deep = tmp_path / ("d" * 120)
     with pytest.raises(provision.InitRefused) as e:

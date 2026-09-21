@@ -72,6 +72,20 @@ def test_install_postgres_fails_when_pgvector_did_not_install_and_says_the_ancho
     assert code == 1 and "pgvector" in out and "SETUP.md#postgres" in out and fake_pg.dropped == fake_pg.created
 
 
+def test_install_postgres_reports_the_refusal_even_when_the_stop_after_it_fails_too(tmp_home, fake_pg, monkeypatch):
+    """Seen: a SLOPYMEM_HOME too deep for a unix socket — create_database refused, then the check's own cleanup
+    stop() raised (no data dir to ask pg_ctl about) and the traceback buried the refusal that mattered. Both are
+    said, in order, and the exit is a refusal, not a crash."""
+    def refuse(n): raise provision.InitRefused("the embedded Postgres socket path is 130 bytes; unix sockets allow 107 — set SLOPYMEM_HOME to a shorter path — see SETUP.md#postgres")
+    def stop_fails(): raise provision.InitRefused("pg_ctl status: directory does not exist — see SETUP.md#postgres")
+    monkeypatch.setattr(fake_pg, "create_database", refuse)
+    monkeypatch.setattr(fake_pg, "stop", stop_fails)
+    code, out = run(["install-postgres", "--postgres", "embedded", "--yes"])
+    assert code == 1 and "Traceback" not in out
+    assert "set SLOPYMEM_HOME to a shorter path" in out and "was not stopped" in out and "directory does not exist" in out
+    assert out.index("shorter path") < out.index("was not stopped")
+
+
 def test_install_postgres_drops_the_scratch_database_and_stops_the_cluster_even_when_the_check_fails(tmp_home, fake_pg, monkeypatch):
     def boom(n): raise provision.InitRefused("embedded Postgres: out of disk — see SETUP.md#postgres")
     monkeypatch.setattr(fake_pg, "vector_installed", boom)

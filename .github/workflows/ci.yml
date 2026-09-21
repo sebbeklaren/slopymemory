@@ -64,4 +64,10 @@ jobs:
         run: |
           mkdir /tmp/proj
           ~/.slopymemory/venv/bin/python "$GITHUB_WORKSPACE/scripts/e2e_stdio.py" --project /tmp/proj
-      - run: ~/.slopymemory/venv/bin/slopymem doctor
+      - name: the doctor
+        # exit 0, or the one FAIL the installer documents for --no-harness (a runner image that ships a harness CLI)
+        run: |
+          ~/.slopymemory/venv/bin/slopymem doctor | tee doctor.txt || true
+          grep -q '^doctor:' doctor.txt
+          fails="$(awk '$1 == "FAIL" {print $2}' doctor.txt)"
+          [ -z "$fails" ] || [ "$fails" = harnesses ]

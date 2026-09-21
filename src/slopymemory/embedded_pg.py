@@ -181,8 +181,9 @@ class EmbeddedPostgres:
         """Clean shutdown (fast mode: open connections are closed). The predicate is "a postmaster process
         exists" (`_process_exists`), never "it answers" (`is_running`) — gating on the answer predicate would
         leave an alive-but-unreachable postmaster running forever, the one case a stop matters most. False when
-        nothing was running."""
-        if not self._process_exists():
+        nothing was running — including a data dir that is not a cluster (no PG_VERSION: never initialised, or
+        initdb cut short): no postmaster can run there, and `pg_ctl status` on it would refuse (rc 4) instead."""
+        if not (self.pgdata / "PG_VERSION").exists() or not self._process_exists():
             return False
         self._run("pg_ctl", ["-D", str(self.pgdata), "-w", "-t", str(int(wait_s)), "-m", "fast", "stop"], timeout=wait_s + 30)
         return True
