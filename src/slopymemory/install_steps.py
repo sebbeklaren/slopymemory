@@ -315,6 +315,34 @@ def model_cache_dir(model: str = MODEL) -> Path:
     return hub_cache() / ("models--" + model.replace("/", "--"))
 
 
+# What the embedder reads from the weights snapshot: the pinned snapshot's modules.json is Transformer + Pooling
+WEIGHT_FILES = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json", "modules.json",
+                "sentence_bert_config.json", "1_Pooling/config.json")
+
+
+def local_snapshot(repo: str, revision: str) -> Path | None:
+    """The snapshot DIRECTORY `<hub>/models--<repo>/snapshots/<revision>` when it exists, else None. This is the one
+    thing the embedder reads (`snapshot_download(local_files_only=True)` on a commit hash resolves to exactly it);
+    no `refs/` is consulted — a fresh machine after `slopymem install-model` has none."""
+    d = model_cache_dir(repo) / "snapshots" / revision
+    return d if d.is_dir() else None
+
+
+def missing_files(snapshot_dir: Path, names) -> list[str]:
+    return [n for n in names if not (Path(snapshot_dir) / n).exists()]
+
+
+def code_files(weights_snapshot: Path) -> list[str]:
+    """The module files the model's config names for its classes (`<repo>--<module>.<Class>` → `<module>.py`)."""
+    cfg = Path(weights_snapshot) / "config.json"
+    try:
+        auto_map = json.loads(cfg.read_text()).get("auto_map", {})
+    except (ValueError, OSError):
+        return []
+    mods = {v.split("--", 1)[1].rsplit(".", 1)[0] for v in auto_map.values() if isinstance(v, str) and "--" in v}
+    return sorted(f"{m}.py" for m in mods)
+
+
 def cached_revisions(model: str = MODEL) -> list[str]:
     """The snapshot revisions of `model` present in the hub cache — what the doctor compares to the pin."""
     snaps = model_cache_dir(model) / "snapshots"
@@ -338,7 +366,8 @@ def remote_code_repos(snapshot_dir: Path) -> list[str]:
 
 
 def model_cached(revision: str, model: str = MODEL, allow_patterns: list[str] | None = None) -> str | None:
-    """The snapshot's local path when it is complete in the cache (huggingface_hub's own test), else None."""
+    """The snapshot's local path when huggingface_hub resolves it offline (for a commit hash: the directory exists),
+    else None. Completeness is `missing_files` against `WEIGHT_FILES` — the hub does not check that offline."""
     try:
         return snapshot_download()(model, revision=revision, local_files_only=True, allow_patterns=allow_patterns)
     except Exception:           # huggingface_hub raises its own family of errors for "not in the cache"
@@ -352,7 +381,7 @@ def download_model(revision: str, model: str = MODEL, code_revision: str | None 
     snapshot's local path. Errors from the hub propagate: the caller names the anchor."""
     sd = snapshot_download()
     local = model_cached(revision, model)
-    if local is None:
+    if local is None or missing_files(local, WEIGHT_FILES):     # absent, or a snapshot cut short: fetch what is missing
         print(f"downloading {model} at revision {revision[:12]} — {MODEL_SIZE_NOTE}")
         local = sd(model, revision=revision)
     for repo in remote_code_repos(Path(local)):                # quiet when everything is there: the caller reports

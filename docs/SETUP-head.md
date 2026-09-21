@@ -42,7 +42,9 @@ names and is never answered by `--yes`. `--yes` without `--data` is refused: the
   the installer's `install-postgres`, `install-model`; `uninstall`.
 - **the model** — `nomic-embed-text-v1.5` at ONE pinned revision (`AM_EMBED_REVISION`), and the code repository its
   classes come from (`nomic-bert-2048`) at its own pin (`AM_EMBED_CODE_REVISION`), both in `~/.cache/huggingface/hub`.
-  Every stored coordinate was embedded with that snapshot; a different one is a migration, not a setting.
+  A server loads the embedder from exactly those two snapshot directories — no network, no `refs/main`; without them
+  it does not start, and says which `slopymem install-model` fetches. Every stored coordinate was embedded with that
+  snapshot; a different one is a migration, not a setting.
 
 ## The three questions, in order
 

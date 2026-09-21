@@ -42,7 +42,9 @@ names and is never answered by `--yes`. `--yes` without `--data` is refused: the
   the installer's `install-postgres`, `install-model`; `uninstall`.
 - **the model** — `nomic-embed-text-v1.5` at ONE pinned revision (`AM_EMBED_REVISION`), and the code repository its
   classes come from (`nomic-bert-2048`) at its own pin (`AM_EMBED_CODE_REVISION`), both in `~/.cache/huggingface/hub`.
-  Every stored coordinate was embedded with that snapshot; a different one is a migration, not a setting.
+  A server loads the embedder from exactly those two snapshot directories — no network, no `refs/main`; without them
+  it does not start, and says which `slopymem install-model` fetches. Every stored coordinate was embedded with that
+  snapshot; a different one is a migration, not a setting.
 
 ## The three questions, in order
 
@@ -103,9 +105,9 @@ slopymem list; ls ~/.slopymemory/pg; tail ~/.slopymemory/pg/log; psql -d postgre
 
 ## model
 
-**Symptom:** the first server start is slow or fails offline, or every retrieval comes back subtly wrong
+**Symptom:** no server starts (online or offline), or every retrieval comes back subtly wrong
 
-**Verifies:** the embedder (nomic-embed-text-v1.5) is COMPLETE in the Hugging Face cache AT THE PINNED REVISION the stores' coordinates were embedded with (AM_EMBED_REVISION), and its code repository (nomic-bert-2048, which trust_remote_code loads) at ITS pin (AM_EMBED_CODE_REVISION); `slopymem install-model` fetches exactly those. Another snapshot of the same model fails: changing the model is a migration (re-embed every store), not a config edit
+**Verifies:** the two snapshot DIRECTORIES the embedder loads from, and nothing else, are in the Hugging Face cache with their files: nomic-embed-text-v1.5 at the pinned revision the stores' coordinates were embedded with (AM_EMBED_REVISION) and its code repository (nomic-bert-2048, whose classes the model uses) at its own pin (AM_EMBED_CODE_REVISION). No refs/main and no network are involved in a start; `slopymem install-model` fetches exactly those two. Another snapshot of the same model fails: changing the model is a migration (re-embed every store), not a config edit
 
 **See for yourself:**
 

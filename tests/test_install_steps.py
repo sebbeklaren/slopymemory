@@ -230,7 +230,13 @@ def test_remote_code_repos_are_read_from_the_snapshots_config(tmp_path):
     assert s.remote_code_repos(tmp_path) == []
 
 
+def _complete_weights(d):
+    for name in s.WEIGHT_FILES:
+        (d / name).parent.mkdir(parents=True, exist_ok=True); (d / name).write_text("x")
+
+
 def test_download_model_skips_when_the_pin_is_cached(monkeypatch, capsys, tmp_path):
+    _complete_weights(tmp_path)
     calls = []
     def fake_snapshot_download(repo_id, revision=None, local_files_only=False, **kw):
         calls.append((repo_id, revision, local_files_only))
@@ -259,8 +265,24 @@ def test_download_model_says_the_size_once_then_fetches(monkeypatch, capsys, tmp
     assert ("nomic-ai/nomic-bert-2048", "7710", False) in calls          # the remote code the config names, at ITS pin
 
 
+def test_download_model_refetches_a_snapshot_cut_short(monkeypatch, capsys, tmp_path):
+    """A snapshot directory that exists without its files (an interrupted download) is fetched again — the hub fills in
+    what is missing — instead of being reported as cached."""
+    (tmp_path / "config.json").write_text(json.dumps({"auto_map": {}}))
+    calls = []
+    def fake_snapshot_download(repo_id, revision=None, local_files_only=False, **kw):
+        calls.append((repo_id, revision, local_files_only))
+        if not local_files_only:
+            _complete_weights(tmp_path)
+        return str(tmp_path)
+    monkeypatch.setattr(s, "snapshot_download", lambda: fake_snapshot_download)
+    assert s.download_model("e9b6") == str(tmp_path)
+    assert (s.MODEL, "e9b6", False) in calls and "0.5 GB" in capsys.readouterr().out
+
+
 def test_download_model_fetches_the_code_even_when_the_weights_are_cached(monkeypatch, capsys, tmp_path):
     """An interrupted first run (weights done, code not) is repaired by the next install-model."""
+    _complete_weights(tmp_path)
     (tmp_path / "config.json").write_text(json.dumps({"auto_map": {"AutoModel": "nomic-ai/nomic-bert-2048--m.M"}}))
     calls = []
     def fake_snapshot_download(repo_id, revision=None, local_files_only=False, **kw):
@@ -305,3 +327,17 @@ def test_platform_tags_accept_abi3_wheels_built_for_an_older_cpython():
     v = s.sys.version_info
     assert any(t.startswith("cp39-abi3-") for t in tags) and any(t.startswith(f"cp3{v[1]}-abi3-") for t in tags)
     assert not any(t.startswith(f"cp3{v[1] + 1}-") for t in tags)
+
+
+def test_local_snapshot_and_its_files_are_read_from_the_directory_alone(tmp_path, monkeypatch):
+    """No refs/, no network: the directory by commit hash, and the files the embedder reads inside it."""
+    hub = tmp_path / "hub"
+    monkeypatch.setattr(s, "hub_cache", lambda: hub)
+    assert s.local_snapshot("nomic-ai/x", "abc") is None
+    d = hub / "models--nomic-ai--x" / "snapshots" / "abc"; d.mkdir(parents=True)
+    assert s.local_snapshot("nomic-ai/x", "abc") == d
+    assert s.missing_files(d, s.WEIGHT_FILES) == list(s.WEIGHT_FILES)
+    (d / "config.json").write_text(json.dumps({"auto_map": {"AutoConfig": "nomic-ai/code--configuration_x.XConfig",
+                                                             "AutoModel": "nomic-ai/code--modeling_x.XModel"}}))
+    assert s.code_files(d) == ["configuration_x.py", "modeling_x.py"]
+    assert "config.json" not in s.missing_files(d, s.WEIGHT_FILES)

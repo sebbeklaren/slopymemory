@@ -314,10 +314,12 @@ def cmd_install_model(a) -> int:
     """The embedder at its pinned revision into the shared Hugging Face cache — once. Cached: nothing asked."""
     from agent_memory.config import settings          # the substrate's own model name and pins: one source of truth
     model, pin, code_pin = settings.embed_model, settings.embed_revision, settings.embed_code_revision
-    if install_steps.model_cached(pin, model) is None:      # the weights: the question is about their size
+    weights = install_steps.local_snapshot(model, pin)
+    complete = weights is not None and not install_steps.missing_files(weights, install_steps.WEIGHT_FILES)
+    if not complete:                                        # the weights: the question is about their size
         print(f"download {model} at revision {pin[:12]} — {install_steps.MODEL_SIZE_NOTE}")
         if not confirm("go on?", a.yes):
-            return fail("nothing downloaded; the first server start will need it — see SETUP.md#model")
+            return fail("nothing downloaded; no server can start without it — see SETUP.md#model")
     else:
         print(f"{model} at revision {pin[:12]} is already in the Hugging Face cache; checking its code")
     try:                                                    # cached or not: the code the config names is fetched too
