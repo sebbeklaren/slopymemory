@@ -11,6 +11,7 @@ on: [push, pull_request]
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,6 +21,7 @@ jobs:
 
   unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -50,6 +52,7 @@ jobs:
 
   e2e-embedded:
     runs-on: ubuntu-latest
+    timeout-minutes: 30                      # a hung install or session must not run for the default six hours
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5             # install.sh uses the uv it finds; its wheel cache carries over
