@@ -12,6 +12,10 @@ class Settings:
     # coordinate without a word. Changing the model or its revision is a MIGRATION (re-embed every store), not a
     # config edit; this variable exists so that migration can be run deliberately.
     embed_revision: str = os.getenv("AM_EMBED_REVISION", "e9b6763023c676ca8431644204f50c2b100d9aab")
+    # The model's classes live in a SECOND repository (trust_remote_code: nomic-ai/nomic-bert-2048, named by the
+    # model config's auto_map) and are pinned the same way; a moving head there would change the forward pass
+    # under the same weights. Passed as code_revision to both the config and the model loader.
+    embed_code_revision: str = os.getenv("AM_EMBED_CODE_REVISION", "7710840340a098cfb869c4f65e87cf2b1b70caca")
     embed_dim: int = int(os.getenv("AM_EMBED_DIM", "768"))
     default_k: int = int(os.getenv("AM_DEFAULT_K", "10"))
     min_score: float = float(os.getenv("AM_MIN_SCORE", "-1.0"))

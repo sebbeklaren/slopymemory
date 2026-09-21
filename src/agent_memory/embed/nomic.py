@@ -12,7 +12,11 @@ class NomicEmbedder:
     def __init__(self):
         from sentence_transformers import SentenceTransformer
         self.dim = settings.embed_dim
-        self._model = SentenceTransformer(settings.embed_model, revision=settings.embed_revision, trust_remote_code=True, device="cpu")
+        # code_revision must reach BOTH loaders: AutoConfig resolves the config class from the code repository
+        # before AutoModel resolves the model class, and each takes its own kwargs.
+        code = {"code_revision": settings.embed_code_revision}
+        self._model = SentenceTransformer(settings.embed_model, revision=settings.embed_revision, trust_remote_code=True, device="cpu",
+                                          config_kwargs=code, model_kwargs=code)
 
     def _embed(self, text: str, prefix: str) -> np.ndarray:
         v = self._model.encode([f"{prefix}{text}"], normalize_embeddings=True)[0]
