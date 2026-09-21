@@ -2,6 +2,14 @@
 import numpy as np
 from agent_memory.config import settings
 
+# What each pinned snapshot must hold for THIS loader — defined once, here; `slopymem install-model` imports these and
+# fetches exactly that: the weights repository without the exported formats nothing here reads (onnx/, openvino/: 1.7 GB
+# of the 2.2 GB), the code repository's Python modules only. The hub's offline resolution checks its cached tree listing
+# against what is asked for — asked for the whole tree, it called the fetched subset incomplete and refused, so no server
+# started on any fresh machine (seen on a clean container; the developer machine's older cache carried no listing).
+WEIGHTS_IGNORE = ("onnx/*", "openvino/*")
+CODE_ALLOW = ("*.py",)
+
 
 class NomicEmbedder:
     """Real local embedder: nomic-embed-text-v1.5 via sentence-transformers, in-process, CPU.
@@ -16,9 +24,10 @@ class NomicEmbedder:
     - `SentenceTransformer(name, model_kwargs={"code_revision": …})` never reaches transformers on sentence-transformers
       5.5 (the key is consumed on the way in). Building the `Transformer` module directly passes `code_revision` to
       BOTH `AutoConfig` and `AutoModel`, as two separate dicts (one shared dict is emptied by the first consumer).
-    Both directories are resolved with `local_files_only=True`: a pin that is not in the cache fails loud, naming
-    what fetches it, instead of falling back to `main`. Nothing here needs a `refs/main` in the cache — exactly what
-    `slopymem install-model` leaves on a fresh machine."""
+    Both directories are resolved with `local_files_only=True` and the same patterns `slopymem install-model` fetched
+    with (WEIGHTS_IGNORE, CODE_ALLOW): a pin that is not in the cache fails loud, naming what fetches it, instead of
+    falling back to `main`. Nothing here needs a `refs/main` in the cache — exactly what `slopymem install-model` leaves
+    on a fresh machine."""
 
     model_version = "nomic-embed-text-v1.5"
     MAX_SEQ_LENGTH = 8192          # the pinned snapshot's sentence_bert_config.json
@@ -43,9 +52,12 @@ class NomicEmbedder:
 
     @staticmethod
     def _local_snapshot(repo: str, revision: str, what: str) -> str:
+        """The pinned snapshot's directory, offline, resolved against the subset `install-model` fetched for `what`
+        ("weights" | "code"): the hub compares its cached tree listing to these patterns, not to the whole tree."""
         from huggingface_hub import snapshot_download
+        patterns = {"weights": {"ignore_patterns": list(WEIGHTS_IGNORE)}, "code": {"allow_patterns": list(CODE_ALLOW)}}[what]
         try:
-            return snapshot_download(repo, revision=revision, local_files_only=True)
+            return snapshot_download(repo, revision=revision, local_files_only=True, **patterns)
         except Exception as e:      # huggingface_hub's own family of "not in the cache" errors
             raise RuntimeError(
                 f"the embedder's pinned {what} snapshot is not in the Hugging Face cache: {repo} at revision {revision} "
