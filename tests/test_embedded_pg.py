@@ -41,12 +41,37 @@ def test_embedded_server_starts_once_survives_reentry_and_provisions_pgvector(tm
         with pytest.raises(ValueError, match="unsafe database name"):
             epg.database_exists("bad'name")
     finally:
+        # the leak guard runs, and is asserted, before anything else that could mask it: if the body above
+        # raised partway through, a leaked postmaster must be the reported failure, not hidden behind a
+        # "stopped is False" from whatever assertion happens to run first.
         stopped = epg.stop()
+        leaked = _postmasters_for(tmp_home / "pg")
+    assert leaked == []
     assert stopped is True
     assert not epg.is_running()
     assert epg.stop() is False                                           # nothing running: False, not an error
-    assert _postmasters_for(tmp_home / "pg") == []
     assert (tmp_home / "pg" / "PG_VERSION").exists()                     # the data survives a stop
+
+
+@pytest.mark.pg
+def test_stop_stops_a_postmaster_that_is_up_but_not_answering(tmp_home, monkeypatch):
+    """stop()'s predicate must be "a postmaster process exists", never "it answers" (`is_running()`) — the one
+    state a stop matters most (`ensure_running`'s own "started but does not answer" branch, a connect timeout
+    under load, a cluster in recovery) is exactly the one the answer predicate reads as down, leaving the
+    postmaster running forever if stop() were gated on it."""
+    epg = embedded_pg.EmbeddedPostgres(tmp_home / "pg")
+    try:
+        epg.ensure_running()
+        assert epg.is_running()
+        monkeypatch.setattr(epg, "is_running", lambda: False)    # simulate: alive, socket doesn't answer
+        try:
+            assert epg.stop() is True
+            assert not (tmp_home / "pg" / "postmaster.pid").exists()
+        finally:
+            monkeypatch.undo()    # restore the real predicate before the outer cleanup runs, pass or fail
+    finally:
+        epg.stop()                                                # idempotent if the assert above already stopped it
+    assert _postmasters_for(tmp_home / "pg") == []
 
 
 def test_ensure_running_refuses_a_socket_path_too_long_for_unix_sockets_without_starting(tmp_path):
@@ -59,9 +84,18 @@ def test_ensure_running_refuses_a_socket_path_too_long_for_unix_sockets_without_
 
 def test_uri_is_the_unix_socket_dsn_of_the_data_dir(tmp_path):
     pgdata = tmp_path / "pg"
-    assert embedded_pg.uri(pgdata, "e_memory") == f"host={pgdata} port=5432 user=postgres dbname=e_memory"
+    assert embedded_pg.uri(pgdata, "e_memory") == f"host='{pgdata}' port=5432 user=postgres dbname='e_memory'"
     assert embedded_pg.uri(pgdata, "e_memory").startswith(embedded_pg.uri_prefix(pgdata))
     assert not embedded_pg.uri(tmp_path / "other", "e_memory").startswith(embedded_pg.uri_prefix(pgdata))
+
+
+def test_uri_quotes_a_host_value_with_a_space_or_an_apostrophe(tmp_path):
+    """SLOPYMEM_HOME is user-set; an unquoted keyword DSN breaks obscurely on such a path (libpq: 'missing "="
+    after ...'). The value is wrapped in single quotes with `\\` and `'` backslash-escaped, per libpq syntax."""
+    from psycopg.conninfo import conninfo_to_dict
+    pgdata = tmp_path / "a b's" / "pg"
+    dsn = embedded_pg.uri(pgdata, "e_memory")
+    assert conninfo_to_dict(dsn) == {"host": str(pgdata), "port": "5432", "user": "postgres", "dbname": "e_memory"}
 
 
 def test_a_store_on_embedded_postgres_gets_the_embedded_uri(tmp_home):
@@ -113,7 +147,10 @@ def test_choose_backend_prefers_an_existing_embedded_data_dir_then_a_working_sys
     assert provision.choose_backend(Pg(), True, None) == ("system", None)
     (tmp_home / "pg").mkdir(parents=True)
     assert provision.choose_backend(Pg(), True, None) == ("embedded", None)       # the user already chose it
-    assert provision.choose_backend(Pg(), False, None) == ("system", None)        # ...unless the wheel is gone
+    c = provision.choose_backend(Pg(), False, None)                               # ...but the wheel is gone: a new
+    assert c.backend == "system"                                                  # store lands on the OTHER
+    assert "embedded data dir" in c.note and str(tmp_home / "pg") in c.note       # backend than its siblings —
+    assert "SETUP.md#postgres" in c.note                                          # that must never be silent
 
 
 def test_choose_backend_carries_the_system_failure_as_the_note(tmp_home):

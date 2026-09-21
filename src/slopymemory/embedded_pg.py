@@ -36,14 +36,20 @@ START_TIMEOUT_S = 60                    # pg_ctl -w waits this long for "ready";
 _TOOLS = ("initdb", "pg_ctl", "postgres")
 
 
+def _quote(value: object) -> str:
+    """libpq keyword syntax: a value wrapped in single quotes with `\\` and `'` backslash-escaped — safe for a
+    data dir with a space or an apostrophe (SLOPYMEM_HOME is user-set) instead of breaking the DSN obscurely."""
+    return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
 def uri_prefix(pgdata: Path) -> str:
     """Everything but the database name — a store's DATABASE_URL on this cluster starts with it."""
-    return f"host={pgdata} port={PORT} user={ROLE} dbname="
+    return f"host={_quote(pgdata)} port={PORT} user={ROLE} dbname="
 
 
 def uri(pgdata: Path, database: str) -> str:
     """The libpq conninfo (keyword form, which psycopg takes as is) for one database on the embedded cluster."""
-    return uri_prefix(pgdata) + database
+    return uri_prefix(pgdata) + _quote(database)
 
 
 def unavailable_reason() -> str | None:
@@ -153,9 +159,30 @@ class EmbeddedPostgres:
             finally:
                 fcntl.flock(lk, fcntl.LOCK_UN)
 
+    def _process_exists(self) -> bool:
+        """Whether a postmaster process exists for this data dir — `stop()`'s own predicate, deliberately NOT
+        `is_running()`: a postmaster that is up but not answering on its socket (`ensure_running`'s own "started
+        but does not answer" branch, a connect timeout under load, a cluster mid-recovery) is exactly the state a
+        stop matters most, and the answer predicate reads it as already down. `pg_ctl status` (read-only, no
+        connection): rc 0 running, rc 3 not running. Anything else (rc 4: no data dir; or an unexpected code) is
+        surfaced, never silently read as "not running"."""
+        if (reason := unavailable_reason()) is not None:
+            raise InitRefused(f"{reason} — see SETUP.md#postgres")
+        result = subprocess.run([str(BIN / "pg_ctl"), "-D", str(self.pgdata), "status"], capture_output=True,
+                                text=True, stdin=subprocess.DEVNULL, timeout=30)
+        if result.returncode == 0:
+            return True
+        if result.returncode == 3:
+            return False
+        reason = (result.stderr or "").strip() or (result.stdout or "").strip() or f"pg_ctl status exited {result.returncode}"
+        raise InitRefused(f"pg_ctl status: {reason} — log: {self.log_file()} — see SETUP.md#postgres")
+
     def stop(self, wait_s: float = 30.0) -> bool:
-        """Clean shutdown (fast mode: open connections are closed). False when nothing was running."""
-        if not self.is_running():
+        """Clean shutdown (fast mode: open connections are closed). The predicate is "a postmaster process
+        exists" (`_process_exists`), never "it answers" (`is_running`) — gating on the answer predicate would
+        leave an alive-but-unreachable postmaster running forever, the one case a stop matters most. False when
+        nothing was running."""
+        if not self._process_exists():
             return False
         self._run("pg_ctl", ["-D", str(self.pgdata), "-w", "-t", str(int(wait_s)), "-m", "fast", "stop"], timeout=wait_s + 30)
         return True

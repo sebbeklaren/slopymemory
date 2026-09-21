@@ -243,7 +243,10 @@ CHECKS: list[Check] = [
           "the system Postgres (reachable, pgvector, template/superuser/CREATEDB) when a store is on it or nothing exists yet; one database per store on its own backend. "
           "A store whose backend is unreachable fails, by name. `slopymem init --postgres system|embedded` picks; the default is embedded when ~/.slopymemory/pg exists, else system if it can provision, else embedded",
           "slopymem list; ls ~/.slopymemory/pg; tail ~/.slopymemory/pg/log; psql -d postgres -Atc \"select 1 from pg_available_extensions where name='vector'\"",
-          "embedded: read ~/.slopymemory/pg/log, re-run the install if the wheel is missing; system: install pgvector / the template; a missing database: `slopymem init` or adopt with `link`", _postgres),
+          "embedded: read ~/.slopymemory/pg/log, re-run the install if the wheel is missing; to stop it manually "
+          "(no `slopymem stop` verb for it yet): "
+          "~/.slopymemory/venv/lib/python3.13/site-packages/embedded_postgres/pginstall/bin/pg_ctl -D ~/.slopymemory/pg -m fast stop; "
+          "system: install pgvector / the template; a missing database: `slopymem init` or adopt with `link`", _postgres),
     Check("model", "the first server start is slow or fails offline", "the embedder is in the Hugging Face cache",
           "ls ~/.cache/huggingface/hub | grep nomic", "start any store once while online", _model),
     Check("registry", "a directory resolves to the wrong store, or two stores collide", "registry parses; every linked store exists; no two stores share a port or database",

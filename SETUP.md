@@ -70,7 +70,7 @@ ls ~/.slopymemory/venv/bin/python; python3 --version
 slopymem list; ls ~/.slopymemory/pg; tail ~/.slopymemory/pg/log; psql -d postgres -Atc "select 1 from pg_available_extensions where name='vector'"
 ```
 
-**Fix:** embedded: read ~/.slopymemory/pg/log, re-run the install if the wheel is missing; system: install pgvector / the template; a missing database: `slopymem init` or adopt with `link`
+**Fix:** embedded: read ~/.slopymemory/pg/log, re-run the install if the wheel is missing; to stop it manually (no `slopymem stop` verb for it yet): ~/.slopymemory/venv/lib/python3.13/site-packages/embedded_postgres/pginstall/bin/pg_ctl -D ~/.slopymemory/pg -m fast stop; system: install pgvector / the template; a missing database: `slopymem init` or adopt with `link`
 
 ## model
 

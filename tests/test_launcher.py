@@ -154,15 +154,19 @@ async def test_memory_init_on_the_embedded_postgres_starts_it_and_creates_the_da
                 names = [t.name for t in (await s.list_tools()).tools]
                 assert names == ["memory_ping", "memory_session"]
         st = Store.load("emb")
-        assert st.postgres == "embedded" and st.server_env()["DATABASE_URL"].startswith(f"host={tmp_home / 'pg'} ")
+        assert st.postgres == "embedded" and st.server_env()["DATABASE_URL"].startswith(f"host='{tmp_home / 'pg'}' ")
         assert epg.is_running() and epg.database_exists("emb_memory")
         import psycopg
         with psycopg.connect(st.server_env()["DATABASE_URL"]) as c:
             assert c.execute("select 1 from pg_extension where extname = 'vector'").fetchone() == (1,)
     finally:
-        if Store.exists("emb"):
-            server.stop(Store.load("emb"))
-        epg.stop()
+        # nested: if server.stop() raises (the server ignores SIGTERM), the cluster is still stopped —
+        # a leaked postmaster must never depend on the store server's own shutdown succeeding.
+        try:
+            if Store.exists("emb"):
+                server.stop(Store.load("emb"))
+        finally:
+            epg.stop()
     assert not epg.is_running()
 
 

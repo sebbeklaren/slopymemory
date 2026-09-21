@@ -121,7 +121,9 @@ def choose_backend(system: Postgres, embedded_available: bool, requested: str | 
     ("system" needs `system.can_provision()`, "embedded" needs the wheel), else: the embedded one when its data
     dir already exists (the user chose it once — a machine's stores stay on one backend), else the system one when
     it can provision, else the embedded one — with the system one's reason as the note, because a store landing
-    on the other backend than the user expects must never happen without a word. Neither → InitRefused naming both."""
+    on the other backend than the user expects must never happen without a word. If the data dir exists but the
+    embedded backend is itself unavailable (a venv rebuilt without the wheel), landing on the system one carries
+    THAT as the note instead — the same rule, the other direction. Neither → InitRefused naming both."""
     embedded_why = "" if embedded_available else f" ({EMBEDDED_HINT})"
     if requested == "system":
         if not system.can_provision():           # its own InitRefused (psql missing, server down) propagates as is
@@ -133,14 +135,17 @@ def choose_backend(system: Postgres, embedded_available: bool, requested: str | 
         return Choice("embedded", None)
     if requested is not None:
         raise InitRefused(f"unknown postgres backend {requested!r}: system | embedded — see SETUP.md#postgres")
-    if embedded_available and paths.embedded_pg_dir().exists():
+    pgdir = paths.embedded_pg_dir()
+    if embedded_available and pgdir.exists():
         return Choice("embedded", None)
+    stranded_note = (f"the embedded data dir {pgdir} exists but the embedded Postgres is unavailable: {EMBEDDED_HINT}"
+                     if pgdir.exists() and not embedded_available else None)
     try:
         if system.can_provision():
-            return Choice("system", None)
-        system_why = f"the system Postgres is not set up for slopymem — {TEMPLATE_HINT}"
+            return Choice("system", stranded_note)
+        system_why = stranded_note or f"the system Postgres is not set up for slopymem — {TEMPLATE_HINT}"
     except InitRefused as e:
-        system_why = f"the system Postgres is not usable here: {e}"
+        system_why = stranded_note or f"the system Postgres is not usable here: {e}"
     if embedded_available:
         return Choice("embedded", system_why)
     raise InitRefused(f"no Postgres can provision stores: {system_why}; the embedded Postgres is not available{embedded_why}")
