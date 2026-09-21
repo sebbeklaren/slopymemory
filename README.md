@@ -78,6 +78,14 @@ the Apache 2.0 licence, both pinned by the installer to an exact revision, both 
 Hugging Face account needed. Changing the model is a migration, not a setting: every store's saved
 coordinates were embedded with that one pinned snapshot.
 
+## Contributing
+
+CI runs the repository's own scanner (`scripts/public_scan_ci.py`) over the tree and over every commit reachable
+from the branch: secrets, paths into a home directory, private mailboxes and the maintainers' internal jargon are
+refused, on a push and on a pull request alike. Commit with your GitHub noreply address (Settings → Emails →
+"Keep my email addresses private"): a commit authored from a gmail, outlook or similar mailbox fails the history
+scan, and the fix is an amend, not a discussion.
+
 ## Licence
 
 MIT — see `LICENSE`.
