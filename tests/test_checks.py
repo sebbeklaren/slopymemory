@@ -283,3 +283,22 @@ def test_secrets_check_is_quiet_when_nothing_was_refused_and_fails_on_an_unreada
     f = checks.by_id("secrets").run()
     assert f.ok is False and "a: invocation log unreadable" in f.detail
     assert "scan-store" in checks.by_id("secrets").verify and "scan-store" in checks.by_id("secrets").command
+
+
+# --- model: the cache must hold the PINNED snapshot, not merely some snapshot ---
+
+def test_model_check_compares_the_cached_snapshot_to_the_pin(monkeypatch):
+    from slopymemory import install_steps
+    from agent_memory.config import settings
+    pin = settings.embed_revision
+    monkeypatch.setattr(install_steps, "cached_revisions", lambda model=install_steps.MODEL: [])
+    f = checks.by_id("model").run()
+    assert not f.ok and "slopymem install-model" in f.detail
+    monkeypatch.setattr(install_steps, "cached_revisions", lambda model=install_steps.MODEL: [pin])
+    f = checks.by_id("model").run()
+    assert f.ok and pin[:12] in f.detail
+    monkeypatch.setattr(install_steps, "cached_revisions", lambda model=install_steps.MODEL: ["0123456789abcdef0123456789abcdef01234567"])
+    f = checks.by_id("model").run()
+    assert not f.ok and "migration" in f.detail and pin[:12] in f.detail and "0123456789ab" in f.detail
+    monkeypatch.setattr(install_steps, "cached_revisions", lambda model=install_steps.MODEL: ["0123456789abcdef0123456789abcdef01234567", pin])
+    assert checks.by_id("model").run().ok               # the pin is there; another snapshot beside it is no failure

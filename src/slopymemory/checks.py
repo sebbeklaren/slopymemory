@@ -4,14 +4,13 @@ from __future__ import annotations
 import datetime as dt
 import importlib.metadata as md
 import json
-import os
 import shutil
 import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
-from . import embedded_pg, paths, server as srv
+from . import embedded_pg, install_steps, paths, server as srv
 from .embedded_pg import EmbeddedPostgres
 from .harnesses import status as harness_status
 from .provision import InitRefused, SystemPostgres, TEMPLATE_HINT
@@ -21,7 +20,7 @@ from .store import Store, all_stores, measure, store_problems
 
 WARN_TOTAL_GB = 1.0
 WARN_FREE_GB = 2.0
-MODEL = "nomic-ai/nomic-embed-text-v1.5"
+MODEL = install_steps.MODEL
 
 
 @dataclass
@@ -139,8 +138,24 @@ def _system_part(on_it: list[Store], failures: list[str], fresh: bool) -> str:
 
 
 def _model() -> Finding:
-    hub = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")) / "hub" / ("models--" + MODEL.replace("/", "--"))
-    return Finding(hub.exists(), f"{hub} {'present' if hub.exists() else 'missing — the first server start will download it'}")
+    """The PINNED snapshot must be in the cache — every stored coordinate was embedded with it. Another snapshot of
+    the same model is not the model the stores were built with: loading it would shift every coordinate, so that is
+    a FAIL naming the migration, not a warning."""
+    try:
+        from agent_memory.config import settings
+    except ImportError as e:
+        return Finding(False, f"the vendored substrate does not import, so the pin cannot be read: {e} — see SETUP.md#package")
+    pin = settings.embed_revision
+    where = install_steps.model_cache_dir(MODEL)
+    present = install_steps.cached_revisions(MODEL)
+    if pin in present:
+        return Finding(True, f"{MODEL} at revision {pin[:12]} in {where}")
+    if not present:
+        return Finding(False, f"{MODEL} is not in {where} — run `slopymem install-model` (once, about 0.5 GB); a server started offline fails without it")
+    others = ", ".join(r[:12] for r in present)
+    return Finding(False, f"{where} holds revision(s) {others} but not the pinned {pin[:12]} the stores' coordinates were embedded with. "
+                          f"Changing the model or its revision is a migration (every store re-embedded), not a config edit: "
+                          f"run `slopymem install-model` to fetch the pinned snapshot, or set AM_EMBED_REVISION only as part of that migration")
 
 
 def _registry() -> Finding:
@@ -290,8 +305,10 @@ CHECKS: list[Check] = [
           "(no `slopymem stop` verb for it yet): "
           "~/.slopymemory/venv/lib/python3.13/site-packages/embedded_postgres/pginstall/bin/pg_ctl -D ~/.slopymemory/pg -m fast stop; "
           "system: install pgvector / the template; a missing database: `slopymem init` or adopt with `link`", _postgres),
-    Check("model", "the first server start is slow or fails offline", "the embedder is in the Hugging Face cache",
-          "ls ~/.cache/huggingface/hub | grep nomic", "start any store once while online", _model),
+    Check("model", "the first server start is slow or fails offline, or every retrieval comes back subtly wrong",
+          "the embedder (nomic-embed-text-v1.5) is in the Hugging Face cache AT THE PINNED REVISION the stores' coordinates were embedded with "
+          "(AM_EMBED_REVISION; `slopymem install-model` fetches exactly that snapshot). Another snapshot of the same model fails: changing the model is a migration (re-embed every store), not a config edit",
+          "ls ~/.cache/huggingface/hub/models--nomic-ai--nomic-embed-text-v1.5/snapshots", "slopymem install-model (once, about 0.5 GB, needs the network)", _model),
     Check("registry", "a directory resolves to the wrong store, or two stores collide", "registry parses; every linked store exists; no two stores share a port or database",
           "cat ~/.slopymemory/registry.toml; slopymem list", "slopymem unlink / link; fix the port in store.toml", _registry),
     Check("servers", "tools hang or the launcher reports 'no server answering'", "each store's server answers HTTP on its port",
