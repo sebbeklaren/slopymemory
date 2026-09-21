@@ -315,9 +315,15 @@ def model_cache_dir(model: str = MODEL) -> Path:
     return hub_cache() / ("models--" + model.replace("/", "--"))
 
 
-# What the embedder reads from the weights snapshot: the pinned snapshot's modules.json is Transformer + Pooling
+# The weights snapshot is complete when these are there. The embedder itself reads config.json, model.safetensors and
+# the tokenizer files; modules.json, sentence_bert_config.json and 1_Pooling/config.json are the snapshot's own
+# description of the pipeline the embedder hard-codes (Transformer + mean Pooling, max_seq_length 8192) — kept in the
+# list so a snapshot that lost them still reads as cut short. The doctor and install-model share this one list.
 WEIGHT_FILES = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json", "modules.json",
                 "sentence_bert_config.json", "1_Pooling/config.json")
+# Exported formats in the weights repository that nothing here reads — 1.7 GB of the 2.2 GB snapshot; the fetch skips
+# them, which is what makes the size note true.
+WEIGHTS_IGNORE = ("onnx/*", "openvino/*")
 
 
 def local_snapshot(repo: str, revision: str) -> Path | None:
@@ -365,30 +371,64 @@ def remote_code_repos(snapshot_dir: Path) -> list[str]:
     return sorted(repos)
 
 
-def model_cached(revision: str, model: str = MODEL, allow_patterns: list[str] | None = None) -> str | None:
-    """The snapshot's local path when huggingface_hub resolves it offline (for a commit hash: the directory exists),
-    else None. Completeness is `missing_files` against `WEIGHT_FILES` — the hub does not check that offline."""
+def hf_api():
+    """`huggingface_hub.HfApi()`, imported when first needed (inside the venv)."""
+    from huggingface_hub import HfApi
+    return HfApi()
+
+
+def weights_size(model: str, revision: str, ignore: tuple[str, ...] = WEIGHTS_IGNORE) -> int | None:
+    """The bytes the weights fetch will pull: the hub's file list for the pinned revision (one metadata call, no
+    download) minus the ignored patterns. None when the hub cannot be asked — then the fixed note is printed."""
+    import fnmatch
     try:
-        return snapshot_download()(model, revision=revision, local_files_only=True, allow_patterns=allow_patterns)
-    except Exception:           # huggingface_hub raises its own family of errors for "not in the cache"
+        info = hf_api().model_info(model, revision=revision, files_metadata=True, timeout=HEAD_TIMEOUT_S)
+        return sum((f.size or 0) for f in info.siblings if not any(fnmatch.fnmatch(f.rfilename, p) for p in ignore))
+    except Exception:
         return None
 
 
-def download_model(revision: str, model: str = MODEL, code_revision: str | None = None) -> str:
-    """The pinned snapshot into the shared Hugging Face cache, once; then the remote code its config names, at
-    `code_revision` (the substrate's `embed_code_revision`; None = the code repository's head). The code step
-    runs even when the weights are cached, so an interrupted first run is repaired by the next call. Returns the
-    snapshot's local path. Errors from the hub propagate: the caller names the anchor."""
+def size_note(size: int | None) -> str:
+    """The sentence said before the weights are fetched, with the real number when the hub listed it."""
+    return f"this happens once (about {size / 2**30:.1f} GB)" if size else MODEL_SIZE_NOTE
+
+
+def weights_complete(model: str, revision: str) -> Path | None:
+    """The weights snapshot directory when it is there WITH its files, else None — the doctor's view, shared."""
+    d = local_snapshot(model, revision)
+    return d if d is not None and not missing_files(d, WEIGHT_FILES) else None
+
+
+def download_model(revision: str, model: str = MODEL, code_revision: str | None = None,
+                   ask: Callable[[str], bool] | None = None) -> str | None:
+    """The pinned weights snapshot into the shared Hugging Face cache, once (skipping the exported formats nothing
+    reads); then the code repository its config names, at `code_revision` (None = the repository's head). Each is
+    fetched when its directory is MISSING OR ANY REQUIRED FILE IS — the same directory-and-files test the doctor
+    applies (`local_snapshot` + `missing_files`), never the hub's directory-exists probe, so the doctor's "incomplete —
+    run install-model" is always closed by running it. Says what it fetches. `ask(note)`, when given, is asked before
+    the weights are fetched (the size in the note); a no returns None and fetches nothing. Errors from the hub
+    propagate: the caller names the anchor."""
     sd = snapshot_download()
-    local = model_cached(revision, model)
-    if local is None or missing_files(local, WEIGHT_FILES):     # absent, or a snapshot cut short: fetch what is missing
-        print(f"downloading {model} at revision {revision[:12]} — {MODEL_SIZE_NOTE}")
-        local = sd(model, revision=revision)
-    for repo in remote_code_repos(Path(local)):                # quiet when everything is there: the caller reports
-        try:
-            sd(repo, revision=code_revision, allow_patterns=["*.py"], local_files_only=True)
-        except Exception:
-            at = f" at revision {code_revision[:12]}" if code_revision else ""
-            print(f"fetching the model's code from {repo}{at} (a few small files)")
-            sd(repo, revision=code_revision, allow_patterns=["*.py"])
-    return local
+    local = weights_complete(model, revision)
+    if local is None:
+        note = size_note(weights_size(model, revision))
+        if ask is not None and not ask(note):
+            return None
+        print(f"downloading {model} at revision {revision[:12]} — {note}")
+        local = Path(sd(model, revision=revision, ignore_patterns=list(WEIGHTS_IGNORE)))
+    need = code_files(local)
+    for repo in remote_code_repos(local):
+        if code_revision is None:                   # no pin to check files against: the hub's own offline test
+            try:
+                sd(repo, allow_patterns=["*.py"], local_files_only=True)
+                continue
+            except Exception:
+                pass
+        else:
+            code = local_snapshot(repo, code_revision)
+            if code is not None and not missing_files(code, need):
+                continue
+        at = f" at revision {code_revision[:12]}" if code_revision else ""
+        print(f"fetching the model's code from {repo}{at} ({', '.join(need) or 'the .py files'})")
+        sd(repo, revision=code_revision, allow_patterns=["*.py"])
+    return str(local)

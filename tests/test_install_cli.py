@@ -87,26 +87,24 @@ def test_install_postgres_says_no_when_told_no(tmp_home, fake_pg):
 
 # --- install-model ------------------------------------------------------------------------------------------------
 
-def test_install_model_downloads_the_pin_once_and_names_the_anchor_on_failure(tmp_home, monkeypatch, tmp_path):
+def test_install_model_asks_with_the_size_once_downloads_the_pin_and_names_the_anchor_on_failure(tmp_home, monkeypatch, tmp_path):
     from agent_memory.config import settings
     calls = []
-    monkeypatch.setattr(install_steps, "local_snapshot", lambda repo, rev: None)
-    monkeypatch.setattr(install_steps, "download_model", lambda rev, model=install_steps.MODEL, code_revision=None: (calls.append((rev, code_revision)), "/hub/snap")[1])
+    def fake_download(rev, model=install_steps.MODEL, code_revision=None, ask=None):
+        if install_steps.weights_complete(model, rev) is None and ask is not None and not ask("this happens once (about 0.5 GB)"):
+            return None                                      # asked only when the weights are to be fetched, as the real one does
+        calls.append((rev, code_revision)); return "/hub/snap"
+    monkeypatch.setattr(install_steps, "weights_complete", lambda model, rev: None)
+    monkeypatch.setattr(install_steps, "download_model", fake_download)
     code, out = run(["install-model"], stdin="n\n")
-    assert code == 1 and calls == [] and "0.5 GB" in out
+    assert code == 1 and calls == [] and out.count("0.5 GB") == 1 and "SETUP.md#model" in out
     code, out = run(["install-model", "--yes"])
     assert code == 0 and calls == [(settings.embed_revision, settings.embed_code_revision)] and "/hub/snap" in out
-    snap = tmp_path / "snap"
-    for name in install_steps.WEIGHT_FILES:
-        (snap / name).parent.mkdir(parents=True, exist_ok=True); (snap / name).write_text("x")
-    monkeypatch.setattr(install_steps, "local_snapshot", lambda repo, rev: snap)
-    code, out = run(["install-model"])                       # complete: nothing asked, but download_model still runs (the code repo)
+    monkeypatch.setattr(install_steps, "weights_complete", lambda model, rev: tmp_path)
+    code, out = run(["install-model"])                       # complete: said so, and download_model still runs (the code repo)
     assert code == 0 and "already" in out and len(calls) == 2
-    (snap / "model.safetensors").unlink()
-    code, out = run(["install-model"], stdin="n\n")           # cut short: asked again, like a fresh download
-    assert code == 1 and "0.5 GB" in out and len(calls) == 2
-    monkeypatch.setattr(install_steps, "local_snapshot", lambda repo, rev: None)
-    def boom(rev, model=install_steps.MODEL, code_revision=None): raise OSError("no network")
+    monkeypatch.setattr(install_steps, "weights_complete", lambda model, rev: None)
+    def boom(rev, model=install_steps.MODEL, code_revision=None, ask=None): raise OSError("no network")
     monkeypatch.setattr(install_steps, "download_model", boom)
     code, out = run(["install-model", "--yes"])
     assert code == 1 and "no network" in out and "SETUP.md#model" in out

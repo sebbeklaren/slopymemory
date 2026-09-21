@@ -314,18 +314,19 @@ def cmd_install_model(a) -> int:
     """The embedder at its pinned revision into the shared Hugging Face cache — once. Cached: nothing asked."""
     from agent_memory.config import settings          # the substrate's own model name and pins: one source of truth
     model, pin, code_pin = settings.embed_model, settings.embed_revision, settings.embed_code_revision
-    weights = install_steps.local_snapshot(model, pin)
-    complete = weights is not None and not install_steps.missing_files(weights, install_steps.WEIGHT_FILES)
-    if not complete:                                        # the weights: the question is about their size
-        print(f"download {model} at revision {pin[:12]} — {install_steps.MODEL_SIZE_NOTE}")
-        if not confirm("go on?", a.yes):
-            return fail("nothing downloaded; no server can start without it — see SETUP.md#model")
-    else:
+    if install_steps.weights_complete(model, pin) is not None:
         print(f"{model} at revision {pin[:12]} is already in the Hugging Face cache; checking its code")
-    try:                                                    # cached or not: the code the config names is fetched too
-        local = install_steps.download_model(pin, model, code_revision=code_pin)
+    # download_model asks once, with the real size in the question, right before the weights are fetched; the code the
+    # config names is checked (and fetched when a file is missing) whether or not the weights were cached
+    def ask(note: str) -> bool:
+        print(f"download {model} at revision {pin[:12]} — {note}")
+        return confirm("go on?", a.yes)
+    try:
+        local = install_steps.download_model(pin, model, code_revision=code_pin, ask=ask)
     except Exception as e:
         return fail(f"the model download failed: {e} — see SETUP.md#model")
+    if local is None:
+        return fail("nothing downloaded; no server can start without it — see SETUP.md#model")
     print(f"model ready: {local}")
     return 0
 

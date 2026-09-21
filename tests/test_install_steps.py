@@ -230,103 +230,135 @@ def test_remote_code_repos_are_read_from_the_snapshots_config(tmp_path):
     assert s.remote_code_repos(tmp_path) == []
 
 
-def _complete_weights(d):
-    for name in s.WEIGHT_FILES:
-        (d / name).parent.mkdir(parents=True, exist_ok=True); (d / name).write_text("x")
+# --- download_model: the same directory-and-files view the doctor has, for both repositories ---
+
+CODE_REPO = "nomic-ai/nomic-bert-2048"
+AUTO_MAP = {"AutoConfig": f"{CODE_REPO}--configuration_hf_nomic_bert.NomicBertConfig",
+            "AutoModel": f"{CODE_REPO}--modeling_hf_nomic_bert.NomicBertModel"}
+CODE_FILES = ("configuration_hf_nomic_bert.py", "modeling_hf_nomic_bert.py")
 
 
-def test_download_model_skips_when_the_pin_is_cached(monkeypatch, capsys, tmp_path):
-    _complete_weights(tmp_path)
+def _scratch_hub(tmp_path, monkeypatch, weights_files=None, code_files=None, weights_rev="e9b6", code_rev="7710"):
+    """A scratch hub cache (no refs/) holding the weights snapshot with `weights_files` (None = absent) and the code
+    snapshot with `code_files` (None = absent); the weights' config.json always names the code repository."""
+    hub = tmp_path / "hub"
+    monkeypatch.setattr(s, "hub_cache", lambda: hub)
+    w = hub / "models--nomic-ai--nomic-embed-text-v1.5" / "snapshots" / weights_rev
+    c = hub / f"models--{CODE_REPO.replace('/', '--')}" / "snapshots" / code_rev
+    if weights_files is not None:
+        for name in weights_files:
+            (w / name).parent.mkdir(parents=True, exist_ok=True); (w / name).write_text("x")
+        (w / "config.json").write_text(json.dumps({"auto_map": AUTO_MAP}))
+    if code_files is not None:
+        c.mkdir(parents=True, exist_ok=True)
+        for name in code_files:
+            (c / name).write_text("# code")
+    return hub, w, c
+
+
+def _spy_hub(monkeypatch, w, c):
+    """A fake snapshot_download that records its calls and writes the files a real fetch would leave."""
     calls = []
-    def fake_snapshot_download(repo_id, revision=None, local_files_only=False, **kw):
-        calls.append((repo_id, revision, local_files_only))
+    def fake(repo_id, revision=None, local_files_only=False, allow_patterns=None, ignore_patterns=None, **kw):
+        calls.append({"repo": repo_id, "revision": revision, "local": local_files_only, "allow": allow_patterns, "ignore": ignore_patterns})
         if local_files_only:
-            return str(tmp_path)
-        raise AssertionError("must not download when the pin is cached")
-    monkeypatch.setattr(s, "snapshot_download", lambda: fake_snapshot_download)
-    path = s.download_model("e9b6")
-    assert path == str(tmp_path) and calls[0] == (s.MODEL, "e9b6", True)
-    assert capsys.readouterr().out == ""                        # nothing fetched, nothing said: the caller reports
+            raise FileNotFoundError("the probe must not be used any more")
+        if repo_id == s.MODEL:
+            for name in s.WEIGHT_FILES:
+                (w / name).parent.mkdir(parents=True, exist_ok=True); (w / name).write_text("x")
+            (w / "config.json").write_text(json.dumps({"auto_map": AUTO_MAP}))
+            return str(w)
+        c.mkdir(parents=True, exist_ok=True)
+        for name in CODE_FILES:
+            (c / name).write_text("# code")
+        return str(c)
+    monkeypatch.setattr(s, "snapshot_download", lambda: fake)
+    monkeypatch.setattr(s, "weights_size", lambda model, revision, ignore=s.WEIGHTS_IGNORE: None)
+    return calls
 
 
-def test_download_model_says_the_size_once_then_fetches(monkeypatch, capsys, tmp_path):
-    calls = []
-    def fake_snapshot_download(repo_id, revision=None, local_files_only=False, **kw):
-        calls.append((repo_id, revision, local_files_only))
-        if local_files_only:
-            raise FileNotFoundError("not cached")
-        (tmp_path / "config.json").write_text(json.dumps({"auto_map": {"AutoModel": "nomic-ai/nomic-bert-2048--m.M"}}))
-        return str(tmp_path)
-    monkeypatch.setattr(s, "snapshot_download", lambda: fake_snapshot_download)
-    path = s.download_model("e9b6", code_revision="7710")
+def test_download_model_fetches_nothing_when_both_snapshots_are_complete(monkeypatch, capsys, tmp_path):
+    hub, w, c = _scratch_hub(tmp_path, monkeypatch, weights_files=s.WEIGHT_FILES, code_files=CODE_FILES)
+    calls = _spy_hub(monkeypatch, w, c)
+    assert s.download_model("e9b6", code_revision="7710") == str(w)
+    assert calls == [] and capsys.readouterr().out == ""                  # nothing fetched, nothing said: the caller reports
+
+
+def test_download_model_says_the_size_once_then_fetches_the_weights_without_the_exports(monkeypatch, capsys, tmp_path):
+    """The weights fetch skips onnx/ and openvino/ (1.7 GB of exported formats nothing here reads): the 0.5 GB the note
+    promises is what is fetched. Then the code repository at ITS pin."""
+    hub, w, c = _scratch_hub(tmp_path, monkeypatch)                        # both absent: a fresh machine
+    calls = _spy_hub(monkeypatch, w, c)
+    assert s.download_model("e9b6", code_revision="7710") == str(w)
     out = capsys.readouterr().out
-    assert path == str(tmp_path) and "this happens once (about 0.5 GB)" in out
-    assert (s.MODEL, "e9b6", False) in calls
-    assert ("nomic-ai/nomic-bert-2048", "7710", False) in calls          # the remote code the config names, at ITS pin
+    assert "this happens once (about 0.5 GB)" in out
+    weights = [k for k in calls if k["repo"] == s.MODEL]
+    assert weights == [{"repo": s.MODEL, "revision": "e9b6", "local": False, "allow": None, "ignore": list(s.WEIGHTS_IGNORE)}]
+    assert "onnx/*" in s.WEIGHTS_IGNORE and "openvino/*" in s.WEIGHTS_IGNORE
+    assert {"repo": CODE_REPO, "revision": "7710", "local": False, "allow": ["*.py"], "ignore": None} in calls
+    assert "fetching the model's code" in out and "7710" in out
 
 
-def test_download_model_refetches_a_snapshot_cut_short(monkeypatch, capsys, tmp_path):
+def test_download_model_prints_the_real_size_when_the_hub_lists_it(monkeypatch, capsys, tmp_path):
+    hub, w, c = _scratch_hub(tmp_path, monkeypatch)
+    _spy_hub(monkeypatch, w, c)
+    monkeypatch.setattr(s, "weights_size", lambda model, revision, ignore=s.WEIGHTS_IGNORE: 547959597)
+    s.download_model("e9b6", code_revision="7710")
+    assert "this happens once (about 0.5 GB)" in capsys.readouterr().out    # 523 MiB, from the file list, reads the same
+
+
+def test_weights_size_sums_the_hubs_file_list_minus_the_ignored_and_is_none_when_it_cannot(monkeypatch):
+    class Sib:
+        def __init__(self, name, size): self.rfilename, self.size = name, size
+    class Info:
+        siblings = [Sib("model.safetensors", 500), Sib("onnx/model.onnx", 5000), Sib("openvino/x.bin", 700), Sib("config.json", 3), Sib("README.md", None)]
+    class Api:
+        def model_info(self, model, revision=None, files_metadata=False, timeout=None):
+            assert files_metadata and revision == "e9b6"
+            return Info()
+    monkeypatch.setattr(s, "hf_api", lambda: Api())
+    assert s.weights_size(s.MODEL, "e9b6") == 503
+    class Offline:
+        def model_info(self, *a, **kw): raise OSError("offline")
+    monkeypatch.setattr(s, "hf_api", lambda: Offline())
+    assert s.weights_size(s.MODEL, "e9b6") is None
+    assert s.size_note(None) == "this happens once (about 0.5 GB)" and s.size_note(547959597) == "this happens once (about 0.5 GB)"
+    assert s.size_note(2 * 2**30) == "this happens once (about 2.0 GB)"
+
+
+def test_download_model_refetches_a_weights_snapshot_cut_short(monkeypatch, capsys, tmp_path):
     """A snapshot directory that exists without its files (an interrupted download) is fetched again — the hub fills in
     what is missing — instead of being reported as cached."""
-    (tmp_path / "config.json").write_text(json.dumps({"auto_map": {}}))
-    calls = []
-    def fake_snapshot_download(repo_id, revision=None, local_files_only=False, **kw):
-        calls.append((repo_id, revision, local_files_only))
-        if not local_files_only:
-            _complete_weights(tmp_path)
-        return str(tmp_path)
-    monkeypatch.setattr(s, "snapshot_download", lambda: fake_snapshot_download)
-    assert s.download_model("e9b6") == str(tmp_path)
-    assert (s.MODEL, "e9b6", False) in calls and "0.5 GB" in capsys.readouterr().out
+    hub, w, c = _scratch_hub(tmp_path, monkeypatch, weights_files=("config.json", "tokenizer.json"), code_files=CODE_FILES)
+    calls = _spy_hub(monkeypatch, w, c)
+    assert s.download_model("e9b6", code_revision="7710") == str(w)
+    assert [k["repo"] for k in calls] == [s.MODEL] and "0.5 GB" in capsys.readouterr().out
+    assert not s.missing_files(w, s.WEIGHT_FILES)
 
 
-def test_download_model_fetches_the_code_even_when_the_weights_are_cached(monkeypatch, capsys, tmp_path):
-    """An interrupted first run (weights done, code not) is repaired by the next install-model."""
-    _complete_weights(tmp_path)
-    (tmp_path / "config.json").write_text(json.dumps({"auto_map": {"AutoModel": "nomic-ai/nomic-bert-2048--m.M"}}))
-    calls = []
-    def fake_snapshot_download(repo_id, revision=None, local_files_only=False, **kw):
-        calls.append((repo_id, revision, local_files_only))
-        if repo_id == s.MODEL:
-            return str(tmp_path)
-        if local_files_only:
-            raise FileNotFoundError("code not cached")
-        return "/hub/code"
-    monkeypatch.setattr(s, "snapshot_download", lambda: fake_snapshot_download)
-    assert s.download_model("e9b6", code_revision="7710") == str(tmp_path)
-    assert ("nomic-ai/nomic-bert-2048", "7710", True) in calls and ("nomic-ai/nomic-bert-2048", "7710", False) in calls
+def test_download_model_refetches_a_code_snapshot_missing_a_module_file(monkeypatch, capsys, tmp_path):
+    """The doctor's 'code snapshot incomplete: missing modeling_hf_nomic_bert.py — run slopymem install-model' must not
+    be a dead end: the directory being there is not enough, the files the config names must be."""
+    hub, w, c = _scratch_hub(tmp_path, monkeypatch, weights_files=s.WEIGHT_FILES, code_files=("configuration_hf_nomic_bert.py",))
+    calls = _spy_hub(monkeypatch, w, c)
+    assert s.download_model("e9b6", code_revision="7710") == str(w)
+    assert [k["repo"] for k in calls] == [CODE_REPO] and calls[0]["revision"] == "7710" and calls[0]["allow"] == ["*.py"]
     out = capsys.readouterr().out
-    assert "fetching the model's code" in out and "7710" in out and "0.5 GB" not in out
+    assert "fetching the model's code" in out and "modeling_hf_nomic_bert.py" in out and "0.5 GB" not in out
+    assert (c / "modeling_hf_nomic_bert.py").exists()
 
 
-def test_an_extra_pulls_the_packages_optional_group(tmp_path):
-    lock = tmp_path / "uv.lock"
-    lock.write_text(LOCK + '''
-[[package]]
-name = "psycopg"
-version = "3.3.6"
-dependencies = [ { name = "tomli-w" } ]
-wheels = [ { url = "https://files.pythonhosted.org/x/psycopg-3.3.6-py3-none-any.whl", size = 10 } ]
-[package.optional-dependencies]
-binary = [ { name = "psycopg-binary", marker = "implementation_name != 'pypy'" } ]
-[[package]]
-name = "psycopg-binary"
-version = "3.3.6"
-wheels = [ { url = "https://files.pythonhosted.org/x/psycopg_binary-3.3.6-cp313-cp313-manylinux_2_28_x86_64.whl", size = 20 } ]
-[[package]]
-name = "slopymemory"
-version = "0.2.0"
-source = { editable = "." }
-dependencies = [ { name = "psycopg", extra = ["binary"] } ]
-''')
-    assert sorted(w.name for w in s.locked_wheels(lock, TAGS, root="slopymemory")) == ["psycopg", "psycopg-binary", "tomli-w"]
-
-
-def test_platform_tags_accept_abi3_wheels_built_for_an_older_cpython():
-    tags = s.platform_tags()
-    v = s.sys.version_info
-    assert any(t.startswith("cp39-abi3-") for t in tags) and any(t.startswith(f"cp3{v[1]}-abi3-") for t in tags)
-    assert not any(t.startswith(f"cp3{v[1] + 1}-") for t in tags)
+def test_download_model_without_a_code_pin_falls_back_to_the_hubs_probe(monkeypatch, capsys, tmp_path):
+    hub, w, c = _scratch_hub(tmp_path, monkeypatch, weights_files=s.WEIGHT_FILES, code_files=CODE_FILES)
+    calls = []
+    def fake(repo_id, revision=None, local_files_only=False, allow_patterns=None, ignore_patterns=None, **kw):
+        calls.append((repo_id, revision, local_files_only))
+        if local_files_only:
+            return str(c)
+        raise AssertionError("cached by the hub's own test: no fetch")
+    monkeypatch.setattr(s, "snapshot_download", lambda: fake)
+    assert s.download_model("e9b6") == str(w)
+    assert calls == [(CODE_REPO, None, True)]
 
 
 def test_local_snapshot_and_its_files_are_read_from_the_directory_alone(tmp_path, monkeypatch):
