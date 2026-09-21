@@ -20,7 +20,6 @@ from .store import Store, all_stores, measure, store_problems
 
 WARN_TOTAL_GB = 1.0
 WARN_FREE_GB = 2.0
-MODEL = install_steps.MODEL
 
 
 @dataclass
@@ -145,13 +144,13 @@ def _model() -> Finding:
         from agent_memory.config import settings
     except ImportError as e:
         return Finding(False, f"the vendored substrate does not import, so the pin cannot be read: {e} — see SETUP.md#package")
-    pin = settings.embed_revision
-    where = install_steps.model_cache_dir(MODEL)
-    present = install_steps.cached_revisions(MODEL)
+    model, pin = settings.embed_model, settings.embed_revision
+    where = install_steps.model_cache_dir(model)
+    present = install_steps.cached_revisions(model)
     if pin in present:
-        return Finding(True, f"{MODEL} at revision {pin[:12]} in {where}")
+        return Finding(True, f"{model} at revision {pin[:12]} in {where}")
     if not present:
-        return Finding(False, f"{MODEL} is not in {where} — run `slopymem install-model` (once, about 0.5 GB); a server started offline fails without it")
+        return Finding(False, f"{model} is not in {where} — run `slopymem install-model` (once, about 0.5 GB); a server started offline fails without it")
     others = ", ".join(r[:12] for r in present)
     return Finding(False, f"{where} holds revision(s) {others} but not the pinned {pin[:12]} the stores' coordinates were embedded with. "
                           f"Changing the model or its revision is a migration (every store re-embedded), not a config edit: "

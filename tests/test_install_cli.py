@@ -83,7 +83,7 @@ def test_install_postgres_says_no_when_told_no(tmp_home, fake_pg):
 def test_install_model_downloads_the_pin_once_and_names_the_anchor_on_failure(tmp_home, monkeypatch):
     calls = []
     monkeypatch.setattr(install_steps, "model_cached", lambda rev, model=install_steps.MODEL: None)
-    monkeypatch.setattr(install_steps, "download_model", lambda rev: (calls.append(rev), "/hub/snap")[1])
+    monkeypatch.setattr(install_steps, "download_model", lambda rev, model=install_steps.MODEL: (calls.append(rev), "/hub/snap")[1])
     code, out = run(["install-model"], stdin="n\n")
     assert code == 1 and calls == [] and "0.5 GB" in out
     code, out = run(["install-model", "--yes"])
@@ -93,7 +93,7 @@ def test_install_model_downloads_the_pin_once_and_names_the_anchor_on_failure(tm
     code, out = run(["install-model"])                       # cached: nothing to ask
     assert code == 0 and "already" in out and len(calls) == 1
     monkeypatch.setattr(install_steps, "model_cached", lambda rev, model=install_steps.MODEL: None)
-    def boom(rev): raise OSError("no network")
+    def boom(rev, model=install_steps.MODEL): raise OSError("no network")
     monkeypatch.setattr(install_steps, "download_model", boom)
     code, out = run(["install-model", "--yes"])
     assert code == 1 and "no network" in out and "SETUP.md#model" in out

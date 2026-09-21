@@ -307,15 +307,16 @@ def cmd_install_postgres(a) -> int:
 
 def cmd_install_model(a) -> int:
     """The embedder at its pinned revision into the shared Hugging Face cache — once. Cached: nothing asked."""
-    from agent_memory.config import settings
-    if install_steps.model_cached(settings.embed_revision) is not None:
-        print(f"{install_steps.MODEL} at revision {settings.embed_revision[:12]} is already in the Hugging Face cache")
+    from agent_memory.config import settings          # the substrate's own model name and pin: one source of truth
+    model, pin = settings.embed_model, settings.embed_revision
+    if install_steps.model_cached(pin, model) is not None:
+        print(f"{model} at revision {pin[:12]} is already in the Hugging Face cache")
         return 0
-    print(f"download {install_steps.MODEL} at revision {settings.embed_revision[:12]} — {install_steps.MODEL_SIZE_NOTE}")
+    print(f"download {model} at revision {pin[:12]} — {install_steps.MODEL_SIZE_NOTE}")
     if not confirm("go on?", a.yes):
         return fail("nothing downloaded; the first server start will need it — see SETUP.md#model")
     try:
-        local = install_steps.download_model(settings.embed_revision)
+        local = install_steps.download_model(pin, model)
     except Exception as e:
         return fail(f"the model download failed: {e} — see SETUP.md#model")
     print(f"model ready: {local}")
@@ -373,12 +374,12 @@ def cmd_uninstall(a) -> int:
                 if pg.database_exists(st.database):
                     pg.drop_database(st.database)
                     print(f"dropped database {st.database} ({st.postgres} Postgres)")
-            except (InitRefused, Exception) as e:
+            except Exception as e:              # InitRefused carries its anchor; anything else is said as it is
                 rc = fail(f"{st.name}: database {st.database} not dropped: {e}")
         if pgdir.exists():
             try:
                 postgres("embedded").stop()
-            except (InitRefused, Exception) as e:
+            except Exception as e:
                 rc = fail(f"the embedded Postgres did not stop: {e}")
         rc |= _rmtree(stores_dir) | _rmtree(pgdir) | _rmtree(pgdir.with_name(pgdir.name + ".lock"))
     for h in to_unregister:
