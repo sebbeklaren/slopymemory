@@ -5,7 +5,7 @@ You are probably an agent asked to find out why memory is not working. Start her
 ## Installing
 
 ```bash
-git clone <this repository> && cd slopymemory
+git clone <the repository URL> slopymemory && cd slopymemory
 ./install.sh                      # asks before each step; --yes answers them; --help lists the flags
 ```
 
@@ -20,9 +20,10 @@ shared Hugging Face cache (`slopymem install-model`); **5** the launcher registe
 (`slopymem register --detected`; `--no-harness` skips it); **6** `slopymem doctor`. `SLOPYMEM_HOME` moves
 everything (venv, stores, embedded Postgres) elsewhere; the checkout can be deleted after the install.
 
-`slopymem uninstall` lists what it will remove — the venv, the registrations (each harness's own remove
-command, only where the launcher is registered), the offer line (only where present), the logs, the registry —
-and asks twice. The stores and the embedded Postgres are **kept** unless `--data`, which drops every store's
+`slopymem uninstall` lists what it will remove — the venv (stopping the embedded Postgres first, whose binaries
+live there; its data stays), the registrations (each harness's own remove command, on the entry whose command is
+our launcher — whatever it is named; a foreign entry called `memory` is never touched), the offer line (only where
+present), the logs, the registry — and asks twice. The stores and the embedded Postgres are **kept** unless `--data`, which drops every store's
 database through its own backend and deletes `stores/` and `pg/` after a third question that lists the store
 names and is never answered by `--yes`. `--yes` without `--data` is refused: the data left behind must be seen.
 
@@ -39,7 +40,8 @@ names and is never answered by `--yes`. `--yes` without `--data` is refused: the
 - **the server** — one process per store, on `127.0.0.1:<port>` (`store.toml`), log at `~/.slopymemory/logs/<name>.log`.
 - **slopymem** — the command: `init`, `link`, `unlink`, `list`, `start`, `stop`, `doctor`, `scan-store`, `register`, `remove`;
   the installer's `install-postgres`, `install-model`; `uninstall`.
-- **the model** — `nomic-embed-text-v1.5` at ONE pinned revision (`AM_EMBED_REVISION`), in `~/.cache/huggingface/hub`.
+- **the model** — `nomic-embed-text-v1.5` at ONE pinned revision (`AM_EMBED_REVISION`), and the code repository its
+  classes come from (`nomic-bert-2048`) at its own pin (`AM_EMBED_CODE_REVISION`), both in `~/.cache/huggingface/hub`.
   Every stored coordinate was embedded with that snapshot; a different one is a migration, not a setting.
 
 ## The three questions, in order

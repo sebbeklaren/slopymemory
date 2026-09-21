@@ -22,6 +22,10 @@ slopymem = "slopymemory.cli:main"
 slopymem-mcp = "slopymemory.launcher:main"
 
 [tool.uv]
+# A rebuild of this package whenever a source file changes: uv's default freshness check for a path source looks at
+# pyproject.toml only, so a pulled checkout with new code under src/ would otherwise install the previously built wheel
+# from the cache (seen: an installer run that shipped the old checks.py). The installer also passes --reinstall-package.
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*" }]
 # torch from the CPU index only: the CUDA build is 5.6 GB and useless here (CPU wheel measures ~1.3 GB)
 [[tool.uv.index]]
 name = "pytorch-cpu"
