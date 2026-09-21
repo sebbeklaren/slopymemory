@@ -54,6 +54,29 @@ def ensure_offer_line(f: Path, line: str) -> str:
     return "appended"
 
 
+def remove_offer_line(f: Path) -> bool:
+    """Take the offer line (this version or a stale one, found by its prefix) out of `f`, and the `# slopymemory`
+    heading directly above it — nothing else in the file changes, written atomically through a symlink at the
+    real file. False when the file has no such line (it is not touched). For `slopymem uninstall`."""
+    if offer_line_state(f, OFFER_LINE) == "absent":
+        return False
+    target = f.resolve()
+    mode = target.stat().st_mode & 0o7777
+    lines = target.read_text().split("\n")
+    for i, existing in enumerate(lines):
+        if existing.strip().startswith(OFFER_LINE_PREFIX):
+            start = i
+            if i > 0 and lines[i - 1].strip() == "# slopymemory":
+                start = i - 1
+                if start > 0 and lines[start - 1].strip() == "":      # the blank line `ensure_offer_line` put above the heading
+                    start -= 1
+            del lines[start:i + 1]
+            break
+    paths.write_atomic(target, "\n".join(lines))
+    target.chmod(mode)
+    return True
+
+
 def read_config(path: Path, parse: Callable[[str], dict]) -> dict | None:
     """Read a config file, parse it, and return the result. Returns None if missing or unparseable.
     On parse error, prints a message to stderr and returns None."""
@@ -98,6 +121,7 @@ class Harness:
     config_hint: str
     instructions_file: Callable[[], Path] | None
     offer_line: str = OFFER_LINE
+    unregister_cmd: Callable[[], list[str]] | None = None      # the inverse of register_cmd, for `slopymem uninstall`
 
 
 def launcher_path() -> str:
@@ -178,4 +202,35 @@ def _offer_line_step(h: Harness, yes: bool, confirm, quiet_when_present: bool = 
         print(f"{h.name}: the offer line could not be read or written in {f}: {e} — see SETUP.md#harnesses", file=sys.stderr)
         return 1
     print("offer line updated" if done == "replaced" else f"offer line appended to {f}")
+    return 0
+
+
+def register_detected(yes: bool) -> int:
+    """The installer's step 5: register the launcher in every harness found on this machine, and say when there
+    is none — a machine with no known harness is not a failure, it is told how to register later."""
+    if not detected():
+        print("no known harness detected (Claude Code, Codex, pi); register later with: slopymem register <harness>")
+        return 0
+    rc = 0
+    for h in detected():
+        rc |= register(h.id, yes)
+    return rc
+
+
+def unregister(h: Harness, launcher: str) -> int:
+    """Take the launcher out of one harness's MCP table with the harness's own command — only when it IS
+    registered there (another tool's entry is never touched). 0 when done or nothing to do; 1 with the reason on
+    stderr when the command fails or the harness has none (then the hint says how, by hand)."""
+    if not h.registered(launcher):
+        return 0
+    if h.unregister_cmd is None:
+        print(f"{h.name}: unregister by hand: {h.config_hint} — see SETUP.md#harnesses", file=sys.stderr)
+        return 1
+    cmd = h.unregister_cmd()
+    print(f"{h.name}: {' '.join(cmd)}")
+    try:
+        subprocess.run(cmd, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"{h.name}: unregistering failed: {e} — see SETUP.md#harnesses", file=sys.stderr)
+        return 1
     return 0

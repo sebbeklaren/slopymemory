@@ -16,6 +16,7 @@ HARNESS = Harness(
     detect=lambda: shutil.which("codex") is not None,
     registered=_registered,
     register_cmd=lambda launcher: ["codex", "mcp", "add", "memory", "--", launcher],
+    unregister_cmd=lambda: ["codex", "mcp", "remove", "memory"],
     config_hint="~/.codex/config.toml → [mcp_servers.memory] command = \"<launcher>\" (shared by the CLI, the IDE extension and ChatGPT Desktop's Codex mode)",
     instructions_file=lambda: Path.home() / ".codex" / "AGENTS.md",
 )

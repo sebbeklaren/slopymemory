@@ -1,0 +1,235 @@
+"""The installer's verbs (`install-postgres`, `install-model`, `register --detected`) and `uninstall`, against a
+temp home, a fake Postgres and fake harnesses. Nothing here touches the real home, a real harness or the network."""
+import io, sys
+from pathlib import Path
+import pytest
+from slopymemory import cli, harnesses, install_steps, provision, server as srv
+from slopymemory.harnesses import Harness
+from slopymemory.store import Store
+
+
+class FakePg:
+    def __init__(self): self.created = []; self.dropped = []; self.asked = []; self.running = False; self.vector = True; self.stops = 0
+    def database_exists(self, n): return n in self.created and n not in self.dropped
+    def database_size(self, n): return None
+    def create_database(self, n): self.created.append(n)
+    def drop_database(self, n): self.dropped.append(n)
+    def vector_installed(self, n): return self.vector
+    def has_pgvector(self): return True
+    def describe(self): return "fake Postgres"
+    def can_provision(self): return True
+    def is_running(self): return self.running
+    def stop(self): self.stops += 1; self.running = False; return True
+
+
+@pytest.fixture
+def fake_pg(monkeypatch):
+    pg = FakePg()
+    monkeypatch.setattr(cli, "postgres", lambda backend="system": (pg.asked.append(backend), pg)[1])
+    monkeypatch.setattr(cli.embedded_pg, "available", lambda: True)
+    monkeypatch.setattr(srv, "stop", lambda st: False)
+    return pg
+
+
+def run(argv, stdin=""):
+    sys.stdin = io.StringIO(stdin)
+    out = io.StringIO(); err = io.StringIO()
+    old = sys.stdout, sys.stderr; sys.stdout, sys.stderr = out, err
+    try:
+        code = cli.main(argv)
+    finally:
+        sys.stdout, sys.stderr = old
+    return code, out.getvalue() + err.getvalue()
+
+
+# --- install-postgres -------------------------------------------------------------------------------------------
+
+def test_install_postgres_offers_the_system_one_and_verifies_with_a_scratch_database(tmp_home, fake_pg):
+    code, out = run(["install-postgres"], stdin="y\ny\n")
+    assert code == 0 and "fake Postgres" in out and "use the system Postgres" in out
+    assert len(fake_pg.created) == 1 and fake_pg.created[0].startswith("slopymem_install_check_") and fake_pg.dropped == fake_pg.created
+    assert "system Postgres verified" in out and "scratch database" in out
+
+
+def test_install_postgres_falls_back_to_embedded_when_the_system_one_cannot(tmp_home, fake_pg, monkeypatch):
+    def cannot(): raise provision.InitRefused("psql not found — see SETUP.md#postgres")
+    monkeypatch.setattr(fake_pg, "can_provision", cannot)
+    code, out = run(["install-postgres", "--yes"])
+    assert code == 0 and "psql not found" in out and "embedded" in out and fake_pg.asked[-1] == "embedded"
+    assert fake_pg.stops == 1                    # the cluster was down before the check: it is left down after it
+
+
+def test_install_postgres_honours_the_request_and_refuses_a_backend_that_cannot(tmp_home, fake_pg, monkeypatch):
+    code, out = run(["install-postgres", "--postgres", "embedded", "--yes"])
+    assert code == 0 and "embedded Postgres verified" in out and fake_pg.asked[-1] == "embedded"
+    monkeypatch.setattr(cli.embedded_pg, "available", lambda: False)
+    code, out = run(["install-postgres", "--postgres", "embedded", "--yes"])
+    assert code == 1 and "SETUP.md#postgres" in out
+
+
+def test_install_postgres_fails_when_pgvector_did_not_install_and_says_the_anchor(tmp_home, fake_pg):
+    fake_pg.vector = False
+    code, out = run(["install-postgres", "--yes"])
+    assert code == 1 and "pgvector" in out and "SETUP.md#postgres" in out and fake_pg.dropped == fake_pg.created
+
+
+def test_install_postgres_says_no_when_told_no(tmp_home, fake_pg):
+    code, out = run(["install-postgres"], stdin="y\nn\n")
+    assert code == 1 and fake_pg.created == []
+
+
+# --- install-model ------------------------------------------------------------------------------------------------
+
+def test_install_model_downloads_the_pin_once_and_names_the_anchor_on_failure(tmp_home, monkeypatch):
+    calls = []
+    monkeypatch.setattr(install_steps, "model_cached", lambda rev, model=install_steps.MODEL: None)
+    monkeypatch.setattr(install_steps, "download_model", lambda rev: (calls.append(rev), "/hub/snap")[1])
+    code, out = run(["install-model"], stdin="n\n")
+    assert code == 1 and calls == [] and "0.5 GB" in out
+    code, out = run(["install-model", "--yes"])
+    from agent_memory.config import settings
+    assert code == 0 and calls == [settings.embed_revision] and "/hub/snap" in out
+    monkeypatch.setattr(install_steps, "model_cached", lambda rev, model=install_steps.MODEL: "/hub/snap")
+    code, out = run(["install-model"])                       # cached: nothing to ask
+    assert code == 0 and "already" in out and len(calls) == 1
+    monkeypatch.setattr(install_steps, "model_cached", lambda rev, model=install_steps.MODEL: None)
+    def boom(rev): raise OSError("no network")
+    monkeypatch.setattr(install_steps, "download_model", boom)
+    code, out = run(["install-model", "--yes"])
+    assert code == 1 and "no network" in out and "SETUP.md#model" in out
+
+
+# --- register --detected -------------------------------------------------------------------------------------------
+
+def _fake_harnesses(tmp_path, monkeypatch, ran):
+    def runner(cmd, **kw): ran.append(list(cmd))
+    monkeypatch.setattr(harnesses.subprocess, "run", runner)
+    instr = tmp_path / "instructions.md"
+    hs = [Harness(id="a", name="A", detect=lambda: True, registered=lambda lp: False,
+                  register_cmd=lambda lp: ["a-add", lp], unregister_cmd=lambda: ["a-remove"],
+                  config_hint="a hint", instructions_file=lambda: instr),
+          Harness(id="b", name="B", detect=lambda: True, registered=lambda lp: True,
+                  register_cmd=lambda lp: ["b-add", lp], unregister_cmd=lambda: ["b-remove"],
+                  config_hint="b hint", instructions_file=None),
+          Harness(id="c", name="C", detect=lambda: False, registered=lambda lp: True,
+                  register_cmd=lambda lp: ["c-add", lp], unregister_cmd=lambda: ["c-remove"],
+                  config_hint="c hint", instructions_file=None)]
+    monkeypatch.setattr(harnesses, "KNOWN", hs)
+    return hs, instr
+
+
+def test_register_detected_registers_only_what_is_there_and_says_so(tmp_home, tmp_path, monkeypatch):
+    ran = []
+    hs, instr = _fake_harnesses(tmp_path, monkeypatch, ran)
+    code, out = run(["register", "--detected", "--yes"])
+    assert code == 0 and ran == [["a-add", harnesses.launcher_path()]]            # b already registered, c not detected
+    assert "A:" in out and "B: already registered" in out and "C" not in out
+    assert instr.read_text().count(harnesses.OFFER_LINE) == 1
+    monkeypatch.setattr(harnesses, "KNOWN", [hs[2]])
+    code, out = run(["register", "--detected", "--yes"])
+    assert code == 0 and "no known harness detected" in out and "slopymem register" in out
+
+
+# --- uninstall -----------------------------------------------------------------------------------------------------
+
+def _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg, stores=("one", "two")):
+    venv = tmp_home / "venv" / "bin"; venv.mkdir(parents=True); (venv / "python").write_text("")
+    (tmp_home / "logs").mkdir(); (tmp_home / "logs" / "one.log").write_text("log")
+    (tmp_home / "pg").mkdir(); (tmp_home / "pg" / "PG_VERSION").write_text("18")
+    for i, name in enumerate(stores):
+        repo = tmp_path / name; repo.mkdir(); monkeypatch.chdir(repo)
+        assert run(["init", "--postgres", "embedded" if i else "system", "--yes"])[0] == 0
+    return tmp_home
+
+
+def test_uninstall_refuses_yes_without_data(tmp_home, tmp_path, monkeypatch, fake_pg):
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    code, out = run(["uninstall", "--yes"])
+    assert code == 2 and "--yes" in out and "--data" in out and (tmp_home / "venv").exists()
+
+
+def test_uninstall_lists_first_asks_twice_and_keeps_the_data(tmp_home, tmp_path, monkeypatch, fake_pg):
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    ran = []
+    hs, instr = _fake_harnesses(tmp_path, monkeypatch, ran)
+    instr.write_text(f"# mine\nkeep this\n\n# slopymemory\n{harnesses.OFFER_LINE}\n")
+    code, out = run(["uninstall"], stdin="y\nn\n")
+    assert code == 1 and (tmp_home / "venv").exists() and ran == []
+    head = out[:out.index("remove these?")]                                       # the list comes BEFORE the first question
+    assert str(tmp_home / "venv") in head and "B" in head and str(instr) in head and str(tmp_home / "logs") in head
+    assert "KEPT" in head and "one, two" in head and "--data" in head
+    code, out = run(["uninstall"], stdin="y\ny\n")
+    assert code == 0
+    assert not (tmp_home / "venv").exists() and not (tmp_home / "logs").exists() and not (tmp_home / "registry.toml").exists()
+    assert Store.exists("one") and Store.exists("two") and (tmp_home / "pg" / "PG_VERSION").exists()
+    assert fake_pg.dropped == []
+    assert ran == [["b-remove"]]                                                 # registered and detected: B only
+    assert instr.read_text() == "# mine\nkeep this\n"                            # the line and its heading, nothing else
+
+
+def test_uninstall_data_asks_a_third_time_by_name_and_drops_through_each_backend(tmp_home, tmp_path, monkeypatch, fake_pg):
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    _fake_harnesses(tmp_path, monkeypatch, [])
+    stopped = []
+    monkeypatch.setattr(srv, "stop", lambda st: (stopped.append(st.name), True)[1])
+    fake_pg.asked.clear()
+    code, out = run(["uninstall", "--data"], stdin="y\ny\nn\n")
+    assert code == 1 and Store.exists("one") and fake_pg.dropped == [] and (tmp_home / "venv").exists()
+    third = out[out.rindex("really?"):]
+    assert "one" in third and "two" in third
+    code, out = run(["uninstall", "--data"], stdin="y\ny\ny\n")
+    assert code == 0
+    assert sorted(fake_pg.dropped) == ["one_memory", "two_memory"] and sorted(stopped) == ["one", "two"]
+    assert "system" in fake_pg.asked and "embedded" in fake_pg.asked                # each store's OWN backend
+    assert not (tmp_home / "stores").exists() and not (tmp_home / "pg").exists() and not (tmp_home / "venv").exists()
+    assert not tmp_home.exists()                                                     # nothing left: the home goes too
+
+
+def test_uninstall_data_with_yes_still_asks_the_third_question(tmp_home, tmp_path, monkeypatch, fake_pg):
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    _fake_harnesses(tmp_path, monkeypatch, [])
+    code, out = run(["uninstall", "--data", "--yes"], stdin="n\n")
+    assert code == 1 and Store.exists("one") and "remove these?" not in out and "one" in out
+    code, out = run(["uninstall", "--data", "--yes"], stdin="y\n")
+    assert code == 0 and sorted(fake_pg.dropped) == ["one_memory", "two_memory"]
+
+
+def test_uninstall_reports_a_failing_unregister_and_goes_on(tmp_home, tmp_path, monkeypatch, fake_pg):
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    hs, instr = _fake_harnesses(tmp_path, monkeypatch, [])
+    import subprocess
+    def boom(cmd, **kw): raise subprocess.CalledProcessError(1, cmd)
+    monkeypatch.setattr(harnesses.subprocess, "run", boom)
+    code, out = run(["uninstall"], stdin="y\ny\n")
+    assert code == 1 and "B" in out and "SETUP.md#harnesses" in out
+    assert not (tmp_home / "venv").exists()                                          # the rest was still removed
+
+
+def test_uninstall_on_a_home_that_is_not_there_says_so(tmp_home, fake_pg, monkeypatch, tmp_path):
+    hs, _ = _fake_harnesses(tmp_path, monkeypatch, [])
+    monkeypatch.setattr(harnesses, "KNOWN", [hs[0], hs[2]])                     # nothing registered anywhere
+    code, out = run(["uninstall"], stdin="y\ny\n")
+    assert code == 0 and "nothing to uninstall" in out and "remove these?" not in out
+    monkeypatch.setattr(harnesses, "KNOWN", hs)                                  # a registration alone IS something to remove
+    code, out = run(["uninstall"], stdin="y\ny\n")
+    assert code == 0 and "B: b-remove" in out
+
+
+def test_remove_offer_line_takes_the_line_and_its_heading_only(tmp_path):
+    f = tmp_path / "CLAUDE.md"
+    f.write_text(f"# mine\nkeep\n\n# slopymemory\n{harnesses.OFFER_LINE}\n\n# after\nalso keep\n")
+    assert harnesses.remove_offer_line(f) is True
+    assert f.read_text() == "# mine\nkeep\n\n# after\nalso keep\n"
+    assert harnesses.remove_offer_line(f) is False                                  # absent: untouched, says so
+    f.write_text("just text\nIf the memory tools show only an older line\n")       # a stale line goes too
+    assert harnesses.remove_offer_line(f) is True and f.read_text() == "just text\n"
+    link = tmp_path / "link.md"; target = tmp_path / "target.md"
+    target.write_text(f"a\n# slopymemory\n{harnesses.OFFER_LINE}\n"); link.symlink_to(target)
+    assert harnesses.remove_offer_line(link) is True and link.is_symlink() and target.read_text() == "a\n"
+
+
+def test_known_harnesses_have_an_unregister_where_they_have_a_register():
+    from slopymemory.harnesses import claude_code, codex, pi
+    assert claude_code.HARNESS.unregister_cmd()[:3] == ["claude", "mcp", "remove"] and "user" in claude_code.HARNESS.unregister_cmd()
+    assert codex.HARNESS.unregister_cmd()[:3] == ["codex", "mcp", "remove"]
+    assert pi.HARNESS.unregister_cmd is None

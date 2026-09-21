@@ -3,15 +3,17 @@
 implementation, the CLI is the reference."""
 from __future__ import annotations
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
 import psycopg
-from . import embedded_pg, paths, server as srv
+from . import embedded_pg, install_steps, paths, server as srv
 from .checks import run_all
 from .embedded_pg import EmbeddedPostgres
-from .harnesses import register
-from .provision import InitRefused, SystemPostgres, apply_init, choose_backend, plan_init, refuse_unsuitable_dir
+from . import harnesses
+from .harnesses import register, register_detected
+from .provision import InitRefused, SystemPostgres, TEMPLATE_HINT, apply_init, choose_backend, plan_init, refuse_unsuitable_dir
 from .paths import ConfigError
 from .registry import Registry
 from .store import Store, all_stores, store_problems, valid_name
@@ -240,7 +242,187 @@ def cmd_scan_store(a) -> int:
 
 
 def cmd_register(a) -> int:
+    if a.detected:
+        if a.harness is not None:
+            return fail("give a harness name OR --detected, not both — see SETUP.md#harnesses")
+        return register_detected(a.yes)
     return register(a.harness, a.yes)
+
+
+# --- the installer's verbs: each prints, asks unless --yes, is idempotent, names SETUP.md#<id> on failure ---------
+
+def cmd_install_postgres(a) -> int:
+    """Which Postgres new stores go on, verified: a scratch database is created, pgvector checked IN it, and it is
+    dropped. `--postgres` names one; otherwise the system Postgres is probed and offered, else the embedded one
+    (whose data dir this creates — from then on `init` defaults to it). A cluster that was down is left down."""
+    system = postgres("system")
+    embedded_ok = embedded_pg.available()
+    requested = a.postgres
+    if requested is None:
+        pgdir = paths.embedded_pg_dir()
+        if pgdir.exists() and embedded_ok:
+            print(f"the embedded Postgres is already set up under {pgdir}; new stores go on it")
+            requested = "embedded"
+        else:
+            try:
+                can, why = system.can_provision(), None
+            except InitRefused as e:
+                can, why = False, str(e)
+            if can:
+                print(f"found: {system.describe()}")
+                requested = "system" if confirm("use the system Postgres for new stores? (no → the embedded one)", a.yes) else "embedded"
+            else:
+                print(f"the system Postgres cannot provision stores here: {why or TEMPLATE_HINT}")
+                print("new stores go on the embedded Postgres (PostgreSQL 18 + pgvector from the embedded-postgres wheel, "
+                      f"under {pgdir}, unix socket only)")
+                requested = "embedded"
+    try:
+        choice = choose_backend(system, embedded_ok, requested)
+    except InitRefused as e:
+        return fail(str(e))
+    pg = postgres(choice.backend)
+    scratch = f"slopymem_install_check_{os.getpid()}"
+    print(f"verify the {choice.backend} Postgres with a scratch database {scratch}: create it, check pgvector installs in it, drop it")
+    if not confirm("go on?", a.yes):
+        return fail("nothing verified")
+    was_running = pg.is_running() if choice.backend == "embedded" else True
+    vector = None
+    try:
+        pg.create_database(scratch)
+        try:
+            vector = pg.vector_installed(scratch)
+        finally:
+            pg.drop_database(scratch)
+    except InitRefused as e:
+        return fail(str(e))
+    except Exception as e:
+        return fail(f"{choice.backend} Postgres: the scratch database check failed: {e} — see SETUP.md#postgres")
+    if choice.backend == "embedded" and not was_running:
+        pg.stop()                                   # the check started it; a store's server starts it again when needed
+    if not vector:
+        return fail(f"{choice.backend} Postgres: the scratch database was created but pgvector did not install in it — see SETUP.md#postgres")
+    print(f"{choice.backend} Postgres verified: {pg.describe()}; new stores go on it")
+    return 0
+
+
+def cmd_install_model(a) -> int:
+    """The embedder at its pinned revision into the shared Hugging Face cache — once. Cached: nothing asked."""
+    from agent_memory.config import settings
+    if install_steps.model_cached(settings.embed_revision) is not None:
+        print(f"{install_steps.MODEL} at revision {settings.embed_revision[:12]} is already in the Hugging Face cache")
+        return 0
+    print(f"download {install_steps.MODEL} at revision {settings.embed_revision[:12]} — {install_steps.MODEL_SIZE_NOTE}")
+    if not confirm("go on?", a.yes):
+        return fail("nothing downloaded; the first server start will need it — see SETUP.md#model")
+    try:
+        local = install_steps.download_model(settings.embed_revision)
+    except Exception as e:
+        return fail(f"the model download failed: {e} — see SETUP.md#model")
+    print(f"model ready: {local}")
+    return 0
+
+
+def cmd_uninstall(a) -> int:
+    """Everything the install put on the machine, listed first, then asked about twice: the venv, the launcher's
+    registrations (each harness's own remove command, only where it IS registered), the offer line (only where
+    present), the logs and the registry. The stores and the embedded Postgres are KEPT unless --data, which drops
+    every store's database through its own backend and deletes stores/ and pg/ — after a third question that lists
+    the store names and is never answered by --yes. --yes without --data is refused: the data left behind must be
+    seen."""
+    if a.yes and not a.data:
+        return fail("uninstall refuses --yes without --data: the stores stay behind and you must see that; run it "
+                    "without --yes, or add --data to remove the stores too (asked a third time, by name)", code=2)
+    home, venv, logs, reg = paths.home(), paths.home() / "venv", paths.logs_dir(), paths.registry_file()
+    stores_dir, pgdir = paths.stores_dir(), paths.embedded_pg_dir()
+    stores = all_stores()
+    lp = harnesses.launcher_path()
+    to_unregister = [h for h in harnesses.detected() if h.registered(lp)]
+    offer_files = [(h, h.instructions_file()) for h in harnesses.KNOWN if h.instructions_file is not None
+                   and harnesses.offer_line_state(h.instructions_file(), h.offer_line) != "absent"]
+    names = ", ".join(st.name for st in stores) or "none"
+    if not home.exists() and not to_unregister and not offer_files:
+        print(f"nothing to uninstall: {home} does not exist and no harness has the launcher registered"); return 0
+    print("uninstall will remove:")
+    print(f"  the venv {venv}" + ("" if venv.exists() else " (not there)"))
+    print("  harness registrations: " + (", ".join(h.name for h in to_unregister) or "none"))
+    print("  the offer line in: " + (", ".join(str(f) for _, f in offer_files) or "none present"))
+    print(f"  {logs} and {reg}")
+    if a.data:
+        print(f"  --data: the databases of {len(stores)} store(s) ({names}), then {stores_dir} and {pgdir}")
+    else:
+        print(f"  KEPT: {stores_dir} ({len(stores)} store(s): {names}) and {pgdir} — add --data to remove them too")
+    if not confirm("remove these?", a.yes):
+        return fail("nothing removed")
+    if not confirm("really? this cannot be undone", a.yes):
+        return fail("nothing removed")
+    rc = 0
+    if a.data:
+        print(f"the stores whose databases will be DROPPED: {names}")
+        print("type y to drop them (--yes does not answer this one): ", end="", flush=True)
+        if sys.stdin.readline().strip().lower() != "y":
+            return fail("nothing removed")
+    for st in stores:                       # the servers first, in both modes: the venv they run from is going
+        try:
+            srv.stop(st)
+        except RuntimeError as e:
+            rc = fail(str(e))
+    if a.data:
+        for st in stores:
+            pg = postgres(st.postgres)
+            try:
+                if pg.database_exists(st.database):
+                    pg.drop_database(st.database)
+                    print(f"dropped database {st.database} ({st.postgres} Postgres)")
+            except (InitRefused, Exception) as e:
+                rc = fail(f"{st.name}: database {st.database} not dropped: {e}")
+        if pgdir.exists():
+            try:
+                postgres("embedded").stop()
+            except (InitRefused, Exception) as e:
+                rc = fail(f"the embedded Postgres did not stop: {e}")
+        rc |= _rmtree(stores_dir) | _rmtree(pgdir) | _rmtree(pgdir.with_name(pgdir.name + ".lock"))
+    for h in to_unregister:
+        rc |= harnesses.unregister(h, lp)
+    for h, f in offer_files:
+        try:
+            if harnesses.remove_offer_line(f):
+                print(f"offer line removed from {f}")
+        except OSError as e:
+            rc = fail(f"{h.name}: the offer line could not be removed from {f}: {e} — see SETUP.md#harnesses")
+    rc |= _rmtree(logs)
+    if reg.exists():
+        try:
+            reg.unlink()
+        except OSError as e:
+            rc = fail(f"{reg}: {e}")
+    rc |= _rmtree(venv)                     # last: this very process runs from it
+    try:
+        if home.exists() and not any(home.iterdir()):
+            home.rmdir(); print(f"removed {home}")
+        elif home.exists():
+            print(f"left {home} with: {', '.join(sorted(p.name for p in home.iterdir()))}")
+    except OSError as e:
+        rc = fail(f"{home}: {e}")
+    print("uninstalled" + (" with errors above" if rc else ""))
+    return rc
+
+
+def _rmtree(path: Path) -> int:
+    """Remove a tree, 0 or 1 with every reason said; a path that is not there is nothing to do."""
+    if not path.exists() and not path.is_symlink():
+        return 0
+    errors = []
+    if path.is_symlink() or path.is_file():
+        try:
+            path.unlink()
+        except OSError as e:
+            errors.append(f"{path}: {e}")
+    else:
+        shutil.rmtree(path, onexc=lambda fn, p, e: errors.append(f"{p}: {e}"))
+    if errors:
+        return fail("not fully removed: " + "; ".join(errors))
+    print(f"removed {path}")
+    return 0
 
 
 def build() -> argparse.ArgumentParser:
@@ -257,7 +439,15 @@ def build() -> argparse.ArgumentParser:
     s = sub.add_parser("remove"); s.add_argument("store"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_remove)
     s = sub.add_parser("doctor"); s.set_defaults(fn=cmd_doctor)
     s = sub.add_parser("scan-store", help="report memories that look like secrets (never deletes)"); s.add_argument("store"); s.set_defaults(fn=cmd_scan_store)
-    s = sub.add_parser("register"); s.add_argument("harness", nargs="?"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_register)
+    s = sub.add_parser("register"); s.add_argument("harness", nargs="?"); s.add_argument("--detected", action="store_true", help="every harness found on this machine")
+    s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_register)
+    s = sub.add_parser("install-postgres", help="choose and verify the Postgres new stores go on (the installer's step 3)")
+    s.add_argument("--postgres", choices=["system", "embedded"]); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_install_postgres)
+    s = sub.add_parser("install-model", help="the embedder at its pinned revision into the Hugging Face cache, once (step 4)")
+    s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_install_model)
+    s = sub.add_parser("uninstall", help="remove the install; the stores are kept unless --data")
+    s.add_argument("--yes", action="store_true"); s.add_argument("--data", action="store_true", help="also drop every store's database and delete stores/ and pg/")
+    s.set_defaults(fn=cmd_uninstall)
     return p
 
 

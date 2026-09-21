@@ -221,6 +221,11 @@ class EmbeddedPostgres:
         name = ident(name)
         self._exec(f"drop database {name}")
 
+    def vector_installed(self, name: str) -> bool:
+        """Is the vector extension installed IN this database (not merely shipped by the wheel)?"""
+        name = ident(name)
+        return self._one("select 1 from pg_extension where extname = 'vector'", database=name) == (1,)
+
     def database_size(self, name: str) -> int | None:
         """pg_database_size in bytes; None when the cluster is down (the caller says so — a size is never worth a
         start) or cannot answer."""
