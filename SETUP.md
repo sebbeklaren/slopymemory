@@ -13,7 +13,7 @@ You are probably an agent asked to find out why memory is not working. Start her
   (`postgres = "system" | "embedded"`); `slopymem init --postgres …` chooses for a new store.
 - **the registry** — `~/.slopymemory/registry.toml`: directory prefix → store name. Longest prefix wins.
 - **the server** — one process per store, on `127.0.0.1:<port>` (`store.toml`), log at `~/.slopymemory/logs/<name>.log`.
-- **slopymem** — the command: `init`, `link`, `unlink`, `list`, `start`, `stop`, `doctor`, `register`, `remove`.
+- **slopymem** — the command: `init`, `link`, `unlink`, `list`, `start`, `stop`, `doctor`, `scan-store`, `register`, `remove`.
 
 ## The three questions, in order
 
@@ -155,6 +155,20 @@ tail -50 ~/.slopymemory/logs/<store>.log
 ```
 
 **Fix:** read the line; the error names its anchor
+
+## secrets
+
+**Symptom:** an agent tried to save a key or password
+
+**Verifies:** refused saves per store from the invocation logs (count, kinds, first/last time; the texts were never logged); existing stores can be scanned with `slopymem scan-store <name>`, which reports and never deletes
+
+**See for yourself:**
+
+```bash
+slopymem scan-store <name>
+```
+
+**Fix:** remove the memory by hand; tell the agent to save where the secret lives
 
 ## local-paths
 

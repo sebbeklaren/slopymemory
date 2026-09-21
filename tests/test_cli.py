@@ -222,3 +222,76 @@ def test_remove_drops_the_database_on_the_stores_own_backend(tmp_home, tmp_path,
     fake_pg.asked.clear()
     code, out = run(["remove", "proj"], stdin="y\nproj\n")
     assert code == 0 and fake_pg.dropped == ["proj_memory"] and set(fake_pg.asked) == {"embedded"}
+
+
+# --- scan-store: reports memories that look like secrets, never deletes ---
+
+def test_scan_store_reports_hits_by_id_and_kind_and_never_deletes(tmp_home, tmp_path, fake_pg, monkeypatch):
+    import datetime as dt
+    repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
+    assert run(["init", "--yes"])[0] == 0
+    asked, deleted = [], []
+    rows = [("m1", dt.datetime(1999, 1, 2, 3, 4, tzinfo=dt.timezone.utc), "the decision was to keep the port"),
+            ("m2", dt.datetime(1999, 1, 3, 4, 5, tzinfo=dt.timezone.utc), "deploy token ghp_" + "c" * 36)]
+    monkeypatch.setattr(cli, "read_memories", lambda st: (asked.append(st.name), rows)[1])
+    code, out = run(["scan-store", "proj"])
+    assert code == 0 and asked == ["proj"] and deleted == []
+    assert "m2  1999-01-03 04:05  github_token" in out and "m1" not in out     # only the hits are listed
+    assert "1 of 2 memories look like they carry a secret" in out
+    assert "review and remove by hand: slopymem shows, never deletes" in out and "SETUP.md#secrets" in out
+    assert "ghp_" not in out                                              # the text itself is never printed
+
+
+def test_scan_store_says_when_a_store_is_clean_and_refuses_bad_names(tmp_home, tmp_path, fake_pg, monkeypatch):
+    repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
+    assert run(["init", "--yes"])[0] == 0
+    monkeypatch.setattr(cli, "read_memories", lambda st: [("m1", None, "plain")])
+    code, out = run(["scan-store", "proj"])
+    assert code == 0 and "0 of 1 memories look like they carry a secret" in out
+    code, out = run(["scan-store", "nope"])
+    assert code == 1 and "no store named nope" in out and "SETUP.md#registry" in out
+    code, out = run(["scan-store", "Bad Name"])
+    assert code == 1 and "not a valid store name" in out
+
+
+def test_scan_store_reports_an_unreachable_database_instead_of_a_traceback(tmp_home, tmp_path, fake_pg, monkeypatch):
+    repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
+    assert run(["init", "--yes"])[0] == 0
+    import psycopg
+    def boom(st): raise psycopg.OperationalError("connection refused")
+    monkeypatch.setattr(cli, "read_memories", boom)
+    code, out = run(["scan-store", "proj"])
+    assert code == 1 and "connection refused" in out and "SETUP.md#postgres" in out
+
+
+def test_read_memories_uses_the_stores_own_dsn(tmp_home, tmp_path, fake_pg, monkeypatch):
+    """The DSN is the one the server itself connects with (adopted stores override it in [env]), and the
+    read is a plain SELECT on m3_memory — no write can be issued through this path."""
+    repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
+    assert run(["init", "--yes"])[0] == 0
+    st = Store.load("proj"); st.env = {"DATABASE_URL": "postgresql://someone@/elsewhere_memory"}; st.save()
+    seen = {}
+    class Cur:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def execute(self, sql, *a): seen["sql"] = sql
+        def fetchall(self): return [("m1", None, "t")]
+    class Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def cursor(self): return Cur()
+    monkeypatch.setattr(cli.psycopg, "connect", lambda dsn, **kw: (seen.update(dsn=dsn, kw=kw), Conn())[1])
+    assert cli.read_memories(Store.load("proj")) == [("m1", None, "t")]
+    assert seen["dsn"] == "postgresql://someone@/elsewhere_memory"
+    assert seen["sql"].strip().upper().startswith("SELECT") and "m3_memory" in seen["sql"]
+
+
+def test_scan_store_names_an_embedded_postgres_that_is_down(tmp_home, tmp_path, fake_pg, monkeypatch):
+    repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
+    assert run(["init", "--postgres", "embedded", "--yes"])[0] == 0
+    import psycopg
+    def boom(st): raise psycopg.OperationalError("connection refused")
+    monkeypatch.setattr(cli, "read_memories", boom)
+    fake_pg.running = False
+    code, out = run(["scan-store", "proj"])
+    assert code == 1 and "embedded Postgres is not running" in out and "slopymem start proj" in out and "SETUP.md#postgres" in out

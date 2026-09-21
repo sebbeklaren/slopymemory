@@ -6,6 +6,7 @@ import argparse
 import shutil
 import sys
 from pathlib import Path
+import psycopg
 from . import embedded_pg, paths, server as srv
 from .checks import run_all
 from .embedded_pg import EmbeddedPostgres
@@ -195,6 +196,48 @@ def cmd_doctor(a) -> int:
     return run_all()
 
 
+def read_memories(st: Store) -> list[tuple]:
+    """Every memory of a store as (memory_id, created_at, text), read over the DSN the store's own server connects
+    with (an adopted store names its own in [env]) — one SELECT, nothing else can be issued through this path."""
+    with psycopg.connect(st.server_env()["DATABASE_URL"], connect_timeout=10) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT memory_id, created_at, text FROM m3_memory ORDER BY created_at")
+            return cur.fetchall()
+
+
+def cmd_scan_store(a) -> int:
+    """A REPORT of the memories that look like they carry a secret — the same test `memory_save` refuses new
+    saves with, run over what is already stored. Shows memory_id, when, and the kind; never the text (the point
+    is not to repeat it), and never deletes: the memories are the user's."""
+    if (rc := _bad_name(a.store)) is not None:
+        return rc
+    if not Store.exists(a.store):
+        return fail(f"no store named {a.store} — `slopymem list` — see SETUP.md#registry")
+    st = Store.load(a.store)
+    try:
+        from agent_memory.guard import find_secret     # the vendored substrate's guard: one test for saves and scans
+    except ImportError as e:
+        return fail(f"the vendored substrate does not import: {e} — see SETUP.md#package")
+    try:
+        rows = read_memories(st)
+    except psycopg.Error as e:
+        why = str(e).strip()
+        if st.postgres == "embedded" and not postgres("embedded").is_running():
+            why = f"the embedded Postgres is not running (it starts with the store's server: `slopymem start {st.name}`)"
+        return fail(f"{st.name}: cannot read database {st.database}: {why} — see SETUP.md#postgres")
+    hits = 0
+    for memory_id, created, text in rows:
+        s = find_secret(text)
+        if s is None:
+            continue
+        hits += 1
+        when = created.strftime("%Y-%m-%d %H:%M") if created is not None else "?"
+        print(f"{memory_id}  {when}  {s.kind}")
+    print(f"{hits} of {len(rows)} memories look like they carry a secret — review and remove by hand: "
+          f"slopymem shows, never deletes — see SETUP.md#secrets")
+    return 0
+
+
 def cmd_register(a) -> int:
     return register(a.harness, a.yes)
 
@@ -212,6 +255,7 @@ def build() -> argparse.ArgumentParser:
     s = sub.add_parser("stop"); s.add_argument("store", nargs="?"); s.add_argument("--all", action="store_true"); s.set_defaults(fn=cmd_stop)
     s = sub.add_parser("remove"); s.add_argument("store"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_remove)
     s = sub.add_parser("doctor"); s.set_defaults(fn=cmd_doctor)
+    s = sub.add_parser("scan-store", help="report memories that look like secrets (never deletes)"); s.add_argument("store"); s.set_defaults(fn=cmd_scan_store)
     s = sub.add_parser("register"); s.add_argument("harness", nargs="?"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_register)
     return p
 

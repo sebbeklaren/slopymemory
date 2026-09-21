@@ -1,7 +1,9 @@
 """The one list of checks: `doctor` runs it, SETUP.md is generated from it. Each check names the
 symptom an agent will be shown, what it verifies, the command that shows the same thing, the fix."""
 from __future__ import annotations
+import datetime as dt
 import importlib.metadata as md
+import json
 import os
 import shutil
 import sys
@@ -226,6 +228,47 @@ def _logs() -> Finding:
     return Finding(not unreadable, "; ".join(lines) or "no error lines in any server log")
 
 
+def _when(t) -> str:
+    try:
+        return dt.datetime.fromtimestamp(float(t)).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "?"
+
+
+def _secrets() -> Finding:
+    """Saves the server REFUSED as secrets, per store, from its invocation log: the count, the kinds and when.
+    Informational (ok stays True) — the guard doing its job is not a broken machine — but a log that cannot be
+    read IS a failure, as for `logs`: the check would otherwise read as 'nothing refused'. The texts were never
+    logged, so there is nothing here to repeat."""
+    rows, unreadable = [], False
+    for st in all_stores():
+        f = Path(st.server_env()["AM_MCP_INVOCATION_LOG"])
+        if not f.exists():
+            continue
+        first, refused, kinds = None, [], Counter()
+        try:
+            with open(f, errors="ignore") as log:
+                for line in log:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue                    # a torn line: not a record, not a failure of the check
+                    if not isinstance(r, dict):
+                        continue
+                    if first is None:
+                        first = r.get("t")
+                    if r.get("refused") == "secret":
+                        refused.append(r.get("t")); kinds[str(r.get("kind"))] += 1
+        except OSError as e:
+            rows.append(f"{st.name}: invocation log unreadable: {e}"); unreadable = True
+            continue
+        if refused:
+            kind_list = ", ".join(f"{k} x{n}" for k, n in sorted(kinds.items()))
+            rows.append(f"{st.name}: {len(refused)} save(s) refused as secrets since {_when(first)} "
+                        f"(first {_when(refused[0])}, last {_when(refused[-1])}; {kind_list})")
+    return Finding(not unreadable, "; ".join(rows) or "no save refused as a secret in any store's invocation log")
+
+
 def _local_paths() -> Finding:
     import slopymemory
     root = Path(slopymemory.__file__).parent
@@ -259,6 +302,10 @@ CHECKS: list[Check] = [
           "du -sh ~/.slopymemory; df -h ~", "slopymem list shows per-store sizes; remove a store you no longer want", _space),
     Check("logs", "something failed and nobody knows what", "the last error line of each server log (tail of the last 64 KB); error lines are reported, not failed; an unreadable log fails",
           "tail -50 ~/.slopymemory/logs/<store>.log", "read the line; the error names its anchor", _logs),
+    Check("secrets", "an agent tried to save a key or password",
+          "refused saves per store from the invocation logs (count, kinds, first/last time; the texts were never logged); "
+          "existing stores can be scanned with `slopymem scan-store <name>`, which reports and never deletes",
+          "slopymem scan-store <name>", "remove the memory by hand; tell the agent to save where the secret lives", _secrets),
     Check("local-paths", "a leak of the author's machine into the package", "no installed file contains a machine-local path",
           "grep -r '/home/' ~/.slopymemory/venv/lib/python3.13/site-packages/slopymemory", "report it — the export scanner missed it", _local_paths),
 ]

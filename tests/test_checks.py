@@ -1,9 +1,10 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 from slopymemory import checks
 from slopymemory.store import Store
 
 
-IDS = ["python", "package", "postgres", "model", "registry", "servers", "harnesses", "space", "logs", "local-paths"]
+IDS = ["python", "package", "postgres", "model", "registry", "servers", "harnesses", "space", "logs", "secrets", "local-paths"]
 
 
 def test_every_check_has_an_id_symptom_verify_and_fix():
@@ -248,3 +249,37 @@ def test_postgres_check_reports_an_embedded_data_dir_nobody_uses_yet(tmp_home, m
     monkeypatch.setattr(checks, "EmbeddedPostgres", FakeEpg)
     f = checks.by_id("postgres").run()
     assert f.ok is True and "embedded: running" in f.detail and "0 store" in f.detail
+
+
+def _log_record(t, **kw):
+    import json
+    return json.dumps({"tool": "memory_save", "t": t, **kw}) + "\n"
+
+
+def test_secrets_check_counts_refused_saves_per_store_from_the_invocation_log(tmp_home):
+    """Refusals are informational (ok stays True): the guard doing its job is not a broken machine. The count,
+    the kinds and the first/last refusal times are what the user needs; the texts were never logged."""
+    a = Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system"); a.save()
+    log = Path(a.server_env()["AM_MCP_INVOCATION_LOG"]); log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(_log_record(915278400.0, text="fine", status="saved")
+                   + _log_record(915364800.0, refused="secret", kind="github_token", status="refused")
+                   + "not json at all\n"
+                   + _log_record(915451200.0, refused="secret", kind="high_entropy_token", status="refused"))
+    b = Store(name="b", dialect="coding", port=8781, database="b_db", postgres="system"); b.save()   # no log yet
+    f = checks.by_id("secrets").run()
+    assert f.ok is True
+    assert "a: 2 save(s) refused as secrets" in f.detail and "github_token" in f.detail and "high_entropy_token" in f.detail
+    assert "since 1999-01-02" in f.detail and "first 1999-01-03" in f.detail and "last 1999-01-04" in f.detail
+    assert "b:" not in f.detail
+
+
+def test_secrets_check_is_quiet_when_nothing_was_refused_and_fails_on_an_unreadable_log(tmp_home):
+    a = Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system"); a.save()
+    log = Path(a.server_env()["AM_MCP_INVOCATION_LOG"]); log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(_log_record(915278400.0, text="fine", status="saved"))
+    f = checks.by_id("secrets").run()
+    assert f.ok is True and "no save refused as a secret" in f.detail
+    log.unlink(); log.mkdir()                                   # a directory where the log should be: unreadable
+    f = checks.by_id("secrets").run()
+    assert f.ok is False and "a: invocation log unreadable" in f.detail
+    assert "scan-store" in checks.by_id("secrets").verify and "scan-store" in checks.by_id("secrets").command

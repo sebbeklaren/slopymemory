@@ -13,7 +13,7 @@ You are probably an agent asked to find out why memory is not working. Start her
   (`postgres = "system" | "embedded"`); `slopymem init --postgres …` chooses for a new store.
 - **the registry** — `~/.slopymemory/registry.toml`: directory prefix → store name. Longest prefix wins.
 - **the server** — one process per store, on `127.0.0.1:<port>` (`store.toml`), log at `~/.slopymemory/logs/<name>.log`.
-- **slopymem** — the command: `init`, `link`, `unlink`, `list`, `start`, `stop`, `doctor`, `register`, `remove`.
+- **slopymem** — the command: `init`, `link`, `unlink`, `list`, `start`, `stop`, `doctor`, `scan-store`, `register`, `remove`.
 
 ## The three questions, in order
 
