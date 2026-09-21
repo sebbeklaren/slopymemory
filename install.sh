@@ -29,6 +29,11 @@ case "$PG" in system|embedded) ;; "") ;; *) echo "--postgres takes system or emb
 YESFLAG=""; [ "$YES" = 1 ] && YESFLAG="--yes"
 say() { printf '\n== %s\n' "$*"; }
 [ "$(uname -s)" = Linux ] || { echo "Linux only for now — see SETUP.md#python"; exit 1; }
+# The one system tool the package shells out to (slopymem stop, remove, the doctor's servers check) — checked here,
+# before step 1 fetches anything, so "the installer stops before downloading anything when ss is missing" is true.
+# check_tools() in install_steps.py repeats this during the preflight (step 2): a second line of defence, not the
+# first — by then uv and Python 3.13 may already have been downloaded.
+command -v ss >/dev/null 2>&1 || { echo "ss not found — slopymem uses it (from iproute2) to find the process on a store's port: slopymem stop, remove and the doctor's servers check. Install iproute2 (e.g. apt install iproute2) and re-run — see SETUP.md#servers"; exit 1; }
 
 say "1/6 uv + Python 3.13"
 if command -v uv >/dev/null 2>&1; then

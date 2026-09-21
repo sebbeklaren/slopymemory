@@ -1,7 +1,7 @@
 """`install.sh` driven end to end with a fake `uv`, a fake Python and a fake `slopymem` on PATH: the six steps, the
 flag parsing, and the verdict after the doctor (the closing line and the exit status). Nothing real is installed;
 the fake uv "syncs" by dropping the fake tools into the venv path the script chose."""
-import os, stat, subprocess
+import os, shutil, stat, subprocess
 from pathlib import Path
 import pytest
 
@@ -111,3 +111,30 @@ def test_the_preflight_runs_on_the_bare_interpreter_before_the_sync(fakes):
     sync = next(i for i, l in enumerate(lines) if l.startswith("fake uv sync --frozen"))
     imp = next(i for i, l in enumerate(lines) if "import slopymemory, agent_memory" in l)
     assert find < pre < sync < imp
+
+
+def test_ss_missing_refuses_before_step_1_fetches_nothing_and_names_iproute2(tmp_path):
+    """The preflight (step 2's check_tools()) already refused a missing `ss` — but only AFTER step 1 had fetched uv
+    (curl) and possibly Python 3.13. A container without iproute2 was the counter-example to "stops before
+    downloading anything". Proven with a real, curated PATH (not a monkeypatch): only `uname`/`dirname` (what the
+    script needs to reach the check) and fake `uv`/`curl` are reachable — `ss` genuinely cannot be found — so step 1
+    is provably never entered."""
+    tools = tmp_path / "tools"; tools.mkdir()
+    for name in ("uname", "dirname"):
+        real = shutil.which(name)
+        assert real, f"{name} must be a real system tool for this test to set up its curated PATH"
+        (tools / name).symlink_to(real)
+    bin_dir = tmp_path / "bin"; bin_dir.mkdir()
+    log = tmp_path / "calls.log"; log.write_text("")
+    logger = '#!/bin/sh\necho "$0 $*" >> "$FAKE_LOG"\nexit 1\n'
+    for name in ("uv", "curl"):
+        f = bin_dir / name; f.write_text(logger); f.chmod(f.stat().st_mode | stat.S_IEXEC)
+    bash = shutil.which("bash")
+    assert bash, "bash must be a real system tool for this test to invoke the script by absolute path"
+    env = {"PATH": f"{bin_dir}:{tools}", "SLOPYMEM_HOME": str(tmp_path / "home"), "FAKE_LOG": str(log)}
+    p = subprocess.run([bash, str(SCRIPT)], capture_output=True, text=True, env=env, cwd=ROOT, timeout=30)
+    assert p.returncode == 1
+    out = p.stdout + p.stderr
+    assert "ss not found" in out and "iproute2" in out and "SETUP.md#servers" in out
+    assert "1/6" not in out                                # step 1 never announced
+    assert log.read_text() == ""                            # neither the fake uv nor the fake curl was ever invoked
