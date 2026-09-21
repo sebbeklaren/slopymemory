@@ -7,6 +7,11 @@ class Settings:
     database_url: str = os.getenv("DATABASE_URL", "postgresql:///agent_memory")   # no role: the current OS user
     test_database_url: str = os.getenv("TEST_DATABASE_URL", "postgresql:///agent_memory_test")   # likewise
     embed_model: str = os.getenv("AM_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+    # The ONE snapshot of the model every stored coordinate was embedded with. The embedder loads this revision,
+    # never the repository's moving head: a newer upload under the same model name would shift every stored
+    # coordinate without a word. Changing the model or its revision is a MIGRATION (re-embed every store), not a
+    # config edit; this variable exists so that migration can be run deliberately.
+    embed_revision: str = os.getenv("AM_EMBED_REVISION", "e9b6763023c676ca8431644204f50c2b100d9aab")
     embed_dim: int = int(os.getenv("AM_EMBED_DIM", "768"))
     default_k: int = int(os.getenv("AM_DEFAULT_K", "10"))
     min_score: float = float(os.getenv("AM_MIN_SCORE", "-1.0"))

@@ -12,7 +12,7 @@ class NomicEmbedder:
     def __init__(self):
         from sentence_transformers import SentenceTransformer
         self.dim = settings.embed_dim
-        self._model = SentenceTransformer(settings.embed_model, trust_remote_code=True, device="cpu")
+        self._model = SentenceTransformer(settings.embed_model, revision=settings.embed_revision, trust_remote_code=True, device="cpu")
 
     def _embed(self, text: str, prefix: str) -> np.ndarray:
         v = self._model.encode([f"{prefix}{text}"], normalize_embeddings=True)[0]
