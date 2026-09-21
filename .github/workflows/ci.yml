@@ -1,0 +1,67 @@
+# Three jobs on every push and pull request:
+#   scan          the public scanner over the tree and the history (secrets, home paths, private mailboxes, session trailers)
+#   unit          the test suite against a pgvector service — the wiring, and the vendored substrate's own tests on a
+#                 *_test database; the model-dependent tests (marked `embed`) are left to the end-to-end job
+#   e2e-embedded  the stranger's path, verbatim: ./install.sh on a bare runner (embedded Postgres, no harness), then a
+#                 real session through the launcher over stdio — memory_init, twelve saves, a retrieve that must bring
+#                 the TEXT back — then the doctor
+name: ci
+on: [push, pull_request]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                       # --history walks every commit
+      - run: python3 scripts/public_scan_ci.py .
+      - run: python3 scripts/public_scan_ci.py --history .
+
+  unit:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: runner
+          POSTGRES_PASSWORD: pw
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PGHOST: localhost                        # the wiring's psql/createdb/dropdb calls, and the substrate's tests
+      PGUSER: runner
+      PGPASSWORD: pw
+      TEST_DATABASE_URL: postgresql://runner:pw@localhost/slopymem_substrate_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.13
+      - run: uv sync --frozen --extra dev --python 3.13
+      - name: the test databases
+        run: |
+          psql -d postgres -c 'create database slopymem_substrate_test' -c 'create database slopymem_template'
+          psql -d slopymem_substrate_test -c 'create extension vector'
+          psql -d slopymem_template -c 'create extension vector' -c 'alter database slopymem_template is_template true'
+      - run: .venv/bin/python -m pytest -q -m "not embed"
+
+  e2e-embedded:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5             # install.sh uses the uv it finds; its wheel cache carries over
+        with:
+          enable-cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-model-${{ hashFiles('src/agent_memory/config.py') }}   # the pins live there: a new pin, a new cache
+      - run: ./install.sh --yes --postgres=embedded --no-harness
+      - name: a session through the launcher over stdio
+        run: |
+          mkdir /tmp/proj
+          ~/.slopymemory/venv/bin/python "$GITHUB_WORKSPACE/scripts/e2e_stdio.py" --project /tmp/proj
+      - run: ~/.slopymemory/venv/bin/slopymem doctor
