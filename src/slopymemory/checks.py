@@ -169,8 +169,28 @@ def _model() -> Finding:
                                   f"{install_steps.model_cache_dir(repo)} — {fetch}; no server can start without it")
         if (gone := install_steps.missing_files(code, install_steps.code_files(weights))):
             return Finding(False, f"{code} is incomplete: missing {', '.join(gone)} — {fetch}")
+    if (why := _loader_refusal(weights)) is not None:
+        return Finding(False, f"the files are there, but the embedder's own resolution of the pinned snapshots refuses, so no server "
+                              f"will start: {why}")
     code_note = f"; code {', '.join(repos)} at {code_pin[:12]}" if repos else ""
-    return Finding(True, f"{model} at revision {pin[:12]} in {where}{code_note} — both snapshot directories complete; servers start from them, online or offline")
+    return Finding(True, f"{model} at revision {pin[:12]} in {where}{code_note} — both snapshot directories complete and resolved by "
+                         f"the embedder itself; servers start from them, online or offline")
+
+
+def _loader_refusal(weights: Path) -> str | None:
+    """The embedder's own offline resolution of both pinned snapshots — the first thing a server does, without the
+    model load — or the message it refuses with. The file lists above are the doctor's view of "complete"; the hub's is
+    its cached tree listing against what the loader asks for, and the two have disagreed (a snapshot fetched without
+    the exported formats read as incomplete to a loader that asked for the whole tree). Only the loader's verdict
+    predicts a server start."""
+    try:
+        from agent_memory.config import settings
+        from agent_memory.embed.nomic import NomicEmbedder
+        NomicEmbedder._local_snapshot(settings.embed_model, settings.embed_revision, "weights")
+        NomicEmbedder._local_snapshot(NomicEmbedder._code_repo(str(weights)), settings.embed_code_revision, "code")
+    except Exception as e:
+        return str(e)
+    return None
 
 
 def _registry() -> Finding:
@@ -323,7 +343,8 @@ CHECKS: list[Check] = [
     Check("model", "no server starts (online or offline), or every retrieval comes back subtly wrong",
           "the two snapshot DIRECTORIES the embedder loads from, and nothing else, are in the Hugging Face cache with their files: "
           "nomic-embed-text-v1.5 at the pinned revision the stores' coordinates were embedded with (AM_EMBED_REVISION) and its code repository "
-          "(nomic-bert-2048, whose classes the model uses) at its own pin (AM_EMBED_CODE_REVISION). No refs/main and no network are involved in a start; "
+          "(nomic-bert-2048, whose classes the model uses) at its own pin (AM_EMBED_CODE_REVISION); then the embedder's own offline resolution of both, "
+          "the way a server starts (the hub's view of a complete snapshot is its cached tree listing, not the doctor's file list). No refs/main and no network are involved in a start; "
           "`slopymem install-model` fetches exactly those two. Another snapshot of the same model fails: changing the model is a migration (re-embed every store), not a config edit",
           "ls ~/.cache/huggingface/hub/models--nomic-ai--nomic-embed-text-v1.5/snapshots ~/.cache/huggingface/hub/models--nomic-ai--nomic-bert-2048/snapshots",
           "slopymem install-model (once, about 0.5 GB, needs the network)", _model),

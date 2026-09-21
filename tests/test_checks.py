@@ -299,6 +299,7 @@ def _hub(tmp_path, monkeypatch, weights_rev=None, code_rev=None, weight_files=No
     hub = tmp_path / "hub"
     shutil.rmtree(hub, ignore_errors=True)                  # each scenario starts from an empty cache
     monkeypatch.setattr(install_steps, "hub_cache", lambda: hub)
+    monkeypatch.setattr(checks, "_loader_refusal", lambda weights: None)   # the loader's own resolution: its own test below
     if weights_rev:
         d = hub / f"models--{WEIGHTS_REPO.replace('/', '--')}" / "snapshots" / weights_rev
         for name in (install_steps.WEIGHT_FILES if weight_files is None else weight_files):
@@ -346,3 +347,30 @@ def test_model_check_fails_on_an_incomplete_snapshot_or_missing_code(tmp_path, m
     _hub(tmp_path, monkeypatch, weights_rev=pin, code_rev=code, code_files=("configuration_hf_nomic_bert.py",))
     f = checks.by_id("model").run()
     assert not f.ok and "modeling_hf_nomic_bert.py" in f.detail
+
+
+def test_model_check_fails_when_the_files_are_there_but_the_embedder_refuses_to_resolve_the_snapshot(tmp_path, monkeypatch):
+    """Seen on a fresh machine: every file the doctor lists was there and the doctor said so, yet no server started —
+    the embedder resolves the pinned snapshot through the hub, offline, and the hub called the snapshot incomplete
+    (its cached tree listing named files nobody fetched). The doctor asks the loader itself, the way a server does."""
+    from agent_memory.config import settings
+    pin, code = settings.embed_revision, settings.embed_code_revision
+    _hub(tmp_path, monkeypatch, weights_rev=pin, code_rev=code)
+    assert checks.by_id("model").run().ok
+    monkeypatch.setattr(checks, "_loader_refusal", lambda weights: "the embedder's pinned weights snapshot is not in the Hugging Face cache (IncompleteSnapshotError)")
+    f = checks.by_id("model").run()
+    assert not f.ok and "IncompleteSnapshotError" in f.detail and "no server" in f.detail
+
+
+def test_loader_refusal_is_the_embedders_own_resolution_of_both_pins(tmp_path, monkeypatch):
+    from agent_memory.embed import nomic
+    calls = []
+    def resolve(repo, revision, what):
+        calls.append((repo, revision, what)); return str(tmp_path)
+    monkeypatch.setattr(nomic.NomicEmbedder, "_local_snapshot", staticmethod(resolve))
+    (tmp_path / "config.json").write_text('{"auto_map": {"AutoModel": "nomic-ai/nomic-bert-2048--modeling_hf_nomic_bert.NomicBertModel"}}')
+    assert checks._loader_refusal(tmp_path) is None
+    assert [c[2] for c in calls] == ["weights", "code"] and calls[1][0] == "nomic-ai/nomic-bert-2048"
+    def refuse(repo, revision, what): raise RuntimeError(f"{what}: not in the cache")
+    monkeypatch.setattr(nomic.NomicEmbedder, "_local_snapshot", staticmethod(refuse))
+    assert checks._loader_refusal(tmp_path) == "weights: not in the cache"

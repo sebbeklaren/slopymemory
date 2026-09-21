@@ -110,7 +110,7 @@ slopymem list; ls ~/.slopymemory/pg; tail ~/.slopymemory/pg/log; psql -d postgre
 
 **Symptom:** no server starts (online or offline), or every retrieval comes back subtly wrong
 
-**Verifies:** the two snapshot DIRECTORIES the embedder loads from, and nothing else, are in the Hugging Face cache with their files: nomic-embed-text-v1.5 at the pinned revision the stores' coordinates were embedded with (AM_EMBED_REVISION) and its code repository (nomic-bert-2048, whose classes the model uses) at its own pin (AM_EMBED_CODE_REVISION). No refs/main and no network are involved in a start; `slopymem install-model` fetches exactly those two. Another snapshot of the same model fails: changing the model is a migration (re-embed every store), not a config edit
+**Verifies:** the two snapshot DIRECTORIES the embedder loads from, and nothing else, are in the Hugging Face cache with their files: nomic-embed-text-v1.5 at the pinned revision the stores' coordinates were embedded with (AM_EMBED_REVISION) and its code repository (nomic-bert-2048, whose classes the model uses) at its own pin (AM_EMBED_CODE_REVISION); then the embedder's own offline resolution of both, the way a server starts (the hub's view of a complete snapshot is its cached tree listing, not the doctor's file list). No refs/main and no network are involved in a start; `slopymem install-model` fetches exactly those two. Another snapshot of the same model fails: changing the model is a migration (re-embed every store), not a config edit
 
 **See for yourself:**
 
