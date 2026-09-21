@@ -89,6 +89,11 @@ def read_config(path: Path, parse: Callable[[str], dict]) -> dict | None:
         return None
 
 
+def entry_named(path: Path, parse: Callable[[str], dict], key: str, launcher: str) -> str | None:
+    """The name of the entry in the harness's MCP-server table whose `command` is `launcher`, else None."""
+    return next((name for name, entry in servers_table(path, parse, key).items() if entry.get("command") == launcher), None)
+
+
 def servers_table(path: Path, parse: Callable[[str], dict], key: str) -> dict[str, dict]:
     """The harness's MCP-server table, `key`, as {name: entry} — only the entries that ARE tables. A top
     level, a table or an entry of the wrong shape is noted on stderr and read as absent, never raised."""
@@ -121,7 +126,10 @@ class Harness:
     config_hint: str
     instructions_file: Callable[[], Path] | None
     offer_line: str = OFFER_LINE
-    unregister_cmd: Callable[[], list[str]] | None = None      # the inverse of register_cmd, for `slopymem uninstall`
+    # The NAME our launcher is registered under (None when it is not) — entries are matched on their COMMAND, never
+    # on the name `memory`: a foreign server registered as `memory` is not ours and is never touched.
+    registered_as: Callable[[str], str | None] | None = None
+    unregister_cmd: Callable[[str], list[str]] | None = None   # takes that name; the inverse of register_cmd, for `slopymem uninstall`
 
 
 def launcher_path() -> str:
@@ -218,15 +226,17 @@ def register_detected(yes: bool) -> int:
 
 
 def unregister(h: Harness, launcher: str) -> int:
-    """Take the launcher out of one harness's MCP table with the harness's own command — only when it IS
-    registered there (another tool's entry is never touched). 0 when done or nothing to do; 1 with the reason on
-    stderr when the command fails or the harness has none (then the hint says how, by hand)."""
-    if not h.registered(launcher):
+    """Take the launcher out of one harness's MCP table with the harness's own remove command, by the NAME the
+    entry with our command has — whatever it is called; an entry called `memory` with someone else's command is
+    never touched. 0 when done or nothing to do; 1 with the reason on stderr when the command fails or the harness
+    has none (then the hint says how, by hand)."""
+    name = h.registered_as(launcher) if h.registered_as is not None else None
+    if name is None:
         return 0
     if h.unregister_cmd is None:
-        print(f"{h.name}: unregister by hand: {h.config_hint} — see SETUP.md#harnesses", file=sys.stderr)
+        print(f"{h.name}: unregister by hand (the entry {name!r}): {h.config_hint} — see SETUP.md#harnesses", file=sys.stderr)
         return 1
-    cmd = h.unregister_cmd()
+    cmd = h.unregister_cmd(name)
     print(f"{h.name}: {' '.join(cmd)}")
     try:
         subprocess.run(cmd, check=True)

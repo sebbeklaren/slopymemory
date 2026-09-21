@@ -200,3 +200,51 @@ def test_fresh_registration_propagates_an_unwritable_instructions_file_as_a_fail
     assert harnesses.register("claude-code", yes=True) == 1
     err = capsys.readouterr().err
     assert "offer line" in err and str(f) in err and "SETUP.md#harnesses" in err
+
+
+# --- unregister removes OUR entry by its command, never a foreign entry named `memory` ---
+
+def _configs(tmp_path, monkeypatch, claude: str, codex: str, pi_json: str):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude.json").write_text(claude)
+    (tmp_path / ".codex").mkdir(); (tmp_path / ".codex" / "config.toml").write_text(codex)
+    (tmp_path / ".pi" / "agent").mkdir(parents=True); (tmp_path / ".pi" / "agent" / "mcp.json").write_text(pi_json)
+
+
+def test_registered_as_names_our_entry_whatever_it_is_called(tmp_path, monkeypatch):
+    from slopymemory.harnesses import pi
+    _configs(tmp_path, monkeypatch,
+             claude='{"mcpServers": {"memory": {"command": "/someone/elses/server-memory"}, "mem2": {"command": "/x/slopymem-mcp"}}}',
+             codex='[mcp_servers.memory]\ncommand = "/someone/elses"\n[mcp_servers.ours]\ncommand = "/x/slopymem-mcp"\n',
+             pi_json='{"mcpServers": {"memory": {"command": "/x/slopymem-mcp"}}}')
+    assert claude_code.HARNESS.registered_as("/x/slopymem-mcp") == "mem2" and claude_code.HARNESS.registered("/x/slopymem-mcp")
+    assert claude_code.HARNESS.registered_as("/other") is None and not claude_code.HARNESS.registered("/other")
+    assert codex.HARNESS.registered_as("/x/slopymem-mcp") == "ours"
+    assert pi.HARNESS.registered_as("/x/slopymem-mcp") == "memory" and pi.HARNESS.unregister_cmd is None
+
+
+def test_unregister_removes_the_entry_whose_command_is_ours_and_leaves_a_foreign_memory_alone(tmp_path, monkeypatch):
+    _configs(tmp_path, monkeypatch,
+             claude='{"mcpServers": {"memory": {"command": "/someone/elses/server-memory"}, "mem2": {"command": "/x/slopymem-mcp"}}}',
+             codex='[mcp_servers.memory]\ncommand = "/someone/elses"\n[mcp_servers.ours]\ncommand = "/x/slopymem-mcp"\n',
+             pi_json='{}')
+    ran = []
+    monkeypatch.setattr(harnesses.subprocess, "run", lambda cmd, **kw: ran.append(list(cmd)))
+    assert harnesses.unregister(claude_code.HARNESS, "/x/slopymem-mcp") == 0
+    assert harnesses.unregister(codex.HARNESS, "/x/slopymem-mcp") == 0
+    assert ran == [["claude", "mcp", "remove", "--scope", "user", "mem2"], ["codex", "mcp", "remove", "ours"]]
+    # only a foreign `memory` entry: nothing is ours, nothing runs
+    (tmp_path / ".claude.json").write_text('{"mcpServers": {"memory": {"command": "/someone/elses/server-memory"}}}')
+    (tmp_path / ".codex" / "config.toml").write_text('[mcp_servers.memory]\ncommand = "/someone/elses"\n')
+    ran.clear()
+    assert harnesses.unregister(claude_code.HARNESS, "/x/slopymem-mcp") == 0
+    assert harnesses.unregister(codex.HARNESS, "/x/slopymem-mcp") == 0
+    assert ran == []
+
+
+def test_unregister_without_a_command_says_how_by_hand_and_fails(tmp_path, monkeypatch, capsys):
+    from slopymemory.harnesses import pi
+    _configs(tmp_path, monkeypatch, claude="{}", codex="", pi_json='{"mcpServers": {"memory": {"command": "/x/slopymem-mcp"}}}')
+    assert harnesses.unregister(pi.HARNESS, "/x/slopymem-mcp") == 1
+    err = capsys.readouterr().err
+    assert "by hand" in err and "SETUP.md#harnesses" in err
