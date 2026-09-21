@@ -31,6 +31,10 @@ class NomicEmbedder:
         self.weights_dir = self._local_snapshot(settings.embed_model, settings.embed_revision, "weights")
         self.code_dir = self._local_snapshot(self._code_repo(self.weights_dir), settings.embed_code_revision, "code")
         code = settings.embed_code_revision
+        # `code_dir` above is only the fail-loud PRE-CHECK. What binds the code pin is `code_revision` in the two dicts
+        # below: transformers resolves `<repo>--<module>.<Class>` from the auto_map through the hub's commit-hash fast
+        # path (`snapshots/<pin>/<module>.py`, no refs, no network when present). Do not fold this back into
+        # `SentenceTransformer(name, model_kwargs=…)`: that path consumes the key before either loader sees it.
         transformer = Transformer(self.weights_dir, max_seq_length=self.MAX_SEQ_LENGTH,
                                   model_kwargs={"trust_remote_code": True, "code_revision": code},
                                   config_kwargs={"trust_remote_code": True, "code_revision": code})
