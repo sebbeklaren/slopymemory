@@ -50,7 +50,12 @@ def _db_ok():
     try:
         c = psycopg.connect(_url(), autocommit=True)
     except Exception as e:
-        pytest.skip(f"no test database: {e} — createdb slopymem_substrate_test && psql -d slopymem_substrate_test -c 'create extension vector'")
+        msg = f"no test database: {e} — createdb slopymem_substrate_test && psql -d slopymem_substrate_test -c 'create extension vector'"
+        # The export sets SLOPYMEM_REQUIRE_DB=1: for it, no database is a FAILED gate, never a skipped one. Anyone
+        # else running these tests without a database gets the skip and the hint.
+        if os.environ.get("SLOPYMEM_REQUIRE_DB") == "1":
+            pytest.fail(msg)
+        pytest.skip(msg)
     with c: db.apply_schema(c); m3.apply_schema(c)
     yield
 

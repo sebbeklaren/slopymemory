@@ -17,6 +17,7 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from agent_memory.config import settings
 from agent_memory.embed.nomic import NomicEmbedder
+from agent_memory.guard import find_secret, refusal_message
 from agent_memory.mcp import handlers
 from agent_memory.spaces import store as m3
 from agent_memory.spaces.live_store_state import LiveStore
@@ -82,13 +83,24 @@ def _session_key_from_context(ctx: "Context | None") -> str:
         "quoted to them from retrieval), pass supersedes=<that memory_id>: the correction is durably bound "
         "and retrieval will thereafter attach the standing version to the old memory. Only on their "
         "explicit confirmation — never infer supersession yourself. "
-        "Returns {status: saved|noop|buffered}."
+        "Never save passwords, keys or tokens: a save that contains one is refused; save where the "
+        "secret lives instead. "
+        "Returns {status: saved|noop|buffered|refused}."
     )
 )
 def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | None = None,
                 facets: dict[str, str] | None = None, save_concepts: list | None = None,
                 supersedes: str | None = None, ctx: Context | None = None) -> dict:
     session_key = _session_key_from_context(ctx)   # server-derived from the MCP session — never agent-supplied
+    secret = find_secret(text)
+    if secret is not None:
+        # REFUSED, never redacted, before any connection is opened: a memory is repeated on every retrieval,
+        # so a secret stored once is leaked forever. The log carries the KIND only — no text field, no
+        # snippet — because the invocation log is itself a plain-text file that outlives the session.
+        _log({"tool": "memory_save", "tenant": tenant, "session_key": session_key,
+              "refused": "secret", "kind": secret.kind, "status": "refused"})
+        return {"status": "refused", "reason": "secret", "kind": secret.kind,
+                "message": refusal_message(secret)}
     conn = _connect()
     try:
         out = handlers.memory_save(conn, _store, tenant, session_key, text, scope, thread, facets,
