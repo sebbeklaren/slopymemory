@@ -419,19 +419,39 @@ def weights_complete(model: str, revision: str) -> Path | None:
     return d if d is not None and not missing_files(d, WEIGHT_FILES) else None
 
 
+def loader_resolves(repo: str, revision: str, what: str) -> str | None:
+    """The embedder's OWN offline resolution of one pinned snapshot (`NomicEmbedder._local_snapshot`) — the exact
+    call the doctor's `model` check ends with (`checks._loader_refusal`). None when it resolves; else the message it
+    refuses with. The file lists (`weights_complete`/`missing_files`) are one view of "complete"; the hub's cached
+    tree listing against what the loader actually asks for is another, and the two have disagreed (a snapshot
+    fetched without the exported formats read as incomplete to a loader that asked for the whole tree) — only this
+    call predicts whether a server starts. Imported when first needed: the module needs numpy, which the preflight's
+    bare interpreter lacks, like `model_patterns`."""
+    from agent_memory.embed.nomic import NomicEmbedder
+    try:
+        NomicEmbedder._local_snapshot(repo, revision, what)
+        return None
+    except Exception as e:
+        return str(e)
+
+
 def download_model(revision: str, model: str = MODEL, code_revision: str | None = None,
                    ask: Callable[[str], bool] | None = None) -> str | None:
     """The pinned weights snapshot into the shared Hugging Face cache, once (skipping the exported formats nothing
-    reads); then the code repository its config names, at `code_revision` (None = the repository's head). Each is
-    fetched when its directory is MISSING OR ANY REQUIRED FILE IS — the same directory-and-files test the doctor
-    applies (`local_snapshot` + `missing_files`), never the hub's directory-exists probe, so the doctor's "incomplete —
-    run install-model" is always closed by running it. Says what it fetches. `ask(note)`, when given, is asked before
-    the weights are fetched (the size in the note); a no returns None and fetches nothing. Errors from the hub
-    propagate: the caller names the anchor."""
+    reads); then the code repository its config names, at `code_revision` (None = the repository's head). Fetched
+    when the directory is MISSING OR ANY REQUIRED FILE IS (`local_snapshot` + `missing_files`, the doctor's file-list
+    view) OR THE EMBEDDER'S OWN OFFLINE RESOLUTION REFUSES (`loader_resolves`, the doctor's other view — the hub's
+    cached tree listing can call a snapshot incomplete while every listed file is present): the code repository's
+    no-pin branch below already fetched on exactly this second signal; both snapshots do now. Ends with that same
+    resolution — a fetch that still leaves the loader refusing raises loud, naming what refuses, so the doctor's
+    "incomplete — run install-model" is always closed by running it, never silently reported "ready" while a server
+    still could not start. Says what it fetches. `ask(note)`, when given, is asked before the weights are fetched
+    (the size in the note); a no returns None and fetches nothing. Errors from the hub propagate: the caller names
+    the anchor."""
     sd = snapshot_download()
     weights_ignore, code_allow = model_patterns()
     local = weights_complete(model, revision)
-    if local is None:
+    if local is None or loader_resolves(model, revision, "weights") is not None:
         note = size_note(weights_size(model, revision, weights_ignore))
         if ask is not None and not ask(note):
             return None
@@ -447,9 +467,15 @@ def download_model(revision: str, model: str = MODEL, code_revision: str | None 
                 pass
         else:
             code = local_snapshot(repo, code_revision)
-            if code is not None and not missing_files(code, need):
+            if code is not None and not missing_files(code, need) and loader_resolves(repo, code_revision, "code") is None:
                 continue
         at = f" at revision {code_revision[:12]}" if code_revision else ""
         print(f"fetching the model's code from {repo}{at} ({', '.join(need) or 'the .py files'})")
         sd(repo, revision=code_revision, allow_patterns=list(code_allow))
+    if (why := loader_resolves(model, revision, "weights")) is not None:
+        raise RuntimeError(f"the weights snapshot was fetched but the embedder's own offline resolution still refuses it: {why}")
+    if code_revision is not None:
+        for repo in remote_code_repos(local):
+            if (why := loader_resolves(repo, code_revision, "code")) is not None:
+                raise RuntimeError(f"the code snapshot ({repo}) was fetched but the embedder's own offline resolution still refuses it: {why}")
     return str(local)

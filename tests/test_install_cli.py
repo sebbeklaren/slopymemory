@@ -124,6 +124,33 @@ def test_install_model_asks_with_the_size_once_downloads_the_pin_and_names_the_a
     assert code == 1 and "no network" in out and "SETUP.md#model" in out
 
 
+def test_install_model_fails_loud_through_the_real_download_when_the_loader_still_refuses_after_the_fetch(tmp_home, monkeypatch, tmp_path):
+    """I-2: files present or freshly fetched must not read as "model ready" while the embedder's own offline
+    resolution still refuses the snapshot — that was a doctor FAIL with no way out. The real `download_model` (not
+    a fake) raises; `cmd_install_model` must turn that into a non-zero exit naming the anchor, same as any other
+    download failure."""
+    import json
+    from agent_memory.config import settings
+    hub = tmp_path / "hub"
+    monkeypatch.setattr(install_steps, "hub_cache", lambda: hub)
+    w = hub / f"models--{install_steps.MODEL.replace('/', '--')}" / "snapshots" / settings.embed_revision
+    for name in install_steps.WEIGHT_FILES:
+        (w / name).parent.mkdir(parents=True, exist_ok=True); (w / name).write_text("x")
+    auto_map = {"AutoModel": "nomic-ai/nomic-bert-2048--modeling_hf_nomic_bert.NomicBertModel"}
+    (w / "config.json").write_text(json.dumps({"auto_map": auto_map}))
+    c = hub / "models--nomic-ai--nomic-bert-2048" / "snapshots" / settings.embed_code_revision
+    c.mkdir(parents=True); (c / "modeling_hf_nomic_bert.py").write_text("# code")
+
+    def fake(repo_id, revision=None, local_files_only=False, allow_patterns=None, ignore_patterns=None, **kw):
+        return str(w) if repo_id == install_steps.MODEL else str(c)     # the fetch "succeeds": the files were already there
+    monkeypatch.setattr(install_steps, "snapshot_download", lambda: fake)
+    monkeypatch.setattr(install_steps, "weights_size", lambda model, revision, ignore=None: None)
+    monkeypatch.setattr(install_steps, "loader_resolves",
+                        lambda repo, revision, what: "IncompleteSnapshotError: not in the cache" if what == "weights" else None)
+    code, out = run(["install-model", "--yes"])
+    assert code == 1 and "IncompleteSnapshotError" in out and "SETUP.md#model" in out
+
+
 # --- register --detected -------------------------------------------------------------------------------------------
 
 def _fake_harnesses(tmp_path, monkeypatch, ran):

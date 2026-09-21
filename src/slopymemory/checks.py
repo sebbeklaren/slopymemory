@@ -182,15 +182,13 @@ def _loader_refusal(weights: Path) -> str | None:
     model load — or the message it refuses with. The file lists above are the doctor's view of "complete"; the hub's is
     its cached tree listing against what the loader asks for, and the two have disagreed (a snapshot fetched without
     the exported formats read as incomplete to a loader that asked for the whole tree). Only the loader's verdict
-    predicts a server start."""
-    try:
-        from agent_memory.config import settings
-        from agent_memory.embed.nomic import NomicEmbedder
-        NomicEmbedder._local_snapshot(settings.embed_model, settings.embed_revision, "weights")
-        NomicEmbedder._local_snapshot(NomicEmbedder._code_repo(str(weights)), settings.embed_code_revision, "code")
-    except Exception as e:
-        return str(e)
-    return None
+    predicts a server start. Delegates to `install_steps.loader_resolves` — the ONE definition `slopymem install-model`
+    ends with too, so a snapshot this calls ready and that calls refused cannot happen."""
+    from agent_memory.config import settings
+    from agent_memory.embed.nomic import NomicEmbedder
+    if (why := install_steps.loader_resolves(settings.embed_model, settings.embed_revision, "weights")) is not None:
+        return why
+    return install_steps.loader_resolves(NomicEmbedder._code_repo(str(weights)), settings.embed_code_revision, "code")
 
 
 def _registry() -> Finding:

@@ -1,6 +1,7 @@
 """The installer's Python half: pure functions over the lock, the cache, the disk and the model cache. No network
 in this file: the one function that asks a server for a size is stubbed."""
 import json
+import pytest
 from slopymemory import install_steps as s
 
 LOCK = '''
@@ -291,6 +292,7 @@ def _spy_hub(monkeypatch, w, c):
         return str(c)
     monkeypatch.setattr(s, "snapshot_download", lambda: fake)
     monkeypatch.setattr(s, "weights_size", lambda model, revision, ignore=None: None)
+    monkeypatch.setattr(s, "loader_resolves", lambda repo, revision, what: None)   # the embedder resolves: its own test below
     return calls
 
 
@@ -299,6 +301,39 @@ def test_download_model_fetches_nothing_when_both_snapshots_are_complete(monkeyp
     calls = _spy_hub(monkeypatch, w, c)
     assert s.download_model("e9b6", code_revision="7710") == str(w)
     assert calls == [] and capsys.readouterr().out == ""                  # nothing fetched, nothing said: the caller reports
+
+
+def test_download_model_refetches_when_the_files_are_there_but_the_loader_refuses(monkeypatch, capsys, tmp_path):
+    """Seen on a fresh machine: every file the doctor's file list checks was there, yet the hub's own cached tree
+    listing still called the snapshot incomplete (it names files nobody fetched, asking for the whole tree) — the
+    doctor's `model` check catches this with `loader_resolves`; `install-model` must decide by the SAME call, not
+    the file list alone, or the doctor's FAIL is never closed by running it."""
+    hub, w, c = _scratch_hub(tmp_path, monkeypatch, weights_files=s.WEIGHT_FILES, code_files=CODE_FILES)
+    calls = _spy_hub(monkeypatch, w, c)                     # default: loader_resolves resolves everything
+    seen = {"weights": 0}
+    def flaky(repo, revision, what):
+        if what == "weights":
+            seen["weights"] += 1
+            return "IncompleteSnapshotError: the hub's cached tree listing calls this snapshot incomplete" if seen["weights"] == 1 else None
+        return None
+    monkeypatch.setattr(s, "loader_resolves", flaky)
+    assert s.download_model("e9b6", code_revision="7710") == str(w)
+    assert [k["repo"] for k in calls] == [s.MODEL]          # re-fetched though the file list already said complete
+    assert "0.5 GB" in capsys.readouterr().out
+    assert seen["weights"] == 2                             # asked before the decision, and again after the fetch
+
+
+def test_download_model_raises_naming_the_anchor_when_the_loader_still_refuses_after_the_fetch(monkeypatch, capsys, tmp_path):
+    """The fetch is not the end of the story: a loader that keeps refusing after `install-model` fetched must not be
+    reported "ready" — that is the doctor FAIL with no way out I-2 found. The caller (`cmd_install_model`) names the
+    anchor; this is the raise it wraps."""
+    hub, w, c = _scratch_hub(tmp_path, monkeypatch, weights_files=s.WEIGHT_FILES, code_files=CODE_FILES)
+    calls = _spy_hub(monkeypatch, w, c)
+    monkeypatch.setattr(s, "loader_resolves",
+                        lambda repo, revision, what: "IncompleteSnapshotError: not in the cache" if what == "weights" else None)
+    with pytest.raises(RuntimeError, match="IncompleteSnapshotError"):
+        s.download_model("e9b6", code_revision="7710")
+    assert [k["repo"] for k in calls] == [s.MODEL]          # it did fetch before giving up, not skip straight to failing
 
 
 def test_download_model_says_the_size_once_then_fetches_the_weights_without_the_exports(monkeypatch, capsys, tmp_path):
@@ -375,6 +410,7 @@ def test_download_model_without_a_code_pin_falls_back_to_the_hubs_probe(monkeypa
             return str(c)
         raise AssertionError("cached by the hub's own test: no fetch")
     monkeypatch.setattr(s, "snapshot_download", lambda: fake)
+    monkeypatch.setattr(s, "loader_resolves", lambda repo, revision, what: None)   # the embedder resolves: its own test below
     assert s.download_model("e9b6") == str(w)
     assert calls == [(CODE_REPO, None, True)]
 
