@@ -325,8 +325,8 @@ def test_download_model_refetches_when_the_files_are_there_but_the_loader_refuse
 
 def test_download_model_raises_naming_the_anchor_when_the_loader_still_refuses_after_the_fetch(monkeypatch, capsys, tmp_path):
     """The fetch is not the end of the story: a loader that keeps refusing after `install-model` fetched must not be
-    reported "ready" — that is the doctor FAIL with no way out I-2 found. The caller (`cmd_install_model`) names the
-    anchor; this is the raise it wraps."""
+    reported "ready" — that is the doctor FAIL with no way out. The caller (`cmd_install_model`) names the anchor;
+    this is the raise it wraps."""
     hub, w, c = _scratch_hub(tmp_path, monkeypatch, weights_files=s.WEIGHT_FILES, code_files=CODE_FILES)
     calls = _spy_hub(monkeypatch, w, c)
     monkeypatch.setattr(s, "loader_resolves",

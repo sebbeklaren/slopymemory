@@ -125,10 +125,10 @@ def test_install_model_asks_with_the_size_once_downloads_the_pin_and_names_the_a
 
 
 def test_install_model_fails_loud_through_the_real_download_when_the_loader_still_refuses_after_the_fetch(tmp_home, monkeypatch, tmp_path):
-    """I-2: files present or freshly fetched must not read as "model ready" while the embedder's own offline
-    resolution still refuses the snapshot — that was a doctor FAIL with no way out. The real `download_model` (not
-    a fake) raises; `cmd_install_model` must turn that into a non-zero exit naming the anchor, same as any other
-    download failure."""
+    """Files present or freshly fetched must not read as "model ready" while the embedder's own offline resolution
+    still refuses the snapshot — that was a doctor FAIL with no way out. The real `download_model` (not a fake)
+    raises; `cmd_install_model` must turn that into a non-zero exit naming the anchor, same as any other download
+    failure."""
     import json
     from agent_memory.config import settings
     hub = tmp_path / "hub"
