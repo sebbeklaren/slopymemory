@@ -178,3 +178,25 @@ def test_register_reports_an_unreadable_instructions_file_instead_of_a_traceback
     assert harnesses.register("claude-code", yes=True) == 1
     err = capsys.readouterr().err
     assert "offer line" in err and str(f) in err and "SETUP.md#harnesses" in err
+
+
+def test_a_stale_line_in_a_symlinked_instructions_file_is_replaced_through_the_link(tmp_path, monkeypatch):
+    """Dotfile setups keep ~/.claude/CLAUDE.md as a symlink into a repo: the replacement must land in the TARGET and
+    leave the link (and the target's mode) as they were — an atomic replace of the link path would sever it."""
+    import os
+    f = _registration_flow(tmp_path, monkeypatch, registered=True)
+    target = tmp_path / "dotfiles" / "claude.md"; target.parent.mkdir()
+    target.write_text(f"# mine\n{OLDER_LINE}\n"); target.chmod(0o600)
+    f.symlink_to(target)
+    assert harnesses.register("claude-code", yes=True) == 0
+    assert f.is_symlink() and os.readlink(f) == str(target)                 # the link survives
+    assert target.read_text() == f"# mine\n{harnesses.OFFER_LINE}\n"        # the target carries the new line
+    assert (target.stat().st_mode & 0o777) == 0o600                          # and its mode
+
+
+def test_fresh_registration_propagates_an_unwritable_instructions_file_as_a_failure(tmp_path, monkeypatch, capsys):
+    f = _registration_flow(tmp_path, monkeypatch, registered=False)
+    f.mkdir()                                                   # a directory where the file should be
+    assert harnesses.register("claude-code", yes=True) == 1
+    err = capsys.readouterr().err
+    assert "offer line" in err and str(f) in err and "SETUP.md#harnesses" in err

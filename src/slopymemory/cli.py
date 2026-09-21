@@ -200,6 +200,7 @@ def read_memories(st: Store) -> list[tuple]:
     """Every memory of a store as (memory_id, created_at, text), read over the DSN the store's own server connects
     with (an adopted store names its own in [env]) — one SELECT, nothing else can be issued through this path."""
     with psycopg.connect(st.server_env()["DATABASE_URL"], connect_timeout=10) as conn:
+        conn.read_only = True                     # the session refuses a write too: "never deletes" is enforced, not promised
         with conn.cursor() as cur:
             cur.execute("SELECT memory_id, created_at, text FROM m3_memory ORDER BY created_at")
             return cur.fetchall()

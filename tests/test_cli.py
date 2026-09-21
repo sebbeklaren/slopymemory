@@ -230,12 +230,12 @@ def test_scan_store_reports_hits_by_id_and_kind_and_never_deletes(tmp_home, tmp_
     import datetime as dt
     repo = tmp_path / "proj"; repo.mkdir(); monkeypatch.chdir(repo)
     assert run(["init", "--yes"])[0] == 0
-    asked, deleted = [], []
+    asked = []
     rows = [("m1", dt.datetime(1999, 1, 2, 3, 4, tzinfo=dt.timezone.utc), "the decision was to keep the port"),
             ("m2", dt.datetime(1999, 1, 3, 4, 5, tzinfo=dt.timezone.utc), "deploy token ghp_" + "c" * 36)]
     monkeypatch.setattr(cli, "read_memories", lambda st: (asked.append(st.name), rows)[1])
     code, out = run(["scan-store", "proj"])
-    assert code == 0 and asked == ["proj"] and deleted == []
+    assert code == 0 and asked == ["proj"]        # "never deletes" is proven on read_memories: one SELECT, a read-only session
     assert "m2  1999-01-03 04:05  github_token" in out and "m1" not in out     # only the hits are listed
     assert "1 of 2 memories look like they carry a secret" in out
     assert "review and remove by hand: slopymem shows, never deletes" in out and "SETUP.md#secrets" in out
@@ -280,10 +280,12 @@ def test_read_memories_uses_the_stores_own_dsn(tmp_home, tmp_path, fake_pg, monk
         def __enter__(self): return self
         def __exit__(self, *a): pass
         def cursor(self): return Cur()
-    monkeypatch.setattr(cli.psycopg, "connect", lambda dsn, **kw: (seen.update(dsn=dsn, kw=kw), Conn())[1])
+    conn = Conn()
+    monkeypatch.setattr(cli.psycopg, "connect", lambda dsn, **kw: (seen.update(dsn=dsn, kw=kw), conn)[1])
     assert cli.read_memories(Store.load("proj")) == [("m1", None, "t")]
     assert seen["dsn"] == "postgresql://someone@/elsewhere_memory"
     assert seen["sql"].strip().upper().startswith("SELECT") and "m3_memory" in seen["sql"]
+    assert conn.read_only is True                 # the session itself refuses a write, not only the string
 
 
 def test_scan_store_names_an_embedded_postgres_that_is_down(tmp_home, tmp_path, fake_pg, monkeypatch):

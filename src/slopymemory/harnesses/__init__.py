@@ -36,12 +36,17 @@ def ensure_offer_line(f: Path, line: str) -> str:
     if state == "present":
         return "present"
     if state == "stale":
-        lines = f.read_text().split("\n")
+        # Through the link, at the real file: an atomic replace of the link path would sever a dotfiles symlink
+        # and leave the repo copy on the old line. The target keeps its mode.
+        target = f.resolve()
+        mode = target.stat().st_mode & 0o7777
+        lines = target.read_text().split("\n")
         for i, existing in enumerate(lines):
             if existing.strip().startswith(OFFER_LINE_PREFIX):
                 lines[i] = line
                 break
-        paths.write_atomic(f, "\n".join(lines))
+        paths.write_atomic(target, "\n".join(lines))
+        target.chmod(mode)
         return "replaced"
     f.parent.mkdir(parents=True, exist_ok=True)
     with open(f, "a") as fh:
@@ -150,7 +155,7 @@ def register(harness_id: str | None, yes: bool) -> int:
             print(f"{h.name}: registration failed: {e} — see SETUP.md#harnesses", file=sys.stderr)
             rc = 1; continue
         if h.instructions_file:
-            _offer_line_step(h, yes, confirm)
+            rc |= _offer_line_step(h, yes, confirm)     # an unwritable file is a failure here too, not only a message
     return rc
 
 
