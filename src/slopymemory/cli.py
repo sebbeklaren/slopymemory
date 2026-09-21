@@ -393,7 +393,14 @@ def cmd_uninstall(a) -> int:
         try:
             print("embedded Postgres stopped" if postgres("embedded").stop() else "embedded Postgres was not running")
         except Exception as e:
-            rc = fail(f"the embedded Postgres did not stop: {e}")
+            # The uninstall ENDS here: pg_ctl and the postmaster binary live in the venv, and removing it under a
+            # postmaster that did not stop leaves a cluster nobody can stop cleanly. Nothing after this point is
+            # removed (the registrations, the logs, the registry, the venv); what was already done above is printed.
+            pg_ctl = (embedded_pg.BIN / "pg_ctl") if embedded_pg.BIN else venv / "lib" / "python3.13" / "site-packages" / "embedded_postgres" / "pginstall" / "bin" / "pg_ctl"
+            return fail(f"the embedded Postgres did not stop: {e}\n"
+                        f"nothing more was removed — the venv is KEPT, pg_ctl lives in it. Stop the cluster by hand:\n"
+                        f"  {pg_ctl} -D {pgdir} -m fast stop\n"
+                        f"(or, if pg_ctl cannot: kill -TERM $(head -1 {pgdir / 'postmaster.pid'})), then run `slopymem uninstall` again")
     if a.data:
         rc |= _rmtree(stores_dir) | _rmtree(pgdir) | _rmtree(pgdir.with_name(pgdir.name + ".lock"))
     for h in to_unregister:

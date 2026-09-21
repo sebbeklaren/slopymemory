@@ -249,6 +249,24 @@ def test_uninstall_data_with_yes_still_asks_the_third_question(tmp_home, tmp_pat
     assert code == 0 and sorted(fake_pg.dropped) == ["one_memory", "two_memory"]
 
 
+def test_uninstall_stops_at_an_embedded_postgres_that_did_not_stop_and_keeps_the_venv(tmp_home, tmp_path, monkeypatch, fake_pg):
+    """pg_ctl lives in the venv: removing it under a postmaster that did not stop leaves a cluster nobody can stop
+    cleanly. The uninstall ends there — the venv, the registrations, the logs and the registry stay — and the message
+    names the exact pg_ctl line, the kill fallback, and says to run uninstall again."""
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    ran = []
+    _fake_harnesses(tmp_path, monkeypatch, ran)
+    def wedged(): raise provision.InitRefused("pg_ctl stop: server does not shut down — see SETUP.md#postgres")
+    monkeypatch.setattr(fake_pg, "stop", wedged)
+    code, out = run(["uninstall"], stdin="y\ny\n")
+    assert code == 1 and "did not stop" in out and "server does not shut down" in out
+    assert (tmp_home / "venv").exists() and (tmp_home / "logs").exists() and (tmp_home / "registry.toml").exists()
+    assert ran == []                                                              # the registrations were not touched
+    assert "pg_ctl -D " + str(tmp_home / "pg") in out and "-m fast stop" in out
+    assert "postmaster.pid" in out and "uninstall" in out.split("did not stop")[1]
+    assert "uninstalled" not in out.split("did not stop")[1].replace("uninstall again", "")
+
+
 def test_uninstall_reports_a_failing_unregister_and_goes_on(tmp_home, tmp_path, monkeypatch, fake_pg):
     _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
     hs, instr = _fake_harnesses(tmp_path, monkeypatch, [])
