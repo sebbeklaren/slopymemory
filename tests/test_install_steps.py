@@ -290,7 +290,7 @@ def _spy_hub(monkeypatch, w, c):
             (c / name).write_text("# code")
         return str(c)
     monkeypatch.setattr(s, "snapshot_download", lambda: fake)
-    monkeypatch.setattr(s, "weights_size", lambda model, revision, ignore=s.WEIGHTS_IGNORE: None)
+    monkeypatch.setattr(s, "weights_size", lambda model, revision, ignore=None: None)
     return calls
 
 
@@ -309,17 +309,18 @@ def test_download_model_says_the_size_once_then_fetches_the_weights_without_the_
     assert s.download_model("e9b6", code_revision="7710") == str(w)
     out = capsys.readouterr().out
     assert "this happens once (about 0.5 GB)" in out
+    from agent_memory.embed import nomic
     weights = [k for k in calls if k["repo"] == s.MODEL]
-    assert weights == [{"repo": s.MODEL, "revision": "e9b6", "local": False, "allow": None, "ignore": list(s.WEIGHTS_IGNORE)}]
-    assert "onnx/*" in s.WEIGHTS_IGNORE and "openvino/*" in s.WEIGHTS_IGNORE
-    assert {"repo": CODE_REPO, "revision": "7710", "local": False, "allow": ["*.py"], "ignore": None} in calls
+    assert weights == [{"repo": s.MODEL, "revision": "e9b6", "local": False, "allow": None, "ignore": list(nomic.WEIGHTS_IGNORE)}]
+    assert "onnx/*" in nomic.WEIGHTS_IGNORE and "openvino/*" in nomic.WEIGHTS_IGNORE
+    assert {"repo": CODE_REPO, "revision": "7710", "local": False, "allow": list(nomic.CODE_ALLOW), "ignore": None} in calls
     assert "fetching the model's code" in out and "7710" in out
 
 
 def test_download_model_prints_the_real_size_when_the_hub_lists_it(monkeypatch, capsys, tmp_path):
     hub, w, c = _scratch_hub(tmp_path, monkeypatch)
     _spy_hub(monkeypatch, w, c)
-    monkeypatch.setattr(s, "weights_size", lambda model, revision, ignore=s.WEIGHTS_IGNORE: 547959597)
+    monkeypatch.setattr(s, "weights_size", lambda model, revision, ignore=None: 547959597)
     s.download_model("e9b6", code_revision="7710")
     assert "this happens once (about 0.5 GB)" in capsys.readouterr().out    # 523 MiB, from the file list, reads the same
 
@@ -390,3 +391,28 @@ def test_local_snapshot_and_its_files_are_read_from_the_directory_alone(tmp_path
                                                              "AutoModel": "nomic-ai/code--modeling_x.XModel"}}))
     assert s.code_files(d) == ["configuration_x.py", "modeling_x.py"]
     assert "config.json" not in s.missing_files(d, s.WEIGHT_FILES)
+
+
+def test_the_installer_has_no_pattern_lists_of_its_own_the_embedders_are_the_ones():
+    """What install-model fetches and what the embedder resolves offline must be ONE definition: a second list drifted
+    once and no server started on a fresh machine. The installer imports the embedder's, when first needed (the module
+    needs numpy, which the preflight's bare interpreter lacks)."""
+    from agent_memory.embed import nomic
+    assert not hasattr(s, "WEIGHTS_IGNORE") and not hasattr(s, "CODE_ALLOW")
+    ignore, allow = s.model_patterns()
+    assert ignore is nomic.WEIGHTS_IGNORE and allow is nomic.CODE_ALLOW
+    import pathlib
+    src = pathlib.Path(s.__file__).read_text()
+    assert "onnx" not in src and '"*.py"' not in src
+
+
+def test_install_steps_imports_on_a_bare_interpreter():
+    """The preflight runs before `uv sync`, on an interpreter with nothing installed: the module must import with the
+    standard library alone (the embedder's constants are imported at the point of use, inside the venv)."""
+    import pathlib, subprocess, sys
+    root = pathlib.Path(s.__file__).resolve().parents[2]
+    # The child forbids numpy outright (a bare interpreter has none) and imports the module the way install.sh does.
+    code = ("import sys; sys.modules['numpy'] = None; sys.path.insert(0, 'src'); "
+            "import slopymemory.install_steps as m; print(m.preflight.__name__)")
+    r = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, cwd=root)
+    assert r.returncode == 0 and r.stdout.strip() == "preflight", r.stderr

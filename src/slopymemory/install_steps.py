@@ -332,9 +332,15 @@ def model_cache_dir(model: str = MODEL) -> Path:
 # list so a snapshot that lost them still reads as cut short. The doctor and install-model share this one list.
 WEIGHT_FILES = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json", "modules.json",
                 "sentence_bert_config.json", "1_Pooling/config.json")
-# Exported formats in the weights repository that nothing here reads — 1.7 GB of the 2.2 GB snapshot; the fetch skips
-# them, which is what makes the size note true.
-WEIGHTS_IGNORE = ("onnx/*", "openvino/*")
+
+
+def model_patterns() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(WEIGHTS_IGNORE, CODE_ALLOW): what each pinned snapshot must hold, from the embedder itself — the ONE definition.
+    The fetch uses them, and the embedder resolves the cached snapshot offline against the same patterns; a second list
+    here drifted once (the hub then called the fetched subset incomplete and no server started on a fresh machine).
+    Imported when first needed: the module needs numpy, which the preflight's bare interpreter does not have."""
+    from agent_memory.embed.nomic import CODE_ALLOW, WEIGHTS_IGNORE
+    return WEIGHTS_IGNORE, CODE_ALLOW
 
 
 def local_snapshot(repo: str, revision: str) -> Path | None:
@@ -388,10 +394,13 @@ def hf_api():
     return HfApi()
 
 
-def weights_size(model: str, revision: str, ignore: tuple[str, ...] = WEIGHTS_IGNORE) -> int | None:
+def weights_size(model: str, revision: str, ignore: tuple[str, ...] | None = None) -> int | None:
     """The bytes the weights fetch will pull: the hub's file list for the pinned revision (one metadata call, no
-    download) minus the ignored patterns. None when the hub cannot be asked — then the fixed note is printed."""
+    download) minus the ignored patterns (the embedder's WEIGHTS_IGNORE unless given). None when the hub cannot be
+    asked — then the fixed note is printed."""
     import fnmatch
+    if ignore is None:
+        ignore = model_patterns()[0]
     try:
         info = hf_api().model_info(model, revision=revision, files_metadata=True, timeout=HEAD_TIMEOUT_S)
         return sum((f.size or 0) for f in info.siblings if not any(fnmatch.fnmatch(f.rfilename, p) for p in ignore))
@@ -420,18 +429,19 @@ def download_model(revision: str, model: str = MODEL, code_revision: str | None 
     the weights are fetched (the size in the note); a no returns None and fetches nothing. Errors from the hub
     propagate: the caller names the anchor."""
     sd = snapshot_download()
+    weights_ignore, code_allow = model_patterns()
     local = weights_complete(model, revision)
     if local is None:
-        note = size_note(weights_size(model, revision))
+        note = size_note(weights_size(model, revision, weights_ignore))
         if ask is not None and not ask(note):
             return None
         print(f"downloading {model} at revision {revision[:12]} — {note}")
-        local = Path(sd(model, revision=revision, ignore_patterns=list(WEIGHTS_IGNORE)))
+        local = Path(sd(model, revision=revision, ignore_patterns=list(weights_ignore)))
     need = code_files(local)
     for repo in remote_code_repos(local):
         if code_revision is None:                   # no pin to check files against: the hub's own offline test
             try:
-                sd(repo, allow_patterns=["*.py"], local_files_only=True)
+                sd(repo, allow_patterns=list(code_allow), local_files_only=True)
                 continue
             except Exception:
                 pass
@@ -441,5 +451,5 @@ def download_model(revision: str, model: str = MODEL, code_revision: str | None 
                 continue
         at = f" at revision {code_revision[:12]}" if code_revision else ""
         print(f"fetching the model's code from {repo}{at} ({', '.join(need) or 'the .py files'})")
-        sd(repo, revision=code_revision, allow_patterns=["*.py"])
+        sd(repo, revision=code_revision, allow_patterns=list(code_allow))
     return str(local)
