@@ -35,7 +35,9 @@ class _Kind:
 # Specific shapes first, the generic entropy measure last: a real GitHub token is also a high-entropy run, and
 # the specific name is the one the agent can act on.
 KINDS: tuple[_Kind, ...] = (
-    _Kind("api_key_openai", "an OpenAI-style API key (sk-…)", re.compile(r"sk-[A-Za-z0-9_-]{20,}")),
+    # The left boundary keeps a kebab identifier whose word ends in sk (task-, disk-, risk-, desk-) from reading as
+    # a key; a real key is never preceded by a letter or digit.
+    _Kind("api_key_openai", "an OpenAI-style API key (sk-…)", re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}")),
     _Kind("github_token", "a GitHub token (ghp_/gho_/ghu_/ghs_/ghr_ or github_pat_)",
           re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{60,}")),
     _Kind("aws_access_key", "an AWS access key id (AKIA…)", re.compile(r"AKIA[0-9A-Z]{16}")),
@@ -61,6 +63,11 @@ _SEPARATORS = re.compile(r"[/_=-]+")     # path, kebab, snake, and the = of KEY=
 _WORD_LIKE = re.compile(r"[A-Za-z]+|[0-9]+|[A-Za-z]+[0-9]{1,4}|[0-9]{1,4}[A-Za-z]+|[0-9a-f]+|[0-9A-F]+")
 _NO_DIGIT_NO_PAD = re.compile(r"[A-Za-z/_-]+")     # letters and separators only: a word or identifier, never a token
 MIN_JOINED_SEGMENTS = 3          # the joined shape needs two separators; a random token rarely has them
+# A hex segment this long is a sha or a digest when it sits in a PATH (runs/<sha>/summary.md) — and the body of a
+# structured token when it is joined by _ or - alone (prefix_v1_<64 hex>, xapp-1-A…-…-<64 hex>). Only a path may be
+# rescued by one; measured on shaped fakes, the unbounded form hid every such token.
+LONG_HEX_SEGMENT = 32
+_HEX_SEGMENT = re.compile(r"[0-9a-f]+|[0-9A-F]+")
 
 
 def shannon_bits_per_char(run: str) -> float:
@@ -93,7 +100,16 @@ def _is_identifier_shaped(run: str) -> bool:
     if _HEX_RUN.fullmatch(run) or _UUID.fullmatch(run) or _NO_DIGIT_NO_PAD.fullmatch(run):
         return True
     segments = [seg for seg in _SEPARATORS.split(run) if seg]
-    return len(segments) >= MIN_JOINED_SEGMENTS and all(_WORD_LIKE.fullmatch(seg) for seg in segments)
+    is_path = "/" in run
+    return len(segments) >= MIN_JOINED_SEGMENTS and all(_segment_is_word_like(seg, is_path) for seg in segments)
+
+
+def _segment_is_word_like(seg: str, is_path: bool) -> bool:
+    if not _WORD_LIKE.fullmatch(seg):
+        return False
+    if len(seg) >= LONG_HEX_SEGMENT and _HEX_SEGMENT.fullmatch(seg) and any(ch.isdigit() for ch in seg):
+        return is_path          # a long hex group is a word only inside a path
+    return True
 
 
 def find_secret(text: str | None) -> Secret | None:
@@ -114,6 +130,36 @@ def find_secret(text: str | None) -> Secret | None:
     return None
 
 
-def refusal_message(secret: Secret) -> str:
-    return (f"refused: the text contains what looks like {secret.why}; memories are plain text and come back "
+def find_secret_in_save(text: str | None, thread: str | None = None, scope: str | None = None,
+                        facets: dict | None = None, save_concepts: list | None = None) -> tuple[Secret, str] | None:
+    """Every agent-supplied string of a save, not only the text: a token in a thread label, a scope, a facet value or
+    a concept label is stored and repeated just the same. Returns (secret, field) for the first hit, field one of
+    text | thread | scope | facet | concept — a fixed name, never the value or the key the agent supplied — or None.
+    Only strings are looked at; a malformed shape is the downstream validation's business, as before."""
+    for field, value in (("text", text), ("thread", thread), ("scope", scope)):
+        if isinstance(value, str) and (s := find_secret(value)) is not None:
+            return s, field
+    if isinstance(facets, dict):
+        for key, value in facets.items():
+            for candidate in (key, value):
+                if isinstance(candidate, str) and (s := find_secret(candidate)) is not None:
+                    return s, "facet"
+    if isinstance(save_concepts, (list, tuple)):
+        for pair in save_concepts:
+            parts = pair if isinstance(pair, (list, tuple)) else (pair,)
+            for candidate in parts:
+                if isinstance(candidate, str) and (s := find_secret(candidate)) is not None:
+                    return s, "concept"
+    return None
+
+
+def kind_in_field(secret: Secret, field: str) -> str:
+    """The kind as the reply and the log carry it: bare for the text (the primary contract), `<kind> in <field>`
+    for every other field, so the agent knows which argument to fix."""
+    return secret.kind if field == "text" else f"{secret.kind} in {field}"
+
+
+def refusal_message(secret: Secret, field: str = "text") -> str:
+    what = {"facet": "facet", "concept": "concept label"}.get(field, field)
+    return (f"refused: the {what} contains what looks like {secret.why}; memories are plain text and come back "
             f"on every retrieval; store the secret elsewhere and save the pointer")

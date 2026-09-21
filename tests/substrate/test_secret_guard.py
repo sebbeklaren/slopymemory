@@ -75,6 +75,59 @@ def test_random_looking_runs_are_still_caught_beside_the_identifier_exclusion(to
     assert s is not None and s.kind == "high_entropy_token"
 
 
+@pytest.mark.parametrize("text", [
+    "branch feature/task-scoped-review-gate-for-secrets is up",          # …sk- inside a kebab identifier
+    "wrote docs/disk-usage-and-free-space-check.md this morning",
+    "the risk-adjusted-return-calculation-notes are in the tree",
+    "desk-side-notes-from-the-meeting.md",
+])
+def test_a_word_ending_in_sk_is_not_an_openai_key(text):
+    assert find_secret(text) is None
+
+
+@pytest.mark.parametrize("text", [
+    "the key sk-" + "A" * 40 + " leaked",                # mid-sentence, after a space
+    "OPENAI_API_KEY=sk-" + "A" * 40,                     # after =
+    'key: "sk-' + "A" * 40 + '"',                         # quoted
+    "sk-proj-" + "B" * 40,                                # the project-key shape
+])
+def test_a_real_sk_shape_still_fires_wherever_it_sits(text):
+    s = find_secret(text)
+    assert s is not None and s.kind == "api_key_openai"
+
+
+# Structured tokens of the form prefix_v1_<long hex>: every segment is a word, a number or a hex group, so the
+# joined-shape exclusion would hide them — a long hex segment rescues a run only when the run is a PATH.
+_HEX64 = "0123456789abcdef" * 4
+
+
+@pytest.mark.parametrize("text", [
+    "token dop_v1_" + _HEX64,                                             # a DigitalOcean-style personal access token
+    "xapp-1-A0123456789-0123456789012-" + _HEX64,                         # a Slack app-level token shape
+])
+def test_a_long_hex_segment_does_not_rescue_a_joined_token(text):
+    s = find_secret(text)
+    assert s is not None and s.kind == "high_entropy_token"
+
+
+@pytest.mark.parametrize("text", [
+    "runs/snapshots/" + "9f1805b3c2d1e0f4a5b6c7d8e9f0a1b2c3d4e5f6" + "/config.json was read",   # a 40-hex path segment
+    "see runs/timing_test/" + _HEX64 + "/summary.md",                                            # a 64-hex path segment
+])
+def test_a_long_hex_segment_inside_a_path_still_passes(text):
+    assert find_secret(text) is None
+
+
+def test_the_entropy_boundary_is_inclusive():
+    from agent_memory.guard import ENTROPY_BITS_PER_CHAR, shannon_bits_per_char
+    exactly_four = "ab12CD34ef56GH78" * 2       # 16 distinct characters, each twice: exactly 4.0 bits per character
+    assert shannon_bits_per_char(exactly_four) == ENTROPY_BITS_PER_CHAR == 4.0
+    s = find_secret("token " + exactly_four)
+    assert s is not None and s.kind == "high_entropy_token"
+    below = exactly_four + "a"                   # one more of an existing character: 3.99 bits, 33 chars
+    assert shannon_bits_per_char(below) < 4.0 and find_secret("token " + below) is None
+
+
 def test_the_kinds_are_the_eight_named_ones_in_specific_to_generic_order():
     assert [k.kind for k in KINDS] == ["api_key_openai", "github_token", "aws_access_key", "private_key_block",
                                        "jwt", "slack_token", "connection_string_with_password", "high_entropy_token"]
@@ -111,7 +164,50 @@ def test_memory_save_refuses_and_logs_the_kind_never_the_text(conn, tmp_path, mo
     assert '"refused": "secret"' in log and "ghp_" not in log and "deploy key" not in log
     rec = json.loads(log.strip().splitlines()[-1])
     assert rec["tool"] == "memory_save" and rec["refused"] == "secret" and rec["kind"] == "github_token"
-    assert "text" not in rec and "t" in rec              # no text field on a refusal; the timestamp stays
+    # the exact key set: any new field on a refusal record goes red here — none of the agent's values belong in it
+    assert set(rec) == {"tool", "tenant", "session_key", "refused", "kind", "field", "status", "t"}
+    assert rec["field"] == "text" and out["field"] == "text"
+
+
+def _fake_store_path(monkeypatch, server):
+    """A save that reaches the store: the store and the connection are fakes, so only the guard's verdict matters."""
+    calls = []
+    monkeypatch.setattr(server, "_connect", lambda: type("C", (), {"close": lambda self: None})())
+    monkeypatch.setattr(server.handlers, "memory_save", lambda *a, **k: (calls.append(a), {"status": "saved", "memory_id": "m1"})[1])
+    return calls
+
+
+@pytest.mark.parametrize("field,kwargs,kind", [
+    ("thread", {"thread": "ghp_" + "d" * 36}, "github_token in thread"),
+    ("scope", {"scope": "postgresql://app:hunter2secret@db/prod"}, "connection_string_with_password in scope"),
+    ("facet", {"facets": {"function": "the key is sk-" + "E" * 40}}, "api_key_openai in facet"),
+    ("concept", {"save_concepts": [["function", "ok label"], ["semantic", "xoxb-" + "1234567890-abcdefghijklmnop"]]}, "slack_token in concept"),
+])
+def test_every_agent_supplied_field_is_guarded_and_the_kind_names_the_field(tmp_path, monkeypatch, field, kwargs, kind):
+    from agent_memory.mcp import server
+    monkeypatch.setattr(server, "settings", dataclasses.replace(server.settings, mcp_invocation_log=str(tmp_path / "log.jsonl")))
+    calls = _fake_store_path(monkeypatch, server)
+    out = server.memory_save(tenant="t", text="a perfectly ordinary decision", **kwargs)
+    assert out["status"] == "refused" and out["kind"] == kind and out["field"] == field
+    assert f"the {field} contains what looks like" in out["message"] or f"the {field} label contains" in out["message"]
+    assert calls == []                                   # the store was never reached
+    log = (tmp_path / "log.jsonl").read_text()
+    for value in ("ghp_", "hunter2", "sk-", "xoxb", "ok label", "ordinary decision"):
+        assert value not in log                          # none of the agent's values, from any field
+    rec = json.loads(log.strip().splitlines()[-1])
+    assert rec["kind"] == kind and rec["field"] == field
+
+
+def test_a_clean_save_with_every_field_passes_the_guard(tmp_path, monkeypatch):
+    from agent_memory.mcp import server
+    monkeypatch.setattr(server, "settings", dataclasses.replace(server.settings, mcp_invocation_log=str(tmp_path / "log.jsonl")))
+    calls = _fake_store_path(monkeypatch, server)
+    out = server.memory_save(tenant="t", text="the decision was to keep the port", scope="ops/ports", thread="ports",
+                             facets={"function": "which port the server binds"},
+                             save_concepts=[["function", "port binding"], ["semantic", "server start"]])
+    assert out["status"] == "saved" and len(calls) == 1
+    rec = json.loads((tmp_path / "log.jsonl").read_text().strip().splitlines()[-1])
+    assert "refused" not in rec and rec["text"] == "the decision was to keep the port"
 
 
 def test_memory_save_description_tells_the_agent_never_to_save_secrets():

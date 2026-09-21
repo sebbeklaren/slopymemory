@@ -17,7 +17,7 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from agent_memory.config import settings
 from agent_memory.embed.nomic import NomicEmbedder
-from agent_memory.guard import find_secret, refusal_message
+from agent_memory.guard import find_secret_in_save, kind_in_field, refusal_message
 from agent_memory.mcp import handlers
 from agent_memory.spaces import store as m3
 from agent_memory.spaces.live_store_state import LiveStore
@@ -92,15 +92,19 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
                 facets: dict[str, str] | None = None, save_concepts: list | None = None,
                 supersedes: str | None = None, ctx: Context | None = None) -> dict:
     session_key = _session_key_from_context(ctx)   # server-derived from the MCP session — never agent-supplied
-    secret = find_secret(text)
-    if secret is not None:
+    hit = find_secret_in_save(text, thread, scope, facets, save_concepts)
+    if hit is not None:
         # REFUSED, never redacted, before any connection is opened: a memory is repeated on every retrieval,
-        # so a secret stored once is leaked forever. The log carries the KIND only — no text field, no
-        # snippet — because the invocation log is itself a plain-text file that outlives the session.
+        # so a secret stored once is leaked forever. Every agent-supplied string is guarded (text, thread,
+        # scope, facet values, concept labels). The log carries the KIND and the FIELD NAME only — no text,
+        # no snippet, none of the other values — because the invocation log is itself a plain-text file that
+        # outlives the session.
+        secret, field = hit
+        kind = kind_in_field(secret, field)
         _log({"tool": "memory_save", "tenant": tenant, "session_key": session_key,
-              "refused": "secret", "kind": secret.kind, "status": "refused"})
-        return {"status": "refused", "reason": "secret", "kind": secret.kind,
-                "message": refusal_message(secret)}
+              "refused": "secret", "kind": kind, "field": field, "status": "refused"})
+        return {"status": "refused", "reason": "secret", "kind": kind, "field": field,
+                "message": refusal_message(secret, field)}
     conn = _connect()
     try:
         out = handlers.memory_save(conn, _store, tenant, session_key, text, scope, thread, facets,
