@@ -47,13 +47,13 @@ async def _roundtrip(url: str) -> tuple[dict, dict]:
                 "memory_save",
                 {
                     "tenant": "default",
-                    "text": "Both GPUs on the rig are capped at 300 W.",
+                    "text": "The build server has 64 GB of memory.",
                     "session_key": "roundtrip",
                 },
             )
             got = await session.call_tool(
                 "memory_retrieve",
-                {"tenant": "default", "query": "what power limit are the GPUs set to?", "k": 5},
+                {"tenant": "default", "query": "how much memory does the build server have?", "k": 5},
             )
             return _payload(saved), _payload(got)
 
@@ -102,7 +102,7 @@ def test_mcp_server_real_roundtrip(conn, tmp_path):
     )
     # MCP twin: the retrieved payload's result for the saved memory carries text equal to saved text (VERBATIM)
     saved_result = next(r for r in results if r["memory_id"] == saved_id)
-    saved_text = "Both GPUs on the rig are capped at 300 W."
+    saved_text = "The build server has 64 GB of memory."
     assert saved_result.get("text") == saved_text, (
         f"saved memory's retrieved text {saved_result.get('text')!r} != {saved_text!r}: {saved_result}"
     )

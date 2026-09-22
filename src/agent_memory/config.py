@@ -29,14 +29,14 @@ class Settings:
     default_tenant: str = os.getenv("AM_DEFAULT_TENANT", "default")
     mcp_host: str = os.getenv("AM_MCP_HOST", "127.0.0.1")
     mcp_port: int = int(os.getenv("AM_MCP_PORT", "8765"))
-    mcp_surface_floor: float = float(os.getenv("AM_MCP_SURFACE_FLOOR", "0.5"))  # legacy (768 MCP tiering, removed Phase 2); unused
-    mcp_surface_core: float = float(os.getenv("AM_MCP_SURFACE_CORE", "0.7"))   # legacy (768 MCP tiering, removed Phase 2); unused
+    mcp_surface_floor: float = float(os.getenv("AM_MCP_SURFACE_FLOOR", "0.5"))  # legacy (768 MCP tiering, removed); unused
+    mcp_surface_core: float = float(os.getenv("AM_MCP_SURFACE_CORE", "0.7"))   # legacy (768 MCP tiering, removed); unused
     mcp_invocation_log: str = os.getenv("AM_MCP_INVOCATION_LOG", "runs/mcp_invocations.jsonl")
     ts_decay_lambda: float = float(os.getenv("AM_TS_DECAY_LAMBDA", "0.1"))      # per virtual-day
     ts_storage_bump: float = float(os.getenv("AM_TS_STORAGE_BUMP", "0.5"))      # σ, monotonic
     ts_retrieval_bump: float = float(os.getenv("AM_TS_RETRIEVAL_BUMP", "0.5"))  # ρ, spacing
     ts_sim_floor: float = float(os.getenv("AM_TS_SIM_FLOOR", "0.8"))  # alpha: decay modulates sim only within [alpha,1] (near-tie tiebreaker)
-    # Phase-2 constellations are ISOLATED CLIQUES (every aspect bound to every other; no
+    # Constellations are ISOLATED CLIQUES (every aspect bound to every other; no
     # cross-memory synapses yet), so 1 hop already reaches a seeded memory's whole constellation.
     # hop_cap>=2 adds NO new reachable nodes — only back-flow cycles (a->b->a) that inflate dense
     # cliques and let topology dominate relevance (measured: hop=2 recall 0.33 vs hop=1
@@ -48,7 +48,7 @@ class Settings:
     # not the hop count but MULTIPLE INCOMING CONTRIBUTIONS to one node — which a dense same-thread
     # clique already hits at hop 1 (a 6-clique's sum-lift evicted a stronger proximity hit). sum==max
     # still holds for sparse single-edge bridges, so the connected-but-not-similar burst value is
-    # unchanged. Density-inflation is guarded by tests/{test_burst_density_invariant,test_clique_crowding}.py.
+    # unchanged. Density-inflation is guarded by the existing density- and clique-crowding mechanism tests.
     m3_hop_cap: int = int(os.getenv("AM_M3_HOP_CAP", "1"))
     m3_attenuation: float = float(os.getenv("AM_M3_ATTENUATION", "0.5"))
     # max-relax burst (density->breadth-not-loudness). Default ON (the clique-crowding fix):
@@ -59,7 +59,7 @@ class Settings:
     m3_activation_cutoff: float = float(os.getenv("AM_M3_ACTIVATION_CUTOFF", "0.01"))
     m3_episodic_t0:   float = float(os.getenv("AM_M3_EPISODIC_T0",   "1577836800.0"))  # 2020-01-01Z fixed origin
     m3_episodic_unit: float = float(os.getenv("AM_M3_EPISODIC_UNIT", "86400.0"))       # 1 day; temporal-resolution knob
-    # Multi-space Phase A: place the episodic aspect-node per memory? Default ON = byte-identical
+    # Multi-space support: place the episodic aspect-node per memory? Default ON = byte-identical
     # (existing suites untouched). OFF -> place_memory skips the episodic node (its constellation
     # shrinks by one; semantic/project unaffected). Parsed like m3_cross_memory_on.
     m3_episodic_on: bool = os.getenv("AM_M3_EPISODIC_ON", "1").lower() not in ("0", "false", "no", "off", "")
@@ -78,10 +78,10 @@ class Settings:
     m3_projector_path:        str   = os.getenv("AM_M3_PROJECTOR_PATH", "runs/m3_projector.pkl")
     m3_buffer_path:           str   = os.getenv("AM_M3_BUFFER_PATH", "runs/m3_buffer.jsonl")  # pre-warm WAL; cleared at fit
     m3_background_corpus_path: str  = os.getenv("AM_M3_BACKGROUND_CORPUS_PATH", "gold/substrate/background_corpus.txt")
-    # --- Phase B1: multi-space retrieval integration (THE CLEARANCE) ---
+    # --- Multi-space retrieval integration ---
     # Directory of per-space facet projectors (projector_<space>.pkl for the four content spaces),
     # produced by scripts/multispace_pass.py. "" = feature OFF (semantic-only seeding, byte-identical
-    # to pre-B1). When set, LiveStore.warmup loads each present projector and every query is ALSO
+    # to semantic-only seeding). When set, LiveStore.warmup loads each present projector and every query is ALSO
     # seeded through that space's projector transform (the raw query lands in genuinely different
     # per-space neighbourhoods; a memory's own text through the function-projector lands near its own
     # function node — the crowded-twin recovery mechanism).
@@ -94,16 +94,16 @@ class Settings:
     # capped at (1+3*beta). 0.0 = no boost (byte-identical). A bounded multiplier on proximity,
     # never a replacement. Applied memory-level, after max-aggregation dedup, before final top-k.
     # GATED on facet projectors being loaded: with no projectors (dir unset) the boost is a no-op
-    # regardless of beta — the production path stays byte-identical to pre-B1 until the clearance
-    # canonicalizes and the projector dir is configured. Breadth counts semantic + content-facet
+    # regardless of beta — the production path stays byte-identical to semantic-only seeding until
+    # the projector dir is configured. Breadth counts semantic + content-facet
     # spaces ONLY (episodic/project are placement structure, not facet richness — every saved memory
     # has them; see live_store._BREADTH_SPACES).
     m3_breadth_boost:         float = float(os.getenv("AM_M3_BREADTH_BOOST", "0.1"))
-    # --- Phase B2: save-time facet extraction (new memories born multi-space) ---
+    # --- Save-time facet extraction (new memories born multi-space) ---
     # extractor_version stamped on m3_facet rows written at SAVE time (provenance only — the prompt
     # source is spaces/facet_prompts.py, versioned + dialect-guarded; this string must NEVER signal
-    # prompt/input drift). Distinct default from the Phase-A backfill's claude-phase-a-v1 so the DB
-    # records which pass produced each facet.
+    # prompt/input drift). Distinct default from the backfill pass's own extractor version tag so the
+    # DB records which pass produced each facet.
     m3_save_extractor_version: str = os.getenv("AM_M3_SAVE_EXTRACTOR_VERSION", "claude-live-v1")
     # --- Word-layer concept-vote retrieval: cross-space convergence, NOT TF-IDF ---
     # Sub-additive decay applied within a space when aggregating a memory's concept contributions

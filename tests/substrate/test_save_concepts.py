@@ -3,7 +3,7 @@
 `save_concepts` places+dedups+links each concept to THIS memory (concepts_placed in the reply);
 without `save_concepts` the save is byte-identical to the current warm save (no concepts_placed key).
 Mirrors the retrieve side that already takes query_concepts. @pytest.mark.embed — real nomic (concept
-lighting is 768-cosine); fixtures mirror tests/test_concept_primary_retrieve.py."""
+lighting is 768-cosine); fixtures mirror the retrieve-side concept tests in this suite."""
 import pytest
 
 from agent_memory.spaces.live_store_state import LiveStore
@@ -16,8 +16,8 @@ def embedder():
     return NomicEmbedder()
 
 
-# A small varied BACKGROUND corpus for the semantic projector. (The brief's illustrative
-# ["a","b","c","d"] is below UMAP's spectral-init floor at n_components=3 — it raises
+# A small varied BACKGROUND corpus for the semantic projector. (An illustrative four-item list
+# like ["a","b","c","d"] is below UMAP's spectral-init floor at n_components=3 — it raises
 # "k >= N"; a handful of distinct sentences fits cleanly. The corpus contents are immaterial
 # to what these tests assert — they only need a WARM projector so save() takes the warm path.)
 _BG = ["combat is heavy and deliberate", "the economy is scarce on purpose",

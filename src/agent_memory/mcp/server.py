@@ -45,8 +45,8 @@ def _log(record: dict) -> None:
 
 def _session_key_from_context(ctx: "Context | None") -> str:
     """Co-occurrence session key = the MCP session, derived SERVER-SIDE (session identity is
-    infrastructure, never agent-supplied). OpenHarness opens ONE MCP session per `oh` run
-    (connect_all() at startup, reused), so the Mcp-Session-Id is stable per conversation/run and
+    infrastructure, never agent-supplied). A coding harness typically opens one MCP session per
+    run (connected once at startup, reused), so the Mcp-Session-Id is stable per conversation/run and
     fresh per run. Primary: the `mcp-session-id` request header (the client sends it on every
     post-initialize call). Fallback: the per-connection ServerSession identity (stable within one
     MCP session). NOTE (production follow-up): the LiveStore's in-memory {session_key: [nodes]} map
@@ -117,8 +117,9 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
           # in the WAL. Under a real-use harvest there is no re-run to recover it from.
           "memory_id": out.get("memory_id", ""), "text": text or "",
           # Log the agent's extraction VERBATIM, not a count/keys summary: the (text -> concepts)
-          # pairs are training data that cannot be reconstructed after the fact (guarded by
-          # tests/test_invocation_log_trainability.py). Save-side concepts/facets are also persisted
+          # pairs cannot be reconstructed after the fact, so they are kept verbatim here so they can
+          # be replayed (guarded by a regression test that asserts this field is logged verbatim).
+          # Save-side concepts/facets are also persisted
           # (m3_concept_link, m3_facet), so this half is belt-and-braces; the query side (below) is
           # the irrecoverable one.
           "thread": thread or "", "facets": facets or None,
@@ -160,11 +161,11 @@ def memory_retrieve(tenant: str, query: str, k: int = 5,
                                        query_concepts=query_concepts)
     finally:
         conn.close()
-    # THE IRRECOVERABLE HALF of the training record: query_concepts / query_facets seed retrieval
+    # THE IRRECOVERABLE HALF of the logged record: query_concepts / query_facets seed retrieval
     # and are then discarded — unlike the save side they are persisted NOWHERE. Logging len()/sorted()
     # instead of the values would destroy the (question -> extracted concepts) pair on every call —
-    # the exact pair a learned replacement for query-concept extraction would train on, and
-    # query-concept extraction is the retrieval ceiling. Guarded by tests/test_invocation_log_trainability.py.
+    # the exact pair query-concept extraction depends on, and query-concept extraction is the
+    # retrieval ceiling. Guarded by a regression test that asserts this field is logged verbatim.
     results = out.get("results", [])
     _log({"tool": "memory_retrieve", "tenant": tenant, "query": query, "k": k,
           "query_facets": query_facets or None,

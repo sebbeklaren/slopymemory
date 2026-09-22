@@ -31,7 +31,7 @@ def ingest_semantic(conn, embedder, facts) -> tuple[dict[str, str], Projector]:
 def fit_constellation_projectors(embedder, memories, *, projector_factory=fit_pca) -> dict:
     """Fit one projector per space, over the union of every memory's per-space aspect-texts.
     Does NOT touch the DB. Caller passes the resulting {space: Projector} dict to
-    place_constellations (per-session ingest, no refit) — used by the Phase-3 longitudinal harness
+    place_constellations (per-session ingest, no refit) — used by the longitudinal eval harness
     so cross-session coords stay comparable."""
     spaces = sorted({sp for m in memories for sp in m["aspects"]})
     projectors: dict = {}
@@ -62,7 +62,7 @@ def place_constellations(conn, embedder, projectors: dict, memories) -> dict[str
 
 def ingest_constellations(conn, embedder, memories, *, projector_factory=fit_pca) -> tuple[dict[str, dict[str, str]], dict]:
     """Convenience: fit projectors on `memories`, then place + bind. Backward-compatible —
-    existing callers (Phase 2/2.5 eval scripts + tests) keep their interface.
+    existing callers (the eval scripts + tests) keep their interface.
 
     projector_factory: callable(embeddings) -> projector. Defaults to fit_pca; pass fit_umap for
     the PCA-vs-UMAP fidelity comparison."""

@@ -72,9 +72,9 @@ def test_warm_save_never_touches_wal(conn, monkeypatch, tmp_path):
     assert not wal.exists()                                       # warm path byte-identical
 
 
-def test_restart_recovery_keystone(conn, monkeypatch, tmp_path):
-    """KEYSTONE: buffered saves survive a process restart via the WAL.
-    Teeth: the delete-the-WAL control below proves recovery is WAL-attributable."""
+def test_restart_recovery_survives_wal(conn, monkeypatch, tmp_path):
+    """Buffered saves survive a process restart via the WAL.
+    The delete-the-WAL control below proves recovery is WAL-attributable."""
     m3.apply_schema(conn); m3.seed_spaces(conn)
     wal, _ = _wal_paths(monkeypatch, tmp_path)
     a = LiveStore(_StubEmbedder(), mode="bootstrap", bootstrap_n=3, fit_fn=_stub_fit)

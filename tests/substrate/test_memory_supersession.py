@@ -1,5 +1,5 @@
 # tests/test_memory_supersession.py
-"""Memory-level supersession primitives. Teeth:
+"""Memory-level supersession primitives. Asserts:
   1. note is idempotent-with-bump (repeat adjudication = strength bump, one row).
   2. resolve_standing walks to the HEAD (chain), flags cycles, flags divergent heads.
   3. attach_supersessions is ADD-ONLY: same order, same scores, same ids — always."""

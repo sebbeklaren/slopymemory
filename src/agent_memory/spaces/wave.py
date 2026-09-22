@@ -8,9 +8,9 @@ from agent_memory.spaces import store as m3
 def synapse_wave(conn, seeds: dict[str, float], *, hop_cap: int, attenuation: float,
                  cutoff: float, now=None, max_relax: bool = False, recorder=None) -> dict[str, float]:
     """Spread activation from seed nodes along synapses (undirected, type-blind), attenuating per
-    hop x the synapse's retrieval strength. `now` threads decay-aware effective strength (Phase 3).
+    hop x the synapse's retrieval strength. `now` threads decay-aware effective strength.
 
-    max_relax=False (default): sum-over-paths (Phase 2 byte-identical).
+    max_relax=False (default): sum-over-paths (the earlier byte-identical behavior).
     max_relax=True: BELLMAN-FORD RELAXATION for safe hop>=2 traversal on a connected graph —
       activation[dst] = max(activation[dst], spread); a node may be IMPROVED across hops; the
       frontier enqueues a node only when its activation improves; bounded by hop_cap iterations.
@@ -28,8 +28,8 @@ def synapse_wave(conn, seeds: dict[str, float], *, hop_cap: int, attenuation: fl
             for dst, retr in m3.outgoing(conn, nid, now=now):
                 # Per-edge push, NO /degree. Burst strength is the single constant `attenuation`;
                 # footprint scales with DENSITY (more neighbours -> more reach) at the SAME per-edge
-                # push — breadth, not loudness. Do NOT normalize by neighbour count. Guarded by
-                # tests/test_burst_density_invariant.py.
+                # push — breadth, not loudness. Do NOT normalize by neighbour count. Guarded by the
+                # existing density-invariance mechanism test.
                 spread = act * attenuation * retr
                 if spread < cutoff:
                     if recorder is not None:

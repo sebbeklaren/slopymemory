@@ -10,14 +10,14 @@ from agent_memory import strength as _strength
 from agent_memory.spaces import negative_link as _nl
 from agent_memory.spaces import positive_link as _pl
 
-_SPACES = [  # (id, name, source) — the six harness-domain spaces + the four Phase-A content-facet spaces
+_SPACES = [  # (id, name, source) — the six harness-domain spaces + the four content-facet spaces
     (1, "semantic", "project_embedding"),
     (2, "episodic", "recency"),
     (3, "procedural", "project_embedding"),
     (4, "outcome", "outcome"),
     (5, "project", "code_location"),
     (6, "social", "project_embedding"),
-    # Multi-space Phase A: content-facet spaces (additive ids; each coord = an embedding of the
+    # Multi-space support: content-facet spaces (additive ids; each coord = an embedding of the
     # space's own facet text — see m3_facet + the placement pass). seed_spaces is ON CONFLICT DO
     # NOTHING, so appending these is idempotent on already-seeded DBs.
     (7, "function", "facet_embedding"),       # the mechanic/rule itself
@@ -68,7 +68,7 @@ def place_node(conn: psycopg.Connection, space: str, label: str, kind: str,
 
 def bind_constellation(conn: psycopg.Connection, node_ids: list[str], *, type: str = "assoc") -> None:
     """Link a memory's aspect-nodes with static synapses (retrieval_strength defaults to 1.0;
-    two-strength OFF in Phase 2). One undirected edge per pair (stored once; `outgoing` reads
+    two-strength OFF by default). One undirected edge per pair (stored once; `outgoing` reads
     both directions)."""
     pairs = list(combinations(sorted(set(node_ids)), 2))
     if not pairs:
@@ -100,8 +100,8 @@ def note_related(conn: psycopg.Connection, node_a: str, node_b: str, *, type: st
 def outgoing(conn: psycopg.Connection, node_id: str, *, now: _dt | None = None) -> list[tuple[str, float]]:
     """Synapse neighbours of a node (undirected): the other endpoint + the synapse's retrieval
     strength. When `now` is provided, applies the synapse-side decay formula
-    `retrieval * exp(-(lambda / storage) * delta_days)` using `last_activated_at` (Phase 3
-    decay-aware spread). Default `now=None` returns the raw retrieval_strength (Phase 2 byte-
+    `retrieval * exp(-(lambda / storage) * delta_days)` using `last_activated_at` (the
+    decay-aware spread). Default `now=None` returns the raw retrieval_strength (the earlier byte-
     identical behavior). Used by synapse_wave."""
     with conn.cursor() as cur:
         if now is None:
@@ -141,7 +141,7 @@ def nearest_in_space(conn: psycopg.Connection, space: str, qcoord: tuple[float, 
 def effective_accessibility(conn: psycopg.Connection, node_id: str, *, now: _dt) -> float:
     """Decay-aware accessibility for a single node, computed at `now`. Mirrors v1's
     effective_retrieval formula: retrieval * exp(-(lambda / storage) * delta_days). Reads the
-    Phase-3 columns added to m3_node (storage_strength, retrieval_strength, last_activated_at)."""
+    strength columns added to m3_node (storage_strength, retrieval_strength, last_activated_at)."""
     with conn.cursor() as cur:
         cur.execute("SELECT retrieval_strength, storage_strength, last_activated_at "
                     "FROM m3_node WHERE id = %s", (node_id,))
@@ -180,14 +180,14 @@ def reinforce_synapses_in(conn: psycopg.Connection, top_k_ids: list[str], *, now
     """Hebbian, both-endpoints-clean: bump only synapses where BOTH endpoints are in
     top_k_ids AND NEITHER endpoint has an active incoming m3_negative_link.
 
-    Phase 3+ positive arm (amplify_cited=True): within those clean synapses, a synapse with
+    Positive-citation arm (amplify_cited=True): within those clean synapses, a synapse with
     EITHER endpoint cited (active m3_positive_link) gets an amplified bump (sigma*amplify, rho
     clamped to <=1.0 so retrieval stays <=1.0). Ordered predicate per synapse:
       negative on either endpoint -> skip (gated nodes already excluded from `clean`; gate beats cite)
       else cited on either endpoint -> amplified sigma/rho
       else -> normal sigma/rho
-    amplify_cited=False is byte-identical to the Phase 3 behavior
-    (tests/test_phase3plus_amplify.py::test_amplify_cited_false_is_phase3_identical)."""
+    amplify_cited=False is kept byte-identical to the un-amplified behavior, proven by the
+    existing mechanism tests."""
     if len(top_k_ids) < 2:
         return
     gated = _nl.suppressed_in(conn, top_k_ids)

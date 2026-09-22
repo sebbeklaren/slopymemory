@@ -3,8 +3,8 @@
 with the fixed-origin episodic policy + optional scope, then spawns co-occurrence (same-session)
 note_related edges between the new memory's SEMANTIC node and the prior same-session semantic nodes
 (connected-but-not-similar — the burst's reason to exist; NOT proximity, which is circular). Used by
-the Phase-1 smoke driver (batch) and (Phase 2) the MCP save handler. STATELESS re: session tracking
-— the caller owns the {session_key: [semantic_node_ids]} map (Phase 2 persists it)."""
+the smoke-test driver (batch) and the MCP save handler. STATELESS re: session tracking
+— the caller owns the {session_key: [semantic_node_ids]} map (the MCP save handler persists it)."""
 from agent_memory.config import settings
 from agent_memory.spaces import store as m3
 from agent_memory.spaces.facets import upsert_facet
@@ -40,14 +40,14 @@ def save_memory(conn, sem_proj, embedder, episodic_coord_fn, *, ref, text, times
 
 def place_facets(conn, *, memory_id, semantic_node_id, facets, facet_projectors, embedder,
                  extractor_version) -> tuple[list[str], list[str]]:
-    """Phase B2 save-time facet placement (stateless). For each (space, text) in `facets`:
+    """Save-time facet placement (stateless). For each (space, text) in `facets`:
       1. PERSIST it to m3_facet (upsert_facet — DO UPDATE, sharpen-on-re-save) with `extractor_version`.
          Persistence is UNCONDITIONAL: a facet is durable even when its space has no projector loaded
          yet, so it joins the map at the next refit (honest deferral).
       2. PLACE it iff that space has a LOADED projector: embed the facet text ONCE, transform through
-         the space's projector (same coordinate frame as the Phase-A multispace_pass — embed_document),
+         the space's projector (same coordinate frame as the multispace_pass backfill — embed_document),
          place a `memory`-kind node (source_ref=memory_id), and bind it star-to-semantic (an additive
-         `assoc` edge to the memory's semantic node — the Phase-A constellation pattern).
+         `assoc` edge to the memory's semantic node — the same constellation pattern used elsewhere).
 
     Returns (facets_placed, facets_deferred): the space names that got a node vs. those persisted-only
     (no projector). Ordered by the facets dict's iteration order. Caller guards `if facets:` (a None/
@@ -64,7 +64,7 @@ def place_facets(conn, *, memory_id, semantic_node_id, facets, facet_projectors,
         coord = proj.project(embedder.embed_document(text))
         fnode = m3.place_node(conn, space, label=memory_id, kind="memory", coord=coord,
                               source_ref=memory_id)
-        m3.bind_constellation(conn, [fnode, semantic_node_id])   # star-to-semantic (Phase-A)
+        m3.bind_constellation(conn, [fnode, semantic_node_id])   # star-to-semantic (the constellation pattern)
         placed.append(space)
     return placed, deferred
 
@@ -78,14 +78,14 @@ def _node_memory_map(conn, node_ids) -> dict[str, str]:
         return {r[0]: r[1] for r in cur.fetchall()}
 
 
-# Breadth (Phase B1) counts ONLY semantic + the content-facet spaces. Episodic/project nodes are
+# Breadth (the multi-space retrieval boost) counts ONLY semantic + the content-facet spaces. Episodic/project nodes are
 # PLACEMENT STRUCTURE (every saved memory gets them via place_memory), so counting them would grant
 # spurious importance from node-count, not facet richness — legacy-space breadth must never boost.
 _BREADTH_SPACES = frozenset({"semantic", "function", "feeling", "fiction", "player_facing"})
 
 
 def _node_meta(conn, node_ids) -> dict[str, tuple[str, str]]:
-    """node_id -> (memory_id, space_name). The B1 breadth boost + return_spaces need each considered
+    """node_id -> (memory_id, space_name). The breadth boost + return_spaces need each considered
     node's SPACE as well as its memory; one join instead of the plain source_ref lookup."""
     if not node_ids:
         return {}
@@ -126,17 +126,17 @@ def thread_semantic_nodes(conn, thread) -> list[str]:
 def retrieve_memories(conn, sem_proj, embedder, query, k, *, query_facets=None, facets=None,
                       epoch_range=None, facet_projectors=None, return_spaces=False,
                       return_gradient=False, **kwargs):
-    """Memory-level top-k (Phase-2 pin a): over-fetch k*OVERFETCH nodes, dedup aspect-nodes -> memories
+    """Memory-level top-k: over-fetch k*OVERFETCH nodes, dedup aspect-nodes -> memories
     (max-activation node per memory, grouped by source_ref), truncate to k memories.
 
-    Phase B1 (THE CLEARANCE): `facet_projectors` = {space: projector} for the content-facet spaces.
+    Multi-space retrieval: `facet_projectors` = {space: projector} for the content-facet spaces.
     Two seeding modes drive the content-facet spaces, selected by `query_facets`:
 
-      * `query_facets is None` -> the RAW-TEXT projector-transform FALLBACK (pre-B1-enhancer, kept for
+      * `query_facets is None` -> the RAW-TEXT projector-transform FALLBACK (kept for
         non-LLM consumers): with projectors loaded, the raw query embedding is transformed through
         EVERY facet projector and seeds that space; with none loaded, nothing extra is seeded.
-      * `query_facets` is a dict (possibly empty) -> IN-DISTRIBUTION query-facet seeding (the B1
-        enhancer): NO raw-text facet transforms at all. Each supplied facet TEXT is embedded once and
+      * `query_facets` is a dict (possibly empty) -> IN-DISTRIBUTION query-facet seeding (the facet-
+        seeding enhancer): NO raw-text facet transforms at all. Each supplied facet TEXT is embedded once and
         transformed through ITS OWN space's projector (facet descriptions are in-distribution for
         projectors fit on facet descriptions; raw queries are OOD and route by coincidence). A space
         with no supplied facet OR no loaded projector gets no seed; `{}` -> semantic-only seeding.
@@ -146,8 +146,8 @@ def retrieve_memories(conn, sem_proj, embedder, query, k, *, query_facets=None, 
     retrieve_seeded (weight 0 or no projectors = byte-identical to semantic-only). After the
     max-aggregation dedup, each memory's score gets a BOUNDED breadth boost score*(1+beta*(breadth-1))
     capped at (1+3*beta). The boost is GATED on facet_projectors being non-empty — no projectors
-    loaded means NO boost regardless of beta, so the pre-clearance production path stays byte-identical
-    to pre-B1. breadth = #distinct _BREADTH_SPACES (semantic + content-facet spaces ONLY;
+    loaded means NO boost regardless of beta, so the production path with no projectors configured
+    stays byte-identical to semantic-only seeding. breadth = #distinct _BREADTH_SPACES (semantic + content-facet spaces ONLY;
     episodic/project are placement structure, never facet richness) in which the memory has an
     activated (>1e-9) considered node, floored at 1 (an episodic/project-only surfacing is never
     PENALIZED by the exclusion). beta=0 -> no boost.
@@ -157,7 +157,7 @@ def retrieve_memories(conn, sem_proj, embedder, query, k, *, query_facets=None, 
     memory (the OOD spurious-promotion watch); default False keeps the legacy shape."""
     over = settings.m3_dedup_overfetch
     if query_facets is None:
-        # RAW-TEXT projector-transform FALLBACK (pre-B1-enhancer behaviour, EXACTLY). Embed ONCE — the
+        # RAW-TEXT projector-transform FALLBACK (the original behaviour, EXACTLY). Embed ONCE — the
         # same query vector feeds the semantic seed (passed into seed_query_coords) AND every facet
         # projector transform (nomic CPU latency on the hot path). Inactive ->
         # None, seed_query_coords embeds as before. Byte-identical either way (same text -> same vector).
@@ -169,7 +169,7 @@ def retrieve_memories(conn, sem_proj, embedder, query, k, *, query_facets=None, 
             for space, proj in facet_projectors.items():
                 sc[space] = proj.project(qvec)
     else:
-        # B1 enhancer: IN-DISTRIBUTION query-facet seeding. Semantic ALWAYS seeded with the raw query;
+        # Facet-seeding enhancer: IN-DISTRIBUTION query-facet seeding. Semantic ALWAYS seeded with the raw query;
         # NO raw-text facet transforms. Each supplied facet text is embedded once (facets are distinct
         # texts) and transformed through ITS space's projector; a space with no facet or no loaded
         # projector seeds nothing. Empty dict -> semantic-only (silent-on-everything, distinct from the
@@ -197,8 +197,8 @@ def retrieve_memories(conn, sem_proj, embedder, query, k, *, query_facets=None, 
             if a > d.get(space, 0.0):
                 d[space] = a
     boost = settings.m3_breadth_boost
-    # GATED on facet_projectors: no projectors -> no boost regardless of beta (pre-clearance
-    # production path is byte-identical to pre-B1); beta=0 -> skip too (the control).
+    # GATED on facet_projectors: no projectors -> no boost regardless of beta (with no projectors
+    # configured the production path is byte-identical to semantic-only seeding); beta=0 -> skip too (the control).
     if boost and facet_projectors:
         for mem in best:
             # content-space breadth only (semantic + facets); floored at 1 so an episodic/project-

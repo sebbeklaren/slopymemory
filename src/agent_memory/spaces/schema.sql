@@ -35,15 +35,15 @@ CREATE TABLE IF NOT EXISTS m3_synapse (
 CREATE INDEX IF NOT EXISTS m3_synapse_src_idx ON m3_synapse (src_node);
 CREATE UNIQUE INDEX IF NOT EXISTS m3_synapse_pair_uq ON m3_synapse (src_node, dst_node, type);
 
--- Phase 3: per-node accessibility (mirrors v1 node strength columns; second strength quantity, proximity-wave gain)
+-- Per-node accessibility (mirrors v1 node strength columns; second strength quantity, proximity-wave gain)
 ALTER TABLE m3_node ADD COLUMN IF NOT EXISTS storage_strength    real        NOT NULL DEFAULT 1.0;
 ALTER TABLE m3_node ADD COLUMN IF NOT EXISTS retrieval_strength  real        NOT NULL DEFAULT 1.0;
 ALTER TABLE m3_node ADD COLUMN IF NOT EXISTS last_activated_at   timestamptz NOT NULL DEFAULT now();
 
--- Phase 3: synapse two-strength activated; last_activated_at is the missing piece (strength columns exist from Phase 1)
+-- Synapse two-strength activated; last_activated_at is the missing piece (strength columns already existed)
 ALTER TABLE m3_synapse ADD COLUMN IF NOT EXISTS last_activated_at timestamptz NOT NULL DEFAULT now();
 
--- Phase 3: m3 parallel negative_link table (FKs to m3_node, separate from the 768 negative_link)
+-- The m3 parallel negative_link table (FKs to m3_node, separate from the 768 negative_link)
 CREATE TABLE IF NOT EXISTS m3_negative_link (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     source_id   uuid NOT NULL REFERENCES m3_node(id) ON DELETE CASCADE,
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS m3_negative_link (
 CREATE UNIQUE INDEX IF NOT EXISTS m3_negative_link_pair_uq ON m3_negative_link (source_id, target_id, kind);
 CREATE INDEX IF NOT EXISTS m3_negative_link_target_idx ON m3_negative_link (target_id);
 
--- Phase 3+: m3 positive_link table (unary — a cite names one node; FK to m3_node, mirror-in-
+-- The m3 positive_link table (unary — a cite names one node; FK to m3_node, mirror-in-
 -- discipline of m3_negative_link). kind/scope provenance-only; gating consults link PRESENCE only.
 CREATE TABLE IF NOT EXISTS m3_positive_link (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -72,7 +72,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS m3_positive_link_node_uq  ON m3_positive_link 
 CREATE INDEX        IF NOT EXISTS m3_positive_link_node_idx ON m3_positive_link (node_id);
 
 -- Memory-layer text (the compact node's own content). thread/source_ptr are RESERVED:
--- thread = per-thread co-occurrence tag; source_ptr = Phase-3
+-- thread = per-thread co-occurrence tag; source_ptr = an
 -- archive pointer (not used yet). No FK to m3_node — the memory row is the unit.
 CREATE TABLE IF NOT EXISTS m3_memory (
   memory_id  text PRIMARY KEY,
@@ -91,7 +91,7 @@ CREATE INDEX IF NOT EXISTS m3_memory_thread_idx ON m3_memory (thread);
 ALTER TABLE m3_memory ADD COLUMN IF NOT EXISTS scope text;
 ALTER TABLE m3_memory ADD COLUMN IF NOT EXISTS at    timestamptz;
 
--- Multi-space Phase A: one facet DESCRIPTION per (memory, content-space). Self-describing
+-- Multi-space support: one facet DESCRIPTION per (memory, content-space). Self-describing
 -- store — the placement pass fits one projector per populated space on ITS own facet corpus.
 -- CONTRAST with m3_memory: the memory `text` is an IMMUTABLE record (upsert DO NOTHING), a facet is
 -- DERIVED + REFINABLE (upsert DO UPDATE — re-extraction may sharpen it). NEVER-PAD: an empty facet

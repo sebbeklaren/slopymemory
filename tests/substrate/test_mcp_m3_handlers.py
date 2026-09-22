@@ -11,7 +11,7 @@ class _FakeStore:
         return {"status": "saved", "memory_id": "m1"}
     def retrieve(self, conn, query, k, *, query_facets=None, facets=None, epoch_range=None, **kwargs):
         self.last_query_facets = query_facets
-        return {"status": "ok", "results": [{"memory_id": "m1", "score": 0.9, "text": "GPU power limit is 300 W"}]}
+        return {"status": "ok", "results": [{"memory_id": "m1", "score": 0.9, "text": "the deploy uses the blue database"}]}
 
 
 def test_memory_save_threads_session_key_and_scope():
@@ -41,14 +41,14 @@ def test_memory_retrieve_returns_graded_set():
 
 def test_memory_retrieve_handler_returns_text_field():
     """Handler-level twin: non-gated dual to the MCP server roundtrip test. Verifies the
-    handler returns text from the store's retrieve (verbatim-text keystone)."""
-    out = handlers.memory_retrieve(None, _FakeStore(), "t", "GPU power limits", k=3)
+    handler returns text from the store's retrieve verbatim, unmodified."""
+    out = handlers.memory_retrieve(None, _FakeStore(), "t", "which database does the deploy use", k=3)
     assert out["status"] == "ok"
     result = out["results"][0]
-    assert result["text"] == "GPU power limit is 300 W"
+    assert result["text"] == "the deploy uses the blue database"
 
 
-# --- query_facets (B1 enhancer): boundary validation + pass-through ---
+# --- query_facets (facet-scoped retrieval): boundary validation + pass-through ---
 
 
 def test_memory_retrieve_threads_valid_query_facets_to_store():

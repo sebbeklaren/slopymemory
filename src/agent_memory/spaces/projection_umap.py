@@ -1,5 +1,5 @@
 # src/agent_memory/spaces/projection_umap.py
-"""UMAP projector with the same interface as projection.Projector, for the Phase-2.5 PCA-vs-UMAP
+"""UMAP projector with the same interface as projection.Projector, for the PCA-vs-UMAP
 fidelity comparison. Training points (the nodes) return their FITTED embedding (UMAP's best, via an
 exact-bytes cache); unseen points (queries) go through out-of-sample .transform(). UMAP has no EVR,
 so explained_variance_ratio is NaN."""

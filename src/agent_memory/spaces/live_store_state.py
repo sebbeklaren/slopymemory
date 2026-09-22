@@ -1,5 +1,5 @@
 # src/agent_memory/spaces/live_store_state.py
-"""LiveStore: the one stateful unit for the OH live memory. Holds the (loaded/None) semantic
+"""LiveStore: the one stateful unit for the live MCP memory server. Holds the (loaded/None) semantic
 projector, the bootstrap buffer, and the in-memory {session_key: [semantic_node_id]} co-occurrence
 map. save()/retrieve() orchestrate the warming-vs-warm logic; all placement/retrieval/edge logic
 lives in the stateless spaces primitives (save_memory, retrieve_memories, coordinate_sources)."""
@@ -18,7 +18,7 @@ from agent_memory.spaces.memory_supersession import note_memory_supersession, at
 
 log = logging.getLogger(__name__)
 
-# Phase B1: the four content-facet spaces whose per-space projectors seed a query alongside semantic.
+# Multi-space retrieval: the four content-facet spaces whose per-space projectors seed a query alongside semantic.
 _FACET_SPACES = ("function", "feeling", "fiction", "player_facing")
 
 
@@ -61,7 +61,7 @@ class LiveStore:
         self._session_nodes = {}    # session_key -> [semantic node_id]; in-memory by design:
                                     # DB keeps memories+edges across restart, only interrupted-session linking is lost
         self._epi = cs.fixed_origin_episodic()
-        self.facet_projectors = {}                 # Phase B1: {space: projector}; empty = feature OFF.
+        self.facet_projectors = {}                 # multi-space retrieval: {space: projector}; empty = feature OFF.
         self._facet_projectors_loaded = False      # load-once latch (warmup OR first retrieve)
 
     @property
@@ -90,7 +90,7 @@ class LiveStore:
         answers; losing them silently is the failure this removes). A WAL alongside a warm/fixed
         path is inconsistent (fit clears it) -> fail loud, don't guess."""
         from datetime import datetime
-        self._ensure_facet_projectors()             # Phase B1: independent of the semantic warm state
+        self._ensure_facet_projectors()             # multi-space retrieval: independent of the semantic warm state
         wal = Path(settings.m3_buffer_path)
         loaded = cs.load_projector(settings.m3_projector_path)
         if loaded is not None:
@@ -117,7 +117,7 @@ class LiveStore:
                 r = json.loads(ln)
                 self._buffer.append((r["memory_id"], r["text"], r["session_key"],
                                      r["scope"], datetime.fromisoformat(r["now"]), r.get("thread"),
-                                     r.get("facets"),           # B2: absent in pre-B2 WALs -> None
+                                     r.get("facets"),           # absent in WALs from before facets existed -> None
                                      r.get("save_concepts"),    # absent in pre-concept WALs -> None
                                      r.get("supersedes")))      # absent in pre-supersession WALs -> None
 
@@ -201,10 +201,10 @@ class LiveStore:
 
     def save(self, conn, text, *, session_key, now=None, scope=None, memory_id=None, thread=None,
              facets=None, save_concepts=None, supersedes=None) -> dict:
-        """B2: optional `facets` = {content-space: text} (validated at the MCP boundary). When
+        """Optional `facets` = {content-space: text} (validated at the MCP boundary). When
         provided + warm, each facet is persisted (m3_facet) and placed into its space (iff its
         projector is loaded) + bound to the semantic node; the reply gains facets_placed /
-        facets_deferred. facets=None/empty -> byte-identical to pre-B2 (no facet keys in the reply).
+        facets_deferred. facets=None/empty -> byte-identical to before facets existed (no facet keys in the reply).
         Buffered saves carry facets on the WAL and place them at fit time (reported deferred until the
         fit; the triggering warm-up save reports its actual placement).
 

@@ -55,7 +55,7 @@ def test_recognisable_secrets_are_found_with_their_kind(text, kind):
     "see ~/repo/docs/Reviews/1999-09-03-gauge-of-the-window/README.md",
     "the branch feature/scan-store-and-secrets-check-v2 is ready",
     "runs/timing_test/9f1805b3/summary.md holds the record",
-    "model someorg/Model3-27B-AWQ-BF16-INT4 served at 46 tok/s",
+    "model acme/Widget-13B-Q4 handles 540 requests per minute",
     "export AM_M3_RETRIEVAL_MODE=concept_primary_with_word_depth first",   # an env assignment: = joins name and value
     "memory/feedback_pre2000_papers_not_load_bearing.md says why",        # a year suffix on a word
     "RecognisableSecretsAreFoundWithTheirKindAndWhy is a long type name",   # letters only: a word, whatever its case

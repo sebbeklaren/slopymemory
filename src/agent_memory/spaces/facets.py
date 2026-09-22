@@ -1,5 +1,5 @@
 # src/agent_memory/spaces/facets.py
-"""The m3_facet store (Multi-space Phase A). A facet is a short, facet-pure description of ONE
+"""The m3_facet store (multi-space support). A facet is a short, facet-pure description of ONE
 aspect of a memory — its function / feeling / fiction / player-facing meaning — extracted per
 content-space. The placement pass fits one projector per populated space on ITS facet corpus and
 places one node per (memory, space).

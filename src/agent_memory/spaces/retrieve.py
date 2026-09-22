@@ -35,7 +35,7 @@ def retrieve_seeded(conn, seed_coords: dict[str, tuple[float, float, float]], k:
     """Substrate dual-wave from a per-space seed-coordinate map. The signal lands by proximity in
     every space present in seed_coords (the EXTENSION POINT: v1 callers pass {"semantic": coord};
     facets later add project/episodic keys with no signature change), then the synapse burst spreads
-    (intra-constellation + cross-memory note_related). Ranks by accumulated activation. The Phase-3/3+
+    (intra-constellation + cross-memory note_related). Ranks by accumulated activation. The mechanism
     flags + recorder behave exactly as before (this is the body extracted from retrieve_dual_wave).
     m3_supersession_downweight_on: relevance-demotion seed down-weight (seeds[nid]*=exp(-beta*strength)
     for nodes with active incoming negative_links); reuses neg_downweight_beta; default-off = byte-identical."""
@@ -48,7 +48,7 @@ def retrieve_seeded(conn, seed_coords: dict[str, tuple[float, float, float]], k:
     if (m3_node_accessibility_on or m3_synapse_two_strength_on) and now is None:
         now = datetime.now(timezone.utc)
 
-    # Phase B1: FACET-space seed contributions (every space that is not 'semantic') are scaled by
+    # Multi-space retrieval: FACET-space seed contributions (every space that is not 'semantic') are scaled by
     # m3_facet_seed_weight; semantic is always full weight. Default 1.0 -> byte-identical (1.0*x == x).
     # weight 0.0 -> those spaces contribute nothing (skipped entirely: THE CONTROL is byte-exact, no
     # zero-valued seeds leaking into the wave/ranking). No signature change — the weight is a config
@@ -118,8 +118,7 @@ def retrieve_dual_wave(conn, embedder, projectors: dict, query: str, k: int,
                        return_activation: bool = False,
                        now: datetime | None = None,
                        recorder=None):
-    """LEGACY adapter (kept byte-identical for tests/test_m3_dual_wave.py, tests/test_phase3_retrieve_dual_wave.py
-    and the other mechanism tests that drive it): build the
+    """LEGACY adapter (kept byte-identical for the existing mechanism tests that drive it): build the
     per-space seed coords by projecting the query embedding through each projector, then delegate to
     retrieve_seeded. The corrected-substrate path uses retrieve_seeded / retrieve directly."""
     qvec = embedder.embed_query(query)
