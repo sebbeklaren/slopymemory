@@ -1,6 +1,6 @@
 import json, shutil
 from pathlib import Path
-from . import Harness, entry_named
+from . import Harness, SERVER_NAME, entry_named
 
 
 def _cfg() -> Path:
@@ -19,9 +19,9 @@ HARNESS = Harness(
     id="claude-code", name="Claude Code",
     detect=lambda: shutil.which("claude") is not None,
     registered=_registered,
-    register_cmd=lambda launcher: ["claude", "mcp", "add", "--scope", "user", "--transport", "stdio", "memory", "--", launcher],
+    register_cmd=lambda launcher: ["claude", "mcp", "add", "--scope", "user", "--transport", "stdio", SERVER_NAME, "--", launcher],
     registered_as=_registered_as,
     unregister_cmd=lambda name: ["claude", "mcp", "remove", "--scope", "user", name],
-    config_hint="~/.claude.json → top-level mcpServers.memory = {\"type\":\"stdio\",\"command\":\"<launcher>\"}",
+    config_hint="~/.claude.json → top-level mcpServers.slopymemory = {\"type\":\"stdio\",\"command\":\"<launcher>\"}",
     instructions_file=lambda: Path.home() / ".claude" / "CLAUDE.md",
 )

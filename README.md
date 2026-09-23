@@ -33,8 +33,10 @@ touching anything; your stores are kept unless you ask it to drop them too.
 
 - **Claude Code** and **Codex** — registered automatically, at user scope, once you say yes.
 - **pi** — a table entry exists but is untested on this machine; if you use it, tell us how it goes.
-- **Anything else that speaks MCP** — register a stdio server named `memory` with command
-  `~/.slopymemory/venv/bin/slopymem-mcp`, run from the project directory.
+- **Anything else that speaks MCP** — register a stdio server with command
+  `~/.slopymemory/venv/bin/slopymem-mcp`, run from the project directory. Name it `slopymemory`, or anything
+  your harness does not already use — the launcher does not depend on the name. Avoid `memory`: other memory
+  servers are commonly registered under it.
 
 ## A project's first memory
 

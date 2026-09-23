@@ -7,7 +7,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
-from .. import paths
+from .. import SERVER_NAME, paths
+
+LEGACY_NAME = "memory"      # what installs before the distinct name registered the launcher as
 
 # The one line slopymem offers to append to a harness's machine-wide instruction file. Its prefix is the
 # stable part: a later version of the line REPLACES an earlier one found by this prefix, so a file never
@@ -168,6 +170,8 @@ def register(harness_id: str | None, yes: bool) -> int:
             print(f"{h.name}: not detected on this machine — to register by hand: {h.config_hint}")
             continue
         if h.registered(lp):
+            if _rename_step(h, lp, yes, confirm):
+                rc = 1; continue
             # Already registered: the mcp add is skipped, but the offer line is still brought up to date — a
             # re-run of `slopymem register` is how a machine that registered under an older line gets the
             # current one. A current line asks nothing.
@@ -189,6 +193,35 @@ def register(harness_id: str | None, yes: bool) -> int:
         if h.instructions_file:
             rc |= _offer_line_step(h, yes, confirm)     # an unwritable file is a failure here too, not only a message
     return rc
+
+
+def _rename_step(h: Harness, lp: str, yes: bool, confirm) -> bool:
+    """An older install registered the launcher as LEGACY_NAME: offer to re-register it as SERVER_NAME. The new entry
+    is added BEFORE the old one is removed, so a failure never leaves the launcher unregistered. Any other name was
+    the user's choice and is kept. True when a step failed (said on stderr); a declined rename changes nothing and is
+    not a failure."""
+    old = h.registered_as(lp) if h.registered_as is not None else None
+    if old != LEGACY_NAME or h.register_cmd is None or h.unregister_cmd is None:
+        return False
+    print(f"{h.name}: registered as {old!r}, a name other memory servers also use. Renaming it to {SERVER_NAME!r} "
+          f"changes the tool names to mcp__{SERVER_NAME}__*; update any mcp__{old}__ permission allowlists.")
+    if not confirm(f"rename {old!r} to {SERVER_NAME!r}?", yes):
+        print(f"{h.name}: left registered as {old!r}")
+        return False
+    add, remove = h.register_cmd(lp), h.unregister_cmd(old)
+    try:
+        subprocess.run(add, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"{h.name}: adding {SERVER_NAME!r} failed: {e}; still registered as {old!r} — see SETUP.md#harnesses", file=sys.stderr)
+        return True
+    try:
+        subprocess.run(remove, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"{h.name}: registered as {SERVER_NAME!r}, but removing {old!r} failed: {e}; both names now run the launcher — "
+              f"remove the old one with: {' '.join(remove)} — see SETUP.md#harnesses", file=sys.stderr)
+        return True
+    print(f"{h.name}: renamed {old!r} to {SERVER_NAME!r}")
+    return False
 
 
 def _offer_line_step(h: Harness, yes: bool, confirm, quiet_when_present: bool = False) -> int:

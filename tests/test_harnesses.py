@@ -248,3 +248,87 @@ def test_unregister_without_a_command_says_how_by_hand_and_fails(tmp_path, monke
     assert harnesses.unregister(pi.HARNESS, "/x/slopymem-mcp") == 1
     err = capsys.readouterr().err
     assert "by hand" in err and "SETUP.md#harnesses" in err
+
+
+# --- the registered name is `slopymemory`, never the generic `memory` other servers use ---
+
+def test_register_commands_use_the_distinct_name():
+    assert harnesses.SERVER_NAME == "slopymemory"
+    for cmd in (claude_code.HARNESS.register_cmd("/x/slopymem-mcp"), codex.HARNESS.register_cmd("/x/slopymem-mcp")):
+        assert "slopymemory" in cmd and "memory" not in cmd
+
+
+def test_hints_name_the_distinct_name():
+    for h in harnesses.KNOWN:
+        assert "slopymemory" in h.config_hint and ".memory" not in h.config_hint
+
+
+def _migration(tmp_path, monkeypatch, claude: str, fail_on=None):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude.json").write_text(claude)
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude" / "CLAUDE.md").write_text(f"# slopymemory\n{harnesses.OFFER_LINE}\n")
+    monkeypatch.setattr(harnesses, "launcher_path", lambda: "/x/slopymem-mcp")
+    monkeypatch.setattr(claude_code.HARNESS, "detect", lambda: True)
+    ran = []
+
+    def run(cmd, **kw):
+        ran.append(list(cmd))
+        if fail_on and fail_on in cmd:
+            raise subprocess.CalledProcessError(1, cmd[0])
+    monkeypatch.setattr(harnesses.subprocess, "run", run)
+    return ran
+
+
+OURS_AS_MEMORY = '{"mcpServers": {"memory": {"command": "/x/slopymem-mcp"}}}'
+
+
+def test_an_older_registration_under_memory_is_renamed_on_a_yes_add_first(tmp_path, monkeypatch, capsys):
+    ran = _migration(tmp_path, monkeypatch, OURS_AS_MEMORY)
+    assert harnesses.register("claude-code", yes=True) == 0
+    assert ran == [claude_code.HARNESS.register_cmd("/x/slopymem-mcp"), ["claude", "mcp", "remove", "--scope", "user", "memory"]]
+    out = capsys.readouterr().out
+    assert "'memory'" in out and "mcp__slopymemory__" in out and "mcp__memory__" in out   # the allowlist consequence is said
+
+
+def test_an_older_registration_is_left_alone_on_a_no(tmp_path, monkeypatch, capsys):
+    ran = _migration(tmp_path, monkeypatch, OURS_AS_MEMORY)
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("n\n"))
+    assert harnesses.register("claude-code", yes=False) == 0
+    assert ran == []
+    assert "left" in capsys.readouterr().out
+
+
+def test_a_failed_add_during_the_rename_changes_nothing_and_says_so(tmp_path, monkeypatch, capsys):
+    ran = _migration(tmp_path, monkeypatch, OURS_AS_MEMORY, fail_on="add")
+    assert harnesses.register("claude-code", yes=True) == 1
+    assert ran == [claude_code.HARNESS.register_cmd("/x/slopymem-mcp")]         # the old entry was never removed
+    err = capsys.readouterr().err
+    assert "still registered as 'memory'" in err and "SETUP.md#harnesses" in err
+
+
+def test_a_failed_remove_during_the_rename_says_both_names_are_registered(tmp_path, monkeypatch, capsys):
+    _migration(tmp_path, monkeypatch, OURS_AS_MEMORY, fail_on="remove")
+    assert harnesses.register("claude-code", yes=True) == 1
+    err = capsys.readouterr().err
+    assert "claude mcp remove --scope user memory" in err and "SETUP.md#harnesses" in err
+
+
+def test_a_current_registration_asks_nothing(tmp_path, monkeypatch, capsys):
+    ran = _migration(tmp_path, monkeypatch, '{"mcpServers": {"slopymemory": {"command": "/x/slopymem-mcp"}}}')
+    assert harnesses.register("claude-code", yes=False) == 0
+    assert ran == [] and "rename" not in capsys.readouterr().out
+
+
+def test_a_foreign_memory_entry_is_byte_identical_after_register(tmp_path, monkeypatch):
+    claude = '{"mcpServers": {"memory": {"command": "/someone/elses/server-memory"}}}'
+    ran = _migration(tmp_path, monkeypatch, claude)
+    assert harnesses.register("claude-code", yes=True) == 0
+    assert ran == [claude_code.HARNESS.register_cmd("/x/slopymem-mcp")]         # a fresh add, no remove of anything
+    assert (tmp_path / ".claude.json").read_text() == claude
+
+
+def test_a_name_the_user_chose_is_never_offered_a_rename(tmp_path, monkeypatch, capsys):
+    ran = _migration(tmp_path, monkeypatch, '{"mcpServers": {"mem2": {"command": "/x/slopymem-mcp"}}}')
+    assert harnesses.register("claude-code", yes=True) == 0
+    assert ran == [] and "rename" not in capsys.readouterr().out

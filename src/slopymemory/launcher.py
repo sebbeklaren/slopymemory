@@ -21,7 +21,7 @@ from mcp.server.lowlevel import NotificationOptions, Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 from mcp.shared.exceptions import McpError
-from . import embedded_pg, paths, server as srv
+from . import SERVER_NAME, embedded_pg, paths, server as srv
 from .embedded_pg import EmbeddedPostgres
 from .provision import TEMPLATE_HINT, InitRefused, SystemPostgres, apply_init, choose_backend, plan_init
 from .paths import ConfigError
@@ -104,7 +104,7 @@ class Launcher:
         self._attempts = 0                     # connect attempts started; a call compares to see if one ran since it looked
         self._connected = False                # did the current attempt ever establish a session? (words the announcement)
         self._reconnecting = asyncio.Lock()    # concurrent callers that found the same loss share one attempt
-        self.server = Server("memory")
+        self.server = Server(SERVER_NAME)
         self._register_handlers()
         if active := [h for h in TEST_HOOKS if os.environ.get(h)]:
             # Never silent: with SLOPYMEM_FAKE_PG set, memory_init reports a store "created" with no

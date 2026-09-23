@@ -21,6 +21,6 @@ HARNESS = Harness(
     registered=_registered,
     registered_as=_registered_as,
     register_cmd=None,   # UNTESTED on this machine: the adapter's JSON is edited by hand until a pi install verifies it
-    config_hint="~/.pi/agent/mcp.json → mcpServers.memory = {\"command\":\"<launcher>\"} (pi-mcp-adapter); the pi-mcp extension is HTTP-only",
+    config_hint="~/.pi/agent/mcp.json → mcpServers.slopymemory = {\"command\":\"<launcher>\"} (pi-mcp-adapter); the pi-mcp extension is HTTP-only",
     instructions_file=None,
 )

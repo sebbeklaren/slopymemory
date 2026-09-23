@@ -1,6 +1,6 @@
 import shutil, tomllib
 from pathlib import Path
-from . import Harness, entry_named
+from . import Harness, SERVER_NAME, entry_named
 
 
 def _cfg() -> Path:
@@ -19,9 +19,9 @@ HARNESS = Harness(
     id="codex", name="Codex",
     detect=lambda: shutil.which("codex") is not None,
     registered=_registered,
-    register_cmd=lambda launcher: ["codex", "mcp", "add", "memory", "--", launcher],
+    register_cmd=lambda launcher: ["codex", "mcp", "add", SERVER_NAME, "--", launcher],
     registered_as=_registered_as,
     unregister_cmd=lambda name: ["codex", "mcp", "remove", name],
-    config_hint="~/.codex/config.toml → [mcp_servers.memory] command = \"<launcher>\" (shared by the CLI, the IDE extension and ChatGPT Desktop's Codex mode)",
+    config_hint="~/.codex/config.toml → [mcp_servers.slopymemory] command = \"<launcher>\" (shared by the CLI, the IDE extension and ChatGPT Desktop's Codex mode)",
     instructions_file=lambda: Path.home() / ".codex" / "AGENTS.md",
 )

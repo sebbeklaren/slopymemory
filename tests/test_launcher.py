@@ -54,7 +54,8 @@ async def test_init_mode_offers_memory_init_then_switches_to_the_store(tmp_home,
     try:
         async with stdio_client(params) as (rd, wr):
             async with ClientSession(rd, wr, message_handler=on_message) as s:
-                await s.initialize()
+                init = await s.initialize()
+                assert init.serverInfo.name == "slopymemory"        # the distinct name, as registered
                 tools = (await s.list_tools()).tools
                 assert [t.name for t in tools] == ["memory_init"]
                 assert "Ask the user before calling it" in tools[0].description

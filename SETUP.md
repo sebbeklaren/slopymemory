@@ -74,8 +74,9 @@ names and is never answered by `--yes`. `--yes` without `--data` is refused: the
    project (a desktop app's non-project modes have no project directory; that is expected).
 2. **Is the store's server up?** `slopymem list` shows `up`/`down`. Down: `slopymem start <store>`; then read
    `~/.slopymemory/logs/<store>.log` if it stays down.
-3. **Is the launcher registered in this harness?** Claude Code: `claude mcp list`; Codex: `codex mcp list`. Missing:
-   `slopymem register`.
+3. **Is the launcher registered in this harness?** Claude Code: `claude mcp list`; Codex: `codex mcp list` — it is
+   listed as `slopymemory`. Missing: `slopymem register`. An older install registered it as `memory`; a re-run of
+   `slopymem register` offers the rename (the tool names change with it, so update any `mcp__memory__` allowlists).
 
 Then run `slopymem doctor`. Every failing line ends with the anchor of the section below that explains it.
 
