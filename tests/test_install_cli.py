@@ -306,3 +306,43 @@ def test_known_harnesses_have_an_unregister_where_they_have_a_register():
     assert claude_code.HARNESS.unregister_cmd("mem2") == ["claude", "mcp", "remove", "--scope", "user", "mem2"]
     assert codex.HARNESS.unregister_cmd("ours") == ["codex", "mcp", "remove", "ours"]
     assert pi.HARNESS.unregister_cmd is None and all(h.registered_as is not None for h in (claude_code.HARNESS, codex.HARNESS, pi.HARNESS))
+
+
+# --- harness-memory ----------------------------------------------------------------------------------------------
+
+def test_harness_memory_off_says_the_consequence_and_asks(tmp_home, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("n\n"))
+    code, out = run(["harness-memory", "off", "--harness", "claude-code"])
+    assert code == 1 and "EVERY project" in out and "no memory at all" in out
+    assert not (tmp_path / ".claude" / "settings.json").exists()           # declined: nothing written
+
+
+def test_harness_memory_off_then_on_round_trip(tmp_home, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    assert run(["harness-memory", "off", "--harness", "claude-code", "--yes"])[0] == 0
+    code, out = run(["harness-memory", "status"])
+    assert code == 0 and "off (slopymemory)" in out
+    assert run(["harness-memory", "on", "--harness", "claude-code", "--yes"])[0] == 0
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_harness_memory_conflict_is_not_answered_by_yes(tmp_home, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    run(["harness-memory", "off", "--harness", "claude-code", "--yes"])
+    (tmp_path / ".claude" / "settings.json").write_text('{"autoMemoryEnabled": true}')
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("k\n"))
+    code, out = run(["harness-memory", "on", "--harness", "claude-code", "--yes"])
+    assert code == 0 and "changed after slopymemory" in out
+    assert (tmp_path / ".claude" / "settings.json").read_text() == '{"autoMemoryEnabled": true}'
+
+
+def test_uninstall_restores_harness_memory_first(tmp_home, tmp_path, monkeypatch, fake_pg):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    run(["harness-memory", "off", "--harness", "claude-code", "--yes"])
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("y\n"))
+    code, out = run(["uninstall", "--yes", "--data"])
+    assert "Claude Code file memory restored" in out
+    assert out.index("file memory restored") < out.index("removed")
+    assert not (tmp_path / ".claude" / "settings.json").exists()

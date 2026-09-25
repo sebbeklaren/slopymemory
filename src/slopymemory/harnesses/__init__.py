@@ -159,12 +159,19 @@ def detected() -> list[Harness]:
 
 def status() -> "Finding":
     from ..checks import Finding     # lazy: checks imports this module's status() at its top; this breaks the cycle
+    from .. import harness_memory as hm
     rows, bad = [], False
     lp = launcher_path()
     for h in detected():
         ok = h.registered(lp)
         bad |= not ok
         rows.append(f"{h.name}: {'registered' if ok else 'NOT registered'}")
+    try:
+        for k, v in hm.status().items():
+            if v == "off (slopymemory)":
+                rows.append(f"{k} file memory is OFF (slopymemory harness-memory); projects without a store have no memory there")
+    except hm.HarnessMemoryError as e:
+        rows.append(str(e))
     return Finding(not bad, "; ".join(rows) or "no known harness detected")
 
 

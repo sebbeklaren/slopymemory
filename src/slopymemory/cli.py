@@ -241,6 +241,39 @@ def cmd_scan_store(a) -> int:
     return 0
 
 
+def cmd_harness_memory(a) -> int:
+    from . import harness_memory as hm
+    if a.action == "status":
+        for k, v in hm.status().items():
+            print(f"{k}: {v}")
+        return 0
+    targets = [a.harness] if a.harness else [h.id for h in harnesses.detected() if h.id in ("claude-code", "codex")]
+    if a.action == "off":
+        print("This switches the harness's OWN file memory off in EVERY project on this machine (user settings), "
+              "not only where slopymemory has a store. A project without a store then has no memory at all in that "
+              "harness until you set one up, and when slopymemory is unavailable there is no fallback memory. "
+              "The memory files are kept; `slopymem harness-memory on` brings it back.")
+        if not confirm(f"switch off: {', '.join(targets)}?", a.yes):
+            return fail("nothing changed")
+    rc = 0
+    for t in targets:
+        try:
+            if a.action == "off":
+                print(hm.turn_off(t))
+            else:
+                print(hm.turn_on(t, choose=_ask_restore))
+        except hm.HarnessMemoryError as e:
+            rc = fail(str(e))
+    return rc
+
+
+def _ask_restore(prior: str, current: str) -> str:
+    """Asked when the value changed after slopymemory set it; --yes never answers this."""
+    print(f"it changed after slopymemory set it: before slopymemory it was {prior}, now it is {current}")
+    print("restore the earlier value (r) or keep the current one (k)? ", end="", flush=True)
+    return "restore" if sys.stdin.readline().strip().lower() == "r" else "keep"
+
+
 def cmd_register(a) -> int:
     if a.detected:
         if a.harness is not None:
@@ -344,6 +377,7 @@ def cmd_uninstall(a) -> int:
     if a.yes and not a.data:
         return fail("uninstall refuses --yes without --data: the stores stay behind and you must see that; run it "
                     "without --yes, or add --data to remove the stores too (asked a third time, by name)", code=2)
+    from . import harness_memory as hm
     home, venv, logs, reg = paths.home(), paths.home() / "venv", paths.logs_dir(), paths.registry_file()
     stores_dir, pgdir = paths.stores_dir(), paths.embedded_pg_dir()
     stores = all_stores()
@@ -351,10 +385,14 @@ def cmd_uninstall(a) -> int:
     to_unregister = [h for h in harnesses.detected() if h.registered(lp)]
     offer_files = [(h, h.instructions_file()) for h in harnesses.KNOWN if h.instructions_file is not None
                    and harnesses.offer_line_state(h.instructions_file(), h.offer_line) != "absent"]
+    to_restore = [t for t, v in hm.status().items()
+                  if v in ("off (slopymemory)", "on (changed since slopymemory switched it off)")]
     names = ", ".join(st.name for st in stores) or "none"
-    if not home.exists() and not to_unregister and not offer_files:
+    if not home.exists() and not to_unregister and not offer_files and not to_restore:
         print(f"nothing to uninstall: {home} does not exist and no harness has the launcher registered"); return 0
     print("uninstall will remove:")
+    if to_restore:
+        print("  harness memory switched off by slopymemory: restored first")
     if pgdir.exists():                      # its binaries live in the venv: a cluster left running would outlive them
         print("  (first: stop the embedded Postgres if it is running — its data is kept" + ("" if a.data else " unless --data") + ")")
     print(f"  the venv {venv}" + ("" if venv.exists() else " (not there)"))
@@ -370,6 +408,11 @@ def cmd_uninstall(a) -> int:
     if not confirm("really? this cannot be undone", a.yes):
         return fail("nothing removed")
     rc = 0
+    for t in to_restore:                    # a record must never outlive the install silently: restored FIRST
+        try:
+            print(hm.turn_on(t, choose=_ask_restore))
+        except hm.HarnessMemoryError as e:
+            rc = fail(str(e))
     if a.data:
         print(f"the stores whose databases will be DROPPED: {names}")
         print("type y to drop them (--yes does not answer this one): ", end="", flush=True)
@@ -463,6 +506,10 @@ def build() -> argparse.ArgumentParser:
     s = sub.add_parser("scan-store", help="report memories that look like secrets (never deletes)"); s.add_argument("store"); s.set_defaults(fn=cmd_scan_store)
     s = sub.add_parser("register"); s.add_argument("harness", nargs="?"); s.add_argument("--detected", action="store_true", help="every harness found on this machine")
     s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_register)
+    s = sub.add_parser("harness-memory", help="switch a harness's own file memory off or back on (asked; reversible)")
+    s.add_argument("action", choices=["off", "on", "status"])
+    s.add_argument("--harness", choices=["claude-code", "codex"], help="default: every detected harness with a switch")
+    s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_harness_memory)
     s = sub.add_parser("install-postgres", help="choose and verify the Postgres new stores go on (the installer's step 3)")
     s.add_argument("--postgres", choices=["system", "embedded"]); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_install_postgres)
     s = sub.add_parser("install-model", help="the embedder at its pinned revision into the Hugging Face cache, once (step 4)")

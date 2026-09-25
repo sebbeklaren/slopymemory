@@ -80,6 +80,27 @@ names and is never answered by `--yes`. `--yes` without `--data` is refused: the
 
 Then run `slopymem doctor`. Every failing line ends with the anchor of the section below that explains it.
 
+## harness-memory
+
+A harness (Claude Code, Codex) usually has its own file-based memory too, separate from slopymemory. `slopymem
+harness-memory off` switches that OWN file memory off — at **user scope**, so it affects **every project** on this
+machine, not only the one you ran it from. A project that has no slopymemory store then has **no memory at all**
+in that harness until you set one up, and if slopymemory itself is ever unavailable there is no fallback memory
+either — the harness's own memory is the thing that would otherwise have covered that gap. The memory files
+themselves are kept; nothing is deleted.
+
+`slopymem harness-memory on` brings it back exactly as it was — byte-for-byte where nothing else changed the file
+meanwhile. If the setting was changed by something else after slopymemory switched it off (the harness itself, or
+you, by hand), `on` asks whether to restore the earlier value or keep the current one; this question is never
+answered by `--yes` — it is read from the terminal every time. `slopymem harness-memory status` shows the current
+state per harness: `on`, `off (slopymemory)`, `off (not by slopymemory)`, or `on (changed since slopymemory
+switched it off)`. Run either verb with `--harness claude-code|codex` to target one harness; without it, every
+detected harness that has a switch is targeted. `slopymem uninstall` restores any harness slopymemory switched off
+before it removes anything else, so a record never outlives the install.
+
+To undo it by hand instead: for Claude Code, remove `autoMemoryEnabled` from `~/.claude/settings.json` (or set it
+to `true`); for Codex, run `codex features enable memories`.
+
 ## Checks (generated from `slopymemory.checks` — do not edit below this line)
 
 ## python
@@ -170,7 +191,7 @@ slopymem list; ss -ltnp | grep 87
 
 **Symptom:** the agent has no memory tools
 
-**Verifies:** each detected harness has slopymem-mcp registered at user scope
+**Verifies:** each detected harness has slopymem-mcp registered at user scope; also reports when a harness's own file memory was switched off by `slopymem harness-memory off` — see SETUP.md#harness-memory
 
 **See for yourself:**
 
@@ -178,7 +199,7 @@ slopymem list; ss -ltnp | grep 87
 claude mcp list; codex mcp list
 ```
 
-**Fix:** slopymem register
+**Fix:** slopymem register; `slopymem harness-memory on` to bring a harness's own file memory back
 
 ## space
 

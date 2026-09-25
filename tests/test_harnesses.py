@@ -379,3 +379,14 @@ def test_trigger_names_the_registered_name(tmp_path, monkeypatch):
     monkeypatch.setattr(harnesses.subprocess, "run", lambda cmd, **kw: None)
     assert harnesses.register("claude-code", yes=True) == 0
     assert harnesses.trigger_line("mem2") in (tmp_path / ".claude" / "CLAUDE.md").read_text()
+
+
+# --- status() reports a harness-memory switch left off by slopymemory ---------------------------------------------
+
+def test_status_reports_harness_memory_off_without_failing(tmp_path, tmp_home, monkeypatch):
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    hm.turn_off("claude-code")
+    f = harnesses.status()
+    assert f.ok and "file memory is OFF" in f.detail and "projects without a store have no memory" in f.detail

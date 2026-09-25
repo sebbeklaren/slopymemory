@@ -372,8 +372,10 @@ CHECKS: list[Check] = [
           "cat ~/.slopymemory/registry.toml; slopymem list", "slopymem unlink / link; fix the port in store.toml", _registry),
     Check("servers", "tools hang or the launcher reports 'no server answering'", "each store's server answers HTTP on its port",
           "slopymem list; ss -ltnp | grep 87", "slopymem start <store>; read ~/.slopymemory/logs/<store>.log", _servers),
-    Check("harnesses", "the agent has no memory tools", "each detected harness has slopymem-mcp registered at user scope",
-          "claude mcp list; codex mcp list", "slopymem register", _harnesses),
+    Check("harnesses", "the agent has no memory tools", "each detected harness has slopymem-mcp registered at user scope; "
+          "also reports when a harness's own file memory was switched off by `slopymem harness-memory off` — see SETUP.md#harness-memory",
+          "claude mcp list; codex mcp list", "slopymem register; `slopymem harness-memory on` to bring a harness's own file memory back",
+          _harnesses),
     Check("space", "disk is filling", "store data (state dirs, logs, and the files each store's env names — adopted stores keep theirs elsewhere) and free disk space under ~/.slopymemory; the venv is measured separately",
           "du -sh ~/.slopymemory; df -h ~", "slopymem list shows per-store sizes; remove a store you no longer want", _space),
     Check("logs", "something failed and nobody knows what", "the last error line of each server log (tail of the last 64 KB); error lines are reported, not failed; an unreadable log fails",

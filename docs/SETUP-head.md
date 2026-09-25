@@ -79,3 +79,24 @@ names and is never answered by `--yes`. `--yes` without `--data` is refused: the
    `slopymem register` offers the rename (the tool names change with it, so update any `mcp__memory__` allowlists).
 
 Then run `slopymem doctor`. Every failing line ends with the anchor of the section below that explains it.
+
+## harness-memory
+
+A harness (Claude Code, Codex) usually has its own file-based memory too, separate from slopymemory. `slopymem
+harness-memory off` switches that OWN file memory off — at **user scope**, so it affects **every project** on this
+machine, not only the one you ran it from. A project that has no slopymemory store then has **no memory at all**
+in that harness until you set one up, and if slopymemory itself is ever unavailable there is no fallback memory
+either — the harness's own memory is the thing that would otherwise have covered that gap. The memory files
+themselves are kept; nothing is deleted.
+
+`slopymem harness-memory on` brings it back exactly as it was — byte-for-byte where nothing else changed the file
+meanwhile. If the setting was changed by something else after slopymemory switched it off (the harness itself, or
+you, by hand), `on` asks whether to restore the earlier value or keep the current one; this question is never
+answered by `--yes` — it is read from the terminal every time. `slopymem harness-memory status` shows the current
+state per harness: `on`, `off (slopymemory)`, `off (not by slopymemory)`, or `on (changed since slopymemory
+switched it off)`. Run either verb with `--harness claude-code|codex` to target one harness; without it, every
+detected harness that has a switch is targeted. `slopymem uninstall` restores any harness slopymemory switched off
+before it removes anything else, so a record never outlives the install.
+
+To undo it by hand instead: for Claude Code, remove `autoMemoryEnabled` from `~/.claude/settings.json` (or set it
+to `true`); for Codex, run `codex features enable memories`.
