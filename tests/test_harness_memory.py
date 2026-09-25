@@ -286,9 +286,12 @@ def test_codex_already_off_is_left_off(codex):
 
 def test_codex_newer_choice_is_not_overridden(codex):
     hm.turn_off("codex"); codex.enabled = True                       # the user turned it back on themselves
+    codex.calls.clear()                                               # only count what turn_on itself does
     asked = []
     hm.turn_on("codex", choose=lambda p, c: asked.append((p, c)) or "keep")
-    assert asked and codex.enabled is True
+    assert asked == [("true", "true")]                                # JSON spellings, not Python's True/True
+    assert codex.enabled is True
+    assert codex.calls == [["codex", "features", "list"]]             # "keep" ran no enable/disable command
 
 
 def test_codex_off_reapplies_when_it_was_turned_back_on_since_the_record_was_made(codex):
@@ -299,6 +302,103 @@ def test_codex_off_reapplies_when_it_was_turned_back_on_since_the_record_was_mad
     # the restore target is still the ORIGINAL prior value (True), not the intervening flip
     hm.turn_on("codex", choose=lambda p, c: pytest.fail("no conflict expected"))
     assert codex.enabled is True
+
+
+def test_codex_off_twice_when_unchanged_reports_already_off(codex):
+    hm.turn_off("codex")
+    out = hm.turn_off("codex")
+    assert "already off by slopymemory (unchanged)" in out
+    hm.turn_on("codex", choose=lambda p, c: pytest.fail("no conflict expected"))
+    assert codex.enabled is True
+
+
+def test_codex_off_refuses_when_codex_is_not_on_path(home, monkeypatch):
+    """The autouse fixture leaves `_codex_available` False by default — this must be a real
+    guarantee for turn_off/turn_on themselves, not just for status(): no test (and no future CLI
+    caller) can reach a real `subprocess.run(["codex", ...])` without opting codex in first."""
+    import subprocess
+    calls = []
+    def spy(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(hm.subprocess, "run", spy)
+    with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory") as exc:
+        hm.turn_off("codex")
+    assert calls == []                                                # never even tried to shell out
+    assert "PATH" in str(exc.value)
+
+
+def test_codex_on_refuses_when_codex_is_not_on_path(home, monkeypatch):
+    import json as _json
+    import subprocess
+    calls = []
+    def spy(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(hm.subprocess, "run", spy)
+    hm.STATE_FILE().parent.mkdir(parents=True, exist_ok=True)
+    hm.STATE_FILE().write_text(_json.dumps({"codex": {"prior": True, "wrote": False}}))
+    with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory") as exc:
+        hm.turn_on("codex", choose=lambda p, c: pytest.fail("no conflict expected"))
+    assert calls == []
+    assert "PATH" in str(exc.value)
+
+
+def test_codex_on_raises_and_keeps_the_record_when_the_restore_command_fails(home, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(hm, "_codex_available", lambda: True)
+    state = {"enabled": True, "enable_calls": 0}
+
+    def fake(cmd, **kw):
+        if cmd[1:3] == ["features", "list"]:
+            line = f"memories  stable  {'true' if state['enabled'] else 'false'}\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=line, stderr="")
+        if cmd[1:3] == ["features", "disable"]:
+            state["enabled"] = False
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd[1:3] == ["features", "enable"]:
+            state["enable_calls"] += 1
+            if state["enable_calls"] == 1:
+                raise subprocess.CalledProcessError(1, cmd, stderr="nope")
+            state["enabled"] = True
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(hm.subprocess, "run", fake)
+
+    hm.turn_off("codex")                                              # state["enabled"] now False, prior True recorded
+    with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory"):
+        hm.turn_on("codex", choose=lambda p, c: pytest.fail("no conflict expected"))
+
+    recs = json.loads(hm.STATE_FILE().read_text())
+    assert recs["codex"]["prior"] is True                             # the restore target survived the failure
+
+    hm.turn_on("codex", choose=lambda p, c: pytest.fail("no conflict expected"))   # retry once it works
+    assert state["enabled"] is True
+    assert "codex" not in json.loads(hm.STATE_FILE().read_text())
+
+
+def test_codex_other_os_error_is_reported(home, monkeypatch):
+    monkeypatch.setattr(hm, "_codex_available", lambda: True)
+    def boom(cmd, **kw): raise PermissionError("not executable")
+    monkeypatch.setattr(hm.subprocess, "run", boom)
+    with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory"):
+        hm.turn_off("codex")
+    assert hm.status()["codex"].startswith("unknown (")
+
+
+def test_codex_command_timeout_is_reported(home, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(hm, "_codex_available", lambda: True)
+    seen_kwargs = []
+    def hang(cmd, **kw):
+        seen_kwargs.append(kw)
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout") or 30)
+    monkeypatch.setattr(hm.subprocess, "run", hang)
+    with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory"):
+        hm.turn_off("codex")
+    assert seen_kwargs and seen_kwargs[0].get("timeout")              # a timeout was actually passed
+    assert hm.status()["codex"].startswith("unknown (")
 
 
 def test_codex_command_failure_is_reported(home, monkeypatch):

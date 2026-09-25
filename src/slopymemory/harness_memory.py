@@ -200,9 +200,12 @@ def _codex_available() -> bool:
 
 
 def _codex(*args: str) -> str:
+    if not _codex_available():
+        raise HarnessMemoryError(f"codex is not on PATH; nothing to do for Codex's own memory{ANCHOR}")
     try:
-        return subprocess.run(["codex", *args], check=True, capture_output=True, text=True).stdout
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        return subprocess.run(["codex", *args], check=True, capture_output=True, text=True, timeout=30).stdout
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        # OSError also catches FileNotFoundError — a race against the check above, not the normal path
         raise HarnessMemoryError(f"`codex {' '.join(args)}` failed: {getattr(e, 'stderr', '') or e}{ANCHOR}") from None
 
 
