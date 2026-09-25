@@ -244,3 +244,121 @@ def test_off_and_on_preserve_the_settings_files_permission_mode(home):
     assert stat.S_IMODE(settings(home).stat().st_mode) == 0o600
     hm.turn_on("claude-code", choose=lambda p, c: pytest.fail("no conflict expected"))
     assert stat.S_IMODE(settings(home).stat().st_mode) == 0o600
+
+
+class FakeCodex:
+    def __init__(self, enabled: bool):
+        self.enabled, self.calls = enabled, []
+
+    def __call__(self, cmd, **kw):
+        import subprocess
+        self.calls.append(cmd)
+        if cmd[1:3] == ["features", "list"]:
+            line = f"memories                                 stable             {'true' if self.enabled else 'false'}\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout="apps  stable  true\n" + line, stderr="")
+        if cmd[1:3] == ["features", "disable"]:
+            self.enabled = False
+        if cmd[1:3] == ["features", "enable"]:
+            self.enabled = True
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+
+@pytest.fixture
+def codex(home, monkeypatch):
+    fake = FakeCodex(enabled=True)
+    monkeypatch.setattr(hm.subprocess, "run", fake)
+    monkeypatch.setattr(hm, "_codex_available", lambda: True)
+    return fake
+
+
+def test_codex_off_disables_and_on_re_enables(codex):
+    hm.turn_off("codex")
+    assert ["codex", "features", "disable", "memories"] in codex.calls and codex.enabled is False
+    hm.turn_on("codex", choose=lambda p, c: pytest.fail("no conflict"))
+    assert codex.enabled is True
+
+
+def test_codex_already_off_is_left_off(codex):
+    codex.enabled = False
+    hm.turn_off("codex"); hm.turn_on("codex", choose=lambda p, c: pytest.fail("no conflict"))
+    assert codex.enabled is False and ["codex", "features", "enable", "memories"] not in codex.calls
+
+
+def test_codex_newer_choice_is_not_overridden(codex):
+    hm.turn_off("codex"); codex.enabled = True                       # the user turned it back on themselves
+    asked = []
+    hm.turn_on("codex", choose=lambda p, c: asked.append((p, c)) or "keep")
+    assert asked and codex.enabled is True
+
+
+def test_codex_off_reapplies_when_it_was_turned_back_on_since_the_record_was_made(codex):
+    hm.turn_off("codex")
+    codex.enabled = True                                              # switched back on while off
+    out = hm.turn_off("codex")
+    assert codex.enabled is False and "again" in out
+    # the restore target is still the ORIGINAL prior value (True), not the intervening flip
+    hm.turn_on("codex", choose=lambda p, c: pytest.fail("no conflict expected"))
+    assert codex.enabled is True
+
+
+def test_codex_command_failure_is_reported(home, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(hm, "_codex_available", lambda: True)
+    def boom(cmd, **kw): raise subprocess.CalledProcessError(1, cmd, stderr="nope")
+    monkeypatch.setattr(hm.subprocess, "run", boom)
+    with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory"):
+        hm.turn_off("codex")
+
+
+def test_codex_off_rolls_back_the_record_if_the_disable_command_fails(home, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(hm, "_codex_available", lambda: True)
+
+    def flaky(cmd, **kw):
+        if cmd[1:3] == ["features", "list"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="memories  stable  true\n", stderr="")
+        raise subprocess.CalledProcessError(1, cmd, stderr="nope")
+
+    monkeypatch.setattr(hm.subprocess, "run", flaky)
+    with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory"):
+        hm.turn_off("codex")
+    assert not hm.STATE_FILE().exists() or "codex" not in json.loads(hm.STATE_FILE().read_text())
+
+
+def test_codex_on_without_a_record_refuses(codex):
+    with pytest.raises(hm.HarnessMemoryError, match="no record"):
+        hm.turn_on("codex", choose=lambda p, c: "restore")
+    assert codex.calls == []                                         # never even asked Codex its state
+
+
+def test_status_omits_codex_when_not_available(home):
+    assert "codex" not in hm.status()                                # the autouse fixture leaves it unavailable
+
+
+def test_status_reports_codex_off_by_slopymemory(codex):
+    hm.turn_off("codex")
+    assert hm.status()["codex"] == "off (slopymemory)"
+
+
+def test_status_reports_codex_on(codex):
+    assert hm.status()["codex"] == "on"
+
+
+def test_status_reports_codex_off_not_by_slopymemory(codex):
+    codex.enabled = False
+    assert hm.status()["codex"] == "off (not by slopymemory)"
+
+
+def test_status_reports_codex_changed_since(codex):
+    hm.turn_off("codex")
+    codex.enabled = True                                              # switched back on while off
+    assert hm.status()["codex"] == "on (changed since slopymemory switched it off)"
+
+
+def test_status_reports_unknown_when_the_codex_command_fails(home, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(hm, "_codex_available", lambda: True)
+    def boom(cmd, **kw): raise subprocess.CalledProcessError(1, cmd, stderr="nope")
+    monkeypatch.setattr(hm.subprocess, "run", boom)
+    out = hm.status()
+    assert out["codex"].startswith("unknown (") and "nope" in out["codex"]

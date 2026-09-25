@@ -2,6 +2,14 @@ import os, socket, http.server, threading
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_real_codex(monkeypatch):
+    """No test may shell out to a real `codex` binary, even one installed on the machine running
+    these tests — every test starts as if Codex were not on PATH; a test that needs it present
+    patches this back to True itself."""
+    monkeypatch.setattr("slopymemory.harness_memory._codex_available", lambda: False)
+
+
 @pytest.fixture
 def tmp_home(tmp_path, monkeypatch):
     monkeypatch.setenv("SLOPYMEM_HOME", str(tmp_path / "home"))

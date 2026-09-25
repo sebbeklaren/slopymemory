@@ -4,7 +4,9 @@ themselves are never touched in either direction. User scope only: nothing is wr
 from __future__ import annotations
 import json
 import os
+import shutil
 import stat
+import subprocess
 from pathlib import Path
 from typing import Callable
 from . import paths
@@ -193,15 +195,84 @@ def _claude_on(choose: Callable[[str, str], str]) -> str:
     return f"Claude Code file memory restored ({KEY} {'removed' if rec['prior'] == 'absent' else '= ' + _spell(rec['prior'])})"
 
 
+def _codex_available() -> bool:
+    return shutil.which("codex") is not None
+
+
+def _codex(*args: str) -> str:
+    try:
+        return subprocess.run(["codex", *args], check=True, capture_output=True, text=True).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        raise HarnessMemoryError(f"`codex {' '.join(args)}` failed: {getattr(e, 'stderr', '') or e}{ANCHOR}") from None
+
+
+def codex_memories_enabled() -> bool:
+    for line in _codex("features", "list").splitlines():
+        parts = line.split()
+        if parts and parts[0] == "memories":
+            return parts[-1] == "true"
+    raise HarnessMemoryError(f"`codex features list` has no `memories` feature in this Codex version{ANCHOR}")
+
+
+def _codex_off() -> str:
+    recs = _records()
+    existing = recs.get("codex")
+    current = codex_memories_enabled()
+
+    if existing is not None and current == existing["wrote"]:
+        return "Codex memories are already off by slopymemory (unchanged)"
+
+    prior = existing["prior"] if existing is not None else current
+    recs["codex"] = {"prior": prior, "wrote": False}
+    _save_records(recs)                    # the record first, already complete: a crash after it still restores
+    if current:
+        try:
+            _codex("features", "disable", "memories")
+        except HarnessMemoryError:
+            if existing is not None:
+                recs["codex"] = existing
+            else:
+                del recs["codex"]
+            _save_records(recs)
+            raise
+
+    if existing is not None:
+        return "Codex memories switched OFF again — it had been switched back on since"
+    return "Codex memories switched OFF" if current else "Codex memories were already off; recorded, nothing changed"
+
+
+def _codex_on(choose: Callable[[str, str], str]) -> str:
+    recs = _records()
+    rec = recs.get("codex")
+    if rec is None:
+        raise HarnessMemoryError(f"no record of slopymemory switching Codex memories off; nothing to restore{ANCHOR}")
+    current = codex_memories_enabled()
+    if current != rec["wrote"]:                            # changed since we wrote it: never clobber a newer choice
+        if choose(_spell(rec["prior"]), _spell(current)) != "restore":
+            del recs["codex"]; _save_records(recs)
+            return f"Codex memories: kept the current state ({'on' if current else 'off'})"
+
+    if rec["prior"] and not current:
+        _codex("features", "enable", "memories")
+    elif not rec["prior"] and current:
+        _codex("features", "disable", "memories")
+    del recs["codex"]; _save_records(recs)
+    return f"Codex memories restored ({'on' if rec['prior'] else 'off'})"
+
+
 def turn_off(harness_id: str) -> str:
     if harness_id == "claude-code":
         return _claude_off()
+    if harness_id == "codex":
+        return _codex_off()
     raise HarnessMemoryError(f"no known switch for {harness_id}'s own memory{ANCHOR}")
 
 
 def turn_on(harness_id: str, choose: Callable[[str, str], str]) -> str:
     if harness_id == "claude-code":
         return _claude_on(choose)
+    if harness_id == "codex":
+        return _codex_on(choose)
     raise HarnessMemoryError(f"no known switch for {harness_id}'s own memory{ANCHOR}")
 
 
@@ -216,4 +287,19 @@ def status() -> dict[str, str]:
         s = "off (not by slopymemory)"
     else:
         s = "on"
-    return {"claude-code": s}
+    out = {"claude-code": s}
+
+    if _codex_available():
+        crec = recs.get("codex")
+        try:
+            enabled = codex_memories_enabled()
+        except HarnessMemoryError as e:
+            out["codex"] = f"unknown ({e})"
+        else:
+            if crec is not None:
+                out["codex"] = "off (slopymemory)" if enabled == crec["wrote"] else "on (changed since slopymemory switched it off)"
+            elif not enabled:
+                out["codex"] = "off (not by slopymemory)"
+            else:
+                out["codex"] = "on"
+    return out
