@@ -175,11 +175,24 @@ def test_register_detected_registers_only_what_is_there_and_says_so(tmp_home, tm
     hs, instr = _fake_harnesses(tmp_path, monkeypatch, ran)
     code, out = run(["register", "--detected", "--yes"])
     assert code == 0 and ran == [["a-add", harnesses.launcher_path()]]            # b already registered, c not detected
-    assert "A:" in out and "B: already registered" in out and "C" not in out
+    assert "A:" in out and "B: already registered" in out
+    import re
+    assert not re.search(r"\bC\b", out)                                          # C (undetected) never mentioned by name
     assert instr.read_text().count(harnesses.OFFER_LINE) == 1
     monkeypatch.setattr(harnesses, "KNOWN", [hs[2]])
     code, out = run(["register", "--detected", "--yes"])
     assert code == 0 and "no known harness detected" in out and "slopymem register" in out
+
+
+def test_summary_cli_is_read_only_and_never_fails(tmp_home, tmp_path, monkeypatch):
+    _fake_harnesses(tmp_path, monkeypatch, [])
+    code, out = run(["summary"])
+    assert code == 0 and "slopymemory is set up." in out
+    # even when harness-memory's own state cannot be read, the command still exits 0
+    from slopymemory import harness_memory as hm
+    monkeypatch.setattr(hm, "status", lambda: (_ for _ in ()).throw(OSError("boom")))
+    code, out = run(["summary"])
+    assert code == 0 and "Harness memory state unreadable" in out and "boom" in out
 
 
 # --- uninstall -----------------------------------------------------------------------------------------------------

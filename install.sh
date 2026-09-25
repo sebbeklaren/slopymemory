@@ -89,6 +89,7 @@ say "6/6 doctor"
 REPORT="$(mktemp)"; trap 'rm -f "$REPORT"' EXIT
 "$VENV/bin/slopymem" doctor | tee "$REPORT" || true
 grep -q '^doctor:' "$REPORT" || { echo "the doctor did not run to its verdict line — see SETUP.md#package"; exit 1; }
+"$VENV/bin/slopymem" summary || true
 FAILS="$(awk '$1 == "FAIL" {print $2}' "$REPORT")"
 N="$(printf '%s\n' "$FAILS" | grep -c . || true)"
 printf 'The command is %s/bin/slopymem (a symlink into ~/.local/bin is yours to make).\n' "$VENV"

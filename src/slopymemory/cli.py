@@ -301,6 +301,11 @@ def cmd_register(a) -> int:
     return register(a.harness, a.yes)
 
 
+def cmd_summary(a) -> int:
+    print("\n".join(harnesses.summary()))
+    return 0
+
+
 # --- the installer's verbs: each prints, asks unless --yes, is idempotent, names SETUP.md#<id> on failure ---------
 
 def cmd_install_postgres(a) -> int:
@@ -539,6 +544,7 @@ def build() -> argparse.ArgumentParser:
     s = sub.add_parser("scan-store", help="report memories that look like secrets (never deletes)"); s.add_argument("store"); s.set_defaults(fn=cmd_scan_store)
     s = sub.add_parser("register"); s.add_argument("harness", nargs="?"); s.add_argument("--detected", action="store_true", help="every harness found on this machine")
     s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_register)
+    s = sub.add_parser("summary", help="what slopymemory changed on this machine (read-only)"); s.set_defaults(fn=cmd_summary)
     s = sub.add_parser("harness-memory", help="switch a harness's own file memory off or back on (asked; reversible)")
     s.add_argument("action", choices=["off", "on", "status"])
     s.add_argument("--harness", choices=["claude-code", "codex"], help="default: every detected harness with a switch")

@@ -182,19 +182,23 @@ def register(harness_id: str | None, yes: bool) -> int:
     if not targets:
         print(f"unknown harness {harness_id}; known: {[h.id for h in KNOWN]}", file=sys.stderr); return 1
     rc = 0
+    changed = False
     for h in targets:
         if not h.detect():
             print(f"{h.name}: not detected on this machine — to register by hand: {h.config_hint}")
             continue
         if h.registered(lp):
-            if _rename_step(h, lp, yes, confirm):
+            failed, renamed = _rename_step(h, lp, yes, confirm)
+            changed |= renamed
+            if failed:
                 rc = 1; continue
             # Already registered: the mcp add is skipped, but the offer line is still brought up to date — a
             # re-run of `slopymem register` is how a machine that registered under an older line gets the
             # current one. A current line asks nothing.
             print(f"{h.name}: already registered")
             if h.instructions_file:
-                rc |= _offer_line_step(h, yes, confirm, quiet_when_present=True)
+                step_rc, step_changed = _offer_line_step(h, yes, confirm, quiet_when_present=True)
+                rc |= step_rc; changed |= step_changed
             continue
         if h.register_cmd is None:
             print(f"{h.name}: register by hand: {h.config_hint}"); continue
@@ -207,45 +211,51 @@ def register(harness_id: str | None, yes: bool) -> int:
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             print(f"{h.name}: registration failed: {e} — see SETUP.md#harnesses", file=sys.stderr)
             rc = 1; continue
+        changed = True
         if h.instructions_file:
-            rc |= _offer_line_step(h, yes, confirm)     # an unwritable file is a failure here too, not only a message
+            step_rc, step_changed = _offer_line_step(h, yes, confirm)     # an unwritable file is a failure here too, not only a message
+            rc |= step_rc; changed |= step_changed
+    if changed:
+        print("\n".join(summary()))
     return rc
 
 
-def _rename_step(h: Harness, lp: str, yes: bool, confirm) -> bool:
+def _rename_step(h: Harness, lp: str, yes: bool, confirm) -> tuple[bool, bool]:
     """An older install registered the launcher as LEGACY_NAME: offer to re-register it as SERVER_NAME. The new entry
     is added BEFORE the old one is removed, so a failure never leaves the launcher unregistered. Any other name was
-    the user's choice and is kept. True when a step failed (said on stderr); a declined rename changes nothing and is
-    not a failure."""
+    the user's choice and is kept. Returns (failed, changed): failed is True when a step failed (said on stderr);
+    a declined rename changes nothing and is not a failure. changed is True once the new name is registered, even
+    if removing the old one then failed."""
     old = h.registered_as(lp) if h.registered_as is not None else None
     if old != LEGACY_NAME or h.register_cmd is None or h.unregister_cmd is None:
-        return False
+        return False, False
     print(f"{h.name}: registered as {old!r}, a name other memory servers also use. Renaming it to {SERVER_NAME!r} "
           f"changes the tool names to mcp__{SERVER_NAME}__*; update any mcp__{old}__ permission allowlists.")
     if not confirm(f"rename {old!r} to {SERVER_NAME!r}?", yes):
         print(f"{h.name}: left registered as {old!r}")
-        return False
+        return False, False
     add, remove = h.register_cmd(lp), h.unregister_cmd(old)
     try:
         subprocess.run(add, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         print(f"{h.name}: adding {SERVER_NAME!r} failed: {e}; still registered as {old!r} — see SETUP.md#harnesses", file=sys.stderr)
-        return True
+        return True, False
     try:
         subprocess.run(remove, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         print(f"{h.name}: registered as {SERVER_NAME!r}, but removing {old!r} failed: {e}; both names now run the launcher — "
               f"remove the old one with: {' '.join(remove)} — see SETUP.md#harnesses", file=sys.stderr)
-        return True
+        return True, True
     print(f"{h.name}: renamed {old!r} to {SERVER_NAME!r}")
-    return False
+    return False, True
 
 
-def _offer_line_step(h: Harness, yes: bool, confirm, quiet_when_present: bool = False) -> int:
+def _offer_line_step(h: Harness, yes: bool, confirm, quiet_when_present: bool = False) -> tuple[int, bool]:
     """Offer (and on a yes, apply) the instruction line for one harness, naming the server as it is actually
     registered there (a user's own name when they chose one; SERVER_NAME when the config isn't readable yet).
-    Returns 1 when the user declined an update that was needed or the file cannot be read or written, else 0 —
-    a declined append after a fresh registration was never a failure."""
+    Returns (rc, changed): rc is 1 when the user declined an update that was needed or the file cannot be read or
+    written, else 0 — a declined append after a fresh registration was never a failure. changed is True only when
+    the line was actually appended or replaced."""
     f = h.instructions_file()
     name = (h.registered_as(launcher_path()) if h.registered_as is not None else None) or SERVER_NAME
     line = trigger_line(name)
@@ -254,16 +264,63 @@ def _offer_line_step(h: Harness, yes: bool, confirm, quiet_when_present: bool = 
         if state == "present":
             if not quiet_when_present:
                 print("offer line already present")
-            return 0
+            return 0, False
         verb = "update the offer line in" if state == "stale" else "append the offer line to"
         if not confirm(f"{verb} {f}?", yes):
-            print(f"offer line left as it is in {f}"); return 1 if state == "stale" else 0
+            print(f"offer line left as it is in {f}"); return (1 if state == "stale" else 0), False
         done = ensure_offer_line(f, line)
     except OSError as e:
         print(f"{h.name}: the offer line could not be read or written in {f}: {e} — see SETUP.md#harnesses", file=sys.stderr)
-        return 1
+        return 1, False
     print("offer line updated" if done == "replaced" else f"offer line appended to {f}")
-    return 0
+    return 0, done in ("replaced", "appended")
+
+
+def summary() -> list[str]:
+    """The first-run block: what slopymemory changed on this machine, how to switch a harness's own file memory
+    off or restore it, and how to undo everything — only lines that are true, and never a token figure. Never
+    raises: an unreadable harness-memory state is said as a line, not an exception."""
+    from .. import harness_memory as hm
+    lp = launcher_path()
+    reg = [h for h in detected() if h.registered(lp)]
+    lines = ["slopymemory is set up."]
+
+    by_name: dict[str, list[str]] = {}
+    for h in reg:
+        name = (h.registered_as(lp) if h.registered_as is not None else None) or SERVER_NAME
+        by_name.setdefault(name, []).append(h.name)
+    for name in sorted(by_name):
+        lines.append(f'  Registered as the MCP server "{name}" in: {", ".join(by_name[name])}')
+
+    files = [str(h.instructions_file()) for h in reg
+             if h.instructions_file is not None and offer_line_state(h.instructions_file(), OFFER_LINE) != "absent"]
+    if files:
+        lines.append(f"  Added one line to: {', '.join(files)}  (tells the agent when to use memory)")
+
+    try:
+        hm_status = hm.status()
+    except (hm.HarnessMemoryError, OSError) as e:
+        from ..cli import _hm_reason      # strips a HarnessMemoryError's own trailing anchor so it is never doubled
+        hm_status = None
+        lines.append(f"  Harness memory state unreadable: {_hm_reason(e)} — see SETUP.md#harness-memory")
+
+    if hm_status is not None:
+        off = [k for k, v in hm_status.items() if v == "off (slopymemory)"]
+        back_on = [k for k, v in hm_status.items() if v == "on (changed since slopymemory switched it off)"]
+        if off:
+            lines.append(f"  Your harness's own file memory: OFF in {', '.join(off)} (slopymem harness-memory on to restore)")
+        if back_on:
+            lines.append(f"  Your harness's own file memory in {', '.join(back_on)}: switched back on since slopymemory "
+                          "turned it off (slopymem harness-memory on clears the record)")
+        if not off and not back_on:
+            lines.append("  Your harness's own memory: unchanged. slopymemory is checked first; your harness memory "
+                          "stays as a fallback.")
+            lines.append("  To turn your harness's own file memory off (its index is re-sent on every request): "
+                          "slopymem harness-memory off")
+
+    lines.append("  To undo everything: slopymem uninstall  (your harness memory comes back exactly as it was)")
+    lines.append("  A project gets memory the first time you accept the agent's offer, or with: slopymem init")
+    return lines
 
 
 def register_detected(yes: bool) -> int:

@@ -408,3 +408,80 @@ def test_status_survives_an_os_error_reading_harness_memory_and_keeps_the_regist
     f = harnesses.status()
     assert f.ok and "Claude Code: registered" in f.detail
     assert "permission denied" in f.detail
+
+
+# --- summary(): the first-run block, only lines that are true --------------------------------------------------
+
+def test_summary_names_only_what_is_true(tmp_path, tmp_home, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude.json").write_text('{"mcpServers": {"slopymemory": {"command": "/x/slopymem-mcp"}}}')
+    (tmp_path / ".claude" / "CLAUDE.md").write_text(f"# slopymemory\n{harnesses.OFFER_LINE}\n")
+    monkeypatch.setattr(harnesses, "launcher_path", lambda: "/x/slopymem-mcp")
+    monkeypatch.setattr(harnesses, "detected", lambda: [claude_code.HARNESS])
+    lines = "\n".join(harnesses.summary())
+    assert 'Registered as the MCP server "slopymemory" in: Claude Code' in lines
+    assert "Codex" not in lines
+    assert str(tmp_path / ".claude" / "CLAUDE.md") in lines
+    assert "Your harness's own memory: unchanged" in lines
+    assert "slopymem harness-memory off" in lines and "slopymem uninstall" in lines
+    import re
+    assert not re.search(r"\d[\d.,]*\s*k?\s*tokens", lines)                 # no token figure is printed
+
+
+def test_summary_says_when_harness_memory_is_off(tmp_path, tmp_home, monkeypatch):
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    hm.turn_off("claude-code")
+    assert any("file memory: OFF" in l for l in harnesses.summary())
+
+
+def test_summary_says_when_harness_memory_came_back_on(tmp_path, tmp_home, monkeypatch):
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    hm.turn_off("claude-code")
+    (tmp_path / ".claude" / "settings.json").write_text('{"autoMemoryEnabled": true}')   # switched back on since
+    lines = "\n".join(harnesses.summary())
+    assert "switched back on" in lines and "slopymem harness-memory on" in lines
+    assert "Your harness's own memory: unchanged" not in lines
+
+
+def test_summary_never_raises_when_harness_memory_state_is_unreadable(tmp_path, tmp_home, monkeypatch):
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [])
+
+    def boom():
+        raise OSError("permission denied")
+    monkeypatch.setattr(hm, "status", boom)
+    lines = "\n".join(harnesses.summary())
+    assert "Harness memory state unreadable" in lines and "permission denied" in lines and "SETUP.md#harness-memory" in lines
+
+
+def test_summary_does_not_double_the_anchor_on_a_harness_memory_error(tmp_path, tmp_home, monkeypatch):
+    """`HarnessMemoryError` messages already end with their own SETUP.md anchor; the unreadable line must not
+    append a second one."""
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    hm.STATE_FILE().parent.mkdir(parents=True, exist_ok=True)
+    hm.STATE_FILE().write_text("{not json")
+    lines = "\n".join(harnesses.summary())
+    assert lines.count("SETUP.md#harness-memory") == 1
+
+
+def test_register_prints_the_summary_after_a_fresh_registration(tmp_path, monkeypatch, capsys):
+    _registration_flow(tmp_path, monkeypatch, registered=False)
+    assert harnesses.register("claude-code", yes=True) == 0
+    out = capsys.readouterr().out
+    assert "slopymemory is set up." in out
+
+
+def test_register_prints_no_summary_when_nothing_changed(tmp_path, monkeypatch, capsys):
+    f = _registration_flow(tmp_path, monkeypatch, registered=True)
+    f.write_text(harnesses.OFFER_LINE + "\n")          # already the current line: nothing to update
+    assert harnesses.register("claude-code", yes=True) == 0
+    out = capsys.readouterr().out
+    assert "already registered" in out
+    assert "slopymemory is set up." not in out
