@@ -175,7 +175,47 @@ def status() -> "Finding":
     return Finding(not bad, "; ".join(rows) or "no known harness detected")
 
 
-def register(harness_id: str | None, yes: bool) -> int:
+def _register_one(h: Harness, lp: str, yes: bool, confirm) -> tuple[int, bool]:
+    """Register (or bring up to date) ONE harness. Returns (rc, changed) for this harness alone — the
+    caller aggregates across however many harnesses it is handling and decides, on its own, whether and
+    when to print the first-run summary."""
+    if not h.detect():
+        print(f"{h.name}: not detected on this machine — to register by hand: {h.config_hint}")
+        return 0, False
+    if h.registered(lp):
+        failed, renamed = _rename_step(h, lp, yes, confirm)
+        if failed:
+            return 1, renamed
+        # Already registered: the mcp add is skipped, but the offer line is still brought up to date — a
+        # re-run of `slopymem register` is how a machine that registered under an older line gets the
+        # current one. A current line asks nothing.
+        print(f"{h.name}: already registered")
+        if h.instructions_file:
+            step_rc, step_changed = _offer_line_step(h, yes, confirm, quiet_when_present=True)
+            return step_rc, renamed or step_changed
+        return 0, renamed
+    if h.register_cmd is None:
+        print(f"{h.name}: register by hand: {h.config_hint}"); return 0, False
+    cmd = h.register_cmd(lp)
+    print(f"{h.name}: {' '.join(cmd)}")
+    if not confirm("run it?", yes):
+        return 1, False
+    try:
+        subprocess.run(cmd, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"{h.name}: registration failed: {e} — see SETUP.md#harnesses", file=sys.stderr)
+        return 1, False
+    if h.instructions_file:
+        step_rc, step_changed = _offer_line_step(h, yes, confirm)     # an unwritable file is a failure here too, not only a message
+        return step_rc, True
+    return 0, True
+
+
+def register(harness_id: str | None, yes: bool, print_summary: bool = True) -> int:
+    """Register one harness (harness_id) or every KNOWN one (harness_id is None). Prints the first-run
+    summary once at the end, only when something changed — unless print_summary is False (used by
+    register_detected() so IT can print a single summary across every harness it handles, instead of
+    one copy per harness)."""
     from ..cli import confirm
     lp = launcher_path()
     targets = [h for h in KNOWN if harness_id in (None, h.id)]
@@ -184,38 +224,9 @@ def register(harness_id: str | None, yes: bool) -> int:
     rc = 0
     changed = False
     for h in targets:
-        if not h.detect():
-            print(f"{h.name}: not detected on this machine — to register by hand: {h.config_hint}")
-            continue
-        if h.registered(lp):
-            failed, renamed = _rename_step(h, lp, yes, confirm)
-            changed |= renamed
-            if failed:
-                rc = 1; continue
-            # Already registered: the mcp add is skipped, but the offer line is still brought up to date — a
-            # re-run of `slopymem register` is how a machine that registered under an older line gets the
-            # current one. A current line asks nothing.
-            print(f"{h.name}: already registered")
-            if h.instructions_file:
-                step_rc, step_changed = _offer_line_step(h, yes, confirm, quiet_when_present=True)
-                rc |= step_rc; changed |= step_changed
-            continue
-        if h.register_cmd is None:
-            print(f"{h.name}: register by hand: {h.config_hint}"); continue
-        cmd = h.register_cmd(lp)
-        print(f"{h.name}: {' '.join(cmd)}")
-        if not confirm("run it?", yes):
-            rc = 1; continue
-        try:
-            subprocess.run(cmd, check=True)
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            print(f"{h.name}: registration failed: {e} — see SETUP.md#harnesses", file=sys.stderr)
-            rc = 1; continue
-        changed = True
-        if h.instructions_file:
-            step_rc, step_changed = _offer_line_step(h, yes, confirm)     # an unwritable file is a failure here too, not only a message
-            rc |= step_rc; changed |= step_changed
-    if changed:
+        step_rc, step_changed = _register_one(h, lp, yes, confirm)
+        rc |= step_rc; changed |= step_changed
+    if changed and print_summary:
         print("\n".join(summary()))
     return rc
 
@@ -276,6 +287,24 @@ def _offer_line_step(h: Harness, yes: bool, confirm, quiet_when_present: bool = 
     return 0, done in ("replaced", "appended")
 
 
+def _harness_memory_line(state: str, name: str) -> str:
+    """One true line for one harness's harness_memory.status() state, spelled exactly as status() returns it —
+    never lumped into a generic bucket that would be false for a state it wasn't written for."""
+    if state == "on":
+        return (f"  Your harness's own memory ({name}): unchanged. slopymemory is checked first; your harness "
+                 "memory stays as a fallback.")
+    if state == "off (slopymemory)":
+        return f"  Your harness's own file memory: OFF in {name}, switched off by slopymemory (slopymem harness-memory on to restore)"
+    if state == "on (changed since slopymemory switched it off)":
+        return (f"  Your harness's own file memory in {name}: switched back on since slopymemory turned it off "
+                 "(slopymem harness-memory on clears the record)")
+    if state == "off (not by slopymemory)":
+        return f"  Your harness's own memory ({name}) is off by your own choice — there is no fallback memory there."
+    if state.startswith("unknown (") and state.endswith(")"):
+        return f"  Your harness's own memory ({name}): state unknown ({state[len('unknown ('):-1]})."
+    return f"  Your harness's own memory ({name}): {state}"      # a future status() spelling — never dropped silently
+
+
 def summary() -> list[str]:
     """The first-run block: what slopymemory changed on this machine, how to switch a harness's own file memory
     off or restore it, and how to undo everything — only lines that are true, and never a token figure. Never
@@ -292,8 +321,13 @@ def summary() -> list[str]:
     for name in sorted(by_name):
         lines.append(f'  Registered as the MCP server "{name}" in: {", ".join(by_name[name])}')
 
-    files = [str(h.instructions_file()) for h in reg
-             if h.instructions_file is not None and offer_line_state(h.instructions_file(), OFFER_LINE) != "absent"]
+    files = []
+    for h in reg:
+        if h.instructions_file is None:
+            continue
+        f = h.instructions_file()
+        if offer_line_state(f, OFFER_LINE) != "absent":
+            files.append(str(f))
     if files:
         lines.append(f"  Added one line to: {', '.join(files)}  (tells the agent when to use memory)")
 
@@ -305,16 +339,10 @@ def summary() -> list[str]:
         lines.append(f"  Harness memory state unreadable: {_hm_reason(e)} — see SETUP.md#harness-memory")
 
     if hm_status is not None:
-        off = [k for k, v in hm_status.items() if v == "off (slopymemory)"]
-        back_on = [k for k, v in hm_status.items() if v == "on (changed since slopymemory switched it off)"]
-        if off:
-            lines.append(f"  Your harness's own file memory: OFF in {', '.join(off)} (slopymem harness-memory on to restore)")
-        if back_on:
-            lines.append(f"  Your harness's own file memory in {', '.join(back_on)}: switched back on since slopymemory "
-                          "turned it off (slopymem harness-memory on clears the record)")
-        if not off and not back_on:
-            lines.append("  Your harness's own memory: unchanged. slopymemory is checked first; your harness memory "
-                          "stays as a fallback.")
+        id_to_name = {h.id: h.name for h in KNOWN}
+        for key, state in hm_status.items():
+            lines.append(_harness_memory_line(state, id_to_name.get(key, key)))
+        if any(v == "on" for v in hm_status.values()):
             lines.append("  To turn your harness's own file memory off (its index is re-sent on every request): "
                           "slopymem harness-memory off")
 
@@ -323,15 +351,24 @@ def summary() -> list[str]:
     return lines
 
 
-def register_detected(yes: bool) -> int:
+def register_detected(yes: bool, print_summary: bool = True) -> int:
     """The installer's step 5: register the launcher in every harness found on this machine, and say when there
-    is none — a machine with no known harness is not a failure, it is told how to register later."""
-    if not detected():
+    is none — a machine with no known harness is not a failure, it is told how to register later. Prints the
+    first-run summary at most ONCE, after every harness has been handled, and only if any of them changed —
+    delegating the per-harness print to register() would print one stale copy per harness instead."""
+    found = detected()
+    if not found:
         print("no known harness detected (Claude Code, Codex, pi); register later with: slopymem register <harness>")
         return 0
+    from ..cli import confirm
+    lp = launcher_path()
     rc = 0
-    for h in detected():
-        rc |= register(h.id, yes)
+    changed = False
+    for h in found:
+        step_rc, step_changed = _register_one(h, lp, yes, confirm)
+        rc |= step_rc; changed |= step_changed
+    if changed and print_summary:
+        print("\n".join(summary()))
     return rc
 
 

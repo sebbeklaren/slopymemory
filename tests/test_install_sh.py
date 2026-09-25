@@ -64,7 +64,9 @@ def test_six_steps_in_order_and_done_when_the_doctor_is_clean(fakes, tmp_path):
     steps = [l for l in out.splitlines() if l.startswith("== ")]
     assert [s[:6] for s in steps] == ["== 1/6", "== 2/6", "== 3/6", "== 4/6", "== 5/6", "== 6/6"]
     assert "fake sync: sync --frozen --no-dev --no-editable --reinstall-package slopymemory" in out
-    assert "install-postgres --yes" in calls and "install-model --yes" in calls and "register --detected --yes" in calls and "doctor" in calls
+    assert "install-postgres --yes" in calls and "install-model --yes" in calls and "doctor" in calls
+    assert "register --detected --no-summary --yes" in calls           # --no-summary: step 6's `summary` is the only copy
+    assert "fake slopymem summary" in calls
     assert out.rstrip().endswith("Done. Open any project and ask your agent to set up memory.")
     assert (tmp_path / "home" / "venv" / "bin" / "slopymem").exists()
 

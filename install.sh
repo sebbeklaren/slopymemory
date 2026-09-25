@@ -77,7 +77,8 @@ say "4/6 the embedder model (once, about 0.5 GB, into the shared Hugging Face ca
 
 say "5/6 harnesses"
 if [ "$HARNESS" = 1 ]; then
-  "$VENV/bin/slopymem" register --detected $YESFLAG
+  # --no-summary: step 6 prints the one first-run summary this run gets, after the doctor.
+  "$VENV/bin/slopymem" register --detected --no-summary $YESFLAG
 else
   echo "skipped (--no-harness); register later: slopymem register <harness>"
 fi

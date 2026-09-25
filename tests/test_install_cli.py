@@ -179,9 +179,18 @@ def test_register_detected_registers_only_what_is_there_and_says_so(tmp_home, tm
     import re
     assert not re.search(r"\bC\b", out)                                          # C (undetected) never mentioned by name
     assert instr.read_text().count(harnesses.OFFER_LINE) == 1
+    assert out.count("slopymemory is set up.") == 1                              # once, not once per harness
     monkeypatch.setattr(harnesses, "KNOWN", [hs[2]])
     code, out = run(["register", "--detected", "--yes"])
     assert code == 0 and "no known harness detected" in out and "slopymem register" in out
+
+
+def test_register_detected_no_summary_suppresses_the_block(tmp_home, tmp_path, monkeypatch):
+    ran = []
+    hs, instr = _fake_harnesses(tmp_path, monkeypatch, ran)
+    code, out = run(["register", "--detected", "--yes", "--no-summary"])
+    assert code == 0 and ran == [["a-add", harnesses.launcher_path()]]
+    assert "slopymemory is set up." not in out
 
 
 def test_summary_cli_is_read_only_and_never_fails(tmp_home, tmp_path, monkeypatch):

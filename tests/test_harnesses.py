@@ -422,21 +422,36 @@ def test_summary_names_only_what_is_true(tmp_path, tmp_home, monkeypatch):
     assert 'Registered as the MCP server "slopymemory" in: Claude Code' in lines
     assert "Codex" not in lines
     assert str(tmp_path / ".claude" / "CLAUDE.md") in lines
-    assert "Your harness's own memory: unchanged" in lines
+    assert "Your harness's own memory (Claude Code): unchanged" in lines
     assert "slopymem harness-memory off" in lines and "slopymem uninstall" in lines
     import re
     assert not re.search(r"\d[\d.,]*\s*k?\s*tokens", lines)                 # no token figure is printed
 
 
-def test_summary_says_when_harness_memory_is_off(tmp_path, tmp_home, monkeypatch):
+# --- the harness-memory part: one true line PER HARNESS, from its actual status() spelling --------------------
+
+def test_summary_harness_memory_line_for_on(tmp_path, tmp_home, monkeypatch):
+    """`on` (untouched): the unchanged/fallback line, named for this harness, and the off-hint (since a
+    harness IS on)."""
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    lines = "\n".join(harnesses.summary())
+    assert "Your harness's own memory (Claude Code): unchanged" in lines and "stays as a fallback" in lines
+    assert "slopymem harness-memory off" in lines
+
+
+def test_summary_harness_memory_line_for_off_by_slopymemory(tmp_path, tmp_home, monkeypatch):
     from slopymemory import harness_memory as hm
     monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
     monkeypatch.setattr(harnesses, "detected", lambda: [])
     hm.turn_off("claude-code")
-    assert any("file memory: OFF" in l for l in harnesses.summary())
+    lines = "\n".join(harnesses.summary())
+    assert "file memory: OFF" in lines and "Claude Code" in lines and "slopymem harness-memory on" in lines
+    assert "stays as a fallback" not in lines                    # off is never described as "unchanged"
+    assert "slopymem harness-memory off" not in lines            # the off-hint: no harness here is actually "on"
 
 
-def test_summary_says_when_harness_memory_came_back_on(tmp_path, tmp_home, monkeypatch):
+def test_summary_harness_memory_line_for_changed_back_on(tmp_path, tmp_home, monkeypatch):
     from slopymemory import harness_memory as hm
     monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
     monkeypatch.setattr(harnesses, "detected", lambda: [])
@@ -444,7 +459,44 @@ def test_summary_says_when_harness_memory_came_back_on(tmp_path, tmp_home, monke
     (tmp_path / ".claude" / "settings.json").write_text('{"autoMemoryEnabled": true}')   # switched back on since
     lines = "\n".join(harnesses.summary())
     assert "switched back on" in lines and "slopymem harness-memory on" in lines
-    assert "Your harness's own memory: unchanged" not in lines
+    assert "unchanged" not in lines                               # not the "on" bucket — it changed since
+    assert "slopymem harness-memory off" not in lines             # the off-hint: this state is not plain "on"
+
+
+def test_summary_harness_memory_line_for_off_not_by_slopymemory(tmp_path, tmp_home, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    (tmp_path / ".claude" / "settings.json").write_text('{"autoMemoryEnabled": false}')   # the user's own choice
+    lines = "\n".join(harnesses.summary())
+    assert "off by your own choice" in lines and "no fallback memory there" in lines
+    assert "stays as a fallback" not in lines                     # the false line the review caught
+    assert "slopymem harness-memory off" not in lines             # no harness here is "on"
+
+
+def test_summary_harness_memory_line_for_unknown_state(tmp_path, tmp_home, monkeypatch):
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    monkeypatch.setattr(hm, "_codex_available", lambda: True)
+
+    def boom(cmd, **kw):
+        raise PermissionError("not executable")
+    monkeypatch.setattr(hm.subprocess, "run", boom)
+    lines = "\n".join(harnesses.summary())
+    assert "state unknown" in lines and "not executable" in lines and "Codex" in lines
+
+
+def test_summary_harness_memory_mixed_states_prints_both_true_lines(tmp_path, tmp_home, monkeypatch):
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    monkeypatch.setattr(hm, "_codex_available", lambda: True)
+    monkeypatch.setattr(hm, "codex_memories_enabled", lambda: True)     # codex: untouched, "on"
+    hm.turn_off("claude-code")                                          # claude-code: "off (slopymemory)"
+    lines = "\n".join(harnesses.summary())
+    assert "file memory: OFF" in lines and "Claude Code" in lines                       # claude-code's true line
+    assert "Your harness's own memory (Codex): unchanged" in lines and "stays as a fallback" in lines  # codex's
+    assert "slopymem harness-memory off" in lines                       # the hint: codex IS "on"
 
 
 def test_summary_never_raises_when_harness_memory_state_is_unreadable(tmp_path, tmp_home, monkeypatch):
@@ -484,4 +536,44 @@ def test_register_prints_no_summary_when_nothing_changed(tmp_path, monkeypatch, 
     assert harnesses.register("claude-code", yes=True) == 0
     out = capsys.readouterr().out
     assert "already registered" in out
+    assert "slopymemory is set up." not in out
+
+
+def test_register_no_summary_flag_suppresses_the_block_even_when_changed(tmp_path, monkeypatch, capsys):
+    _registration_flow(tmp_path, monkeypatch, registered=False)
+    assert harnesses.register("claude-code", yes=True, print_summary=False) == 0
+    out = capsys.readouterr().out
+    assert "slopymemory is set up." not in out
+
+
+# --- register_detected(): the block prints at most ONCE, after every harness, not once per harness ------------
+
+def _two_fake_harnesses(tmp_path, monkeypatch):
+    ran = []
+    monkeypatch.setattr(harnesses.subprocess, "run", lambda cmd, **kw: ran.append(list(cmd)))
+    a = harnesses.Harness(id="a", name="A", detect=lambda: True, registered=lambda lp: False, registered_as=lambda lp: None,
+                           register_cmd=lambda lp: ["a-add", lp], unregister_cmd=lambda name: ["a-remove", name],
+                           config_hint="a hint", instructions_file=lambda: tmp_path / "a.md")
+    b = harnesses.Harness(id="b", name="B", detect=lambda: True, registered=lambda lp: False, registered_as=lambda lp: None,
+                           register_cmd=lambda lp: ["b-add", lp], unregister_cmd=lambda name: ["b-remove", name],
+                           config_hint="b hint", instructions_file=lambda: tmp_path / "b.md")
+    monkeypatch.setattr(harnesses, "detected", lambda: [a, b])
+    return ran
+
+
+def test_register_detected_prints_the_summary_exactly_once_across_several_harnesses(tmp_path, tmp_home, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    ran = _two_fake_harnesses(tmp_path, monkeypatch)
+    assert harnesses.register_detected(yes=True) == 0
+    out = capsys.readouterr().out
+    assert ran == [["a-add", harnesses.launcher_path()], ["b-add", harnesses.launcher_path()]]   # both really ran
+    assert out.count("slopymemory is set up.") == 1
+    assert "A:" in out and "B:" in out
+
+
+def test_register_detected_no_summary_suppresses_the_block(tmp_path, tmp_home, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    _two_fake_harnesses(tmp_path, monkeypatch)
+    assert harnesses.register_detected(yes=True, print_summary=False) == 0
+    out = capsys.readouterr().out
     assert "slopymemory is set up." not in out
