@@ -250,7 +250,13 @@ def cmd_scan_store(a) -> int:
 
 def cmd_harness_memory(a) -> int:
     if a.action == "status":
-        for k, v in hm.status().items():
+        try:
+            st = hm.status()
+        except hm.HarnessMemoryError as e:
+            return fail(str(e))
+        except OSError as e:
+            return fail(f"{e}{hm.ANCHOR}")
+        for k, v in st.items():
             print(f"{k}: {v}")
         return 0
     targets = [a.harness] if a.harness else [h.id for h in harnesses.detected() if h.id in ("claude-code", "codex")]
@@ -279,6 +285,8 @@ def cmd_harness_memory(a) -> int:
                 print(f"{t}: nothing to restore")
             else:
                 rc = fail(str(e))
+        except OSError as e:
+            rc = fail(f"{t}: {e}{hm.ANCHOR}")
     return rc
 
 
@@ -419,14 +427,22 @@ def cmd_uninstall(a) -> int:
         hm_unreadable = _hm_reason(e)
     to_restore = [t for t, v in hm_status.items()
                   if v in ("off (slopymemory)", "on (changed since slopymemory switched it off)")]
+    # a record can exist while the harness's CURRENT state can't be read (codex broken right now) — hm.status()
+    # then reports "unknown (...)" for it, which is neither restored (not in to_restore) nor said anywhere else;
+    # a record must never outlive the install silently, so it earns its own preview line.
+    codex_kept = (not hm_unreadable and hm_status.get("codex", "").startswith("unknown (")
+                  and hm.has_record("codex"))
     names = ", ".join(st.name for st in stores) or "none"
-    if not home.exists() and not to_unregister and not offer_files and not to_restore and not hm_unreadable:
+    if not home.exists() and not to_unregister and not offer_files and not to_restore and not hm_unreadable and not codex_kept:
         print(f"nothing to uninstall: {home} does not exist and no harness has the launcher registered"); return 0
     print("uninstall will remove:")
     if hm_unreadable:
         print(f"  harness memory state unreadable: {hm_unreadable} — see SETUP.md#harness-memory; left as it is")
     elif to_restore:
         print("  harness memory switched off by slopymemory: restored first")
+    if codex_kept:
+        print(f"  Codex: harness memory record kept — state {hm_status['codex']}; "
+              f"restore by hand: codex features enable memories")
     if pgdir.exists():                      # its binaries live in the venv: a cluster left running would outlive them
         print("  (first: stop the embedded Postgres if it is running — its data is kept" + ("" if a.data else " unless --data") + ")")
     print(f"  the venv {venv}" + ("" if venv.exists() else " (not there)"))

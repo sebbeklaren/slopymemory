@@ -458,3 +458,73 @@ def test_uninstall_data_declined_after_restore_says_it_was_restored(tmp_home, tm
     assert "slopymem: nothing removed" not in out          # the bare message would be false: something WAS restored
     assert not (tmp_path / ".claude" / "settings.json").exists()     # the restore itself did happen
     assert fake_pg.dropped == []
+
+
+# --- a raw OSError from harness-memory's own status|off|on is a failure line, never a traceback -------------------
+
+def test_harness_memory_status_reports_a_raw_os_error_cleanly_not_a_traceback(tmp_home, tmp_path, monkeypatch):
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+
+    def boom():
+        raise PermissionError(13, "Permission denied", str(tmp_path / ".claude" / "settings.json"))
+    monkeypatch.setattr(hm, "status", boom)
+    code, out = run(["harness-memory", "status"])
+    assert code == 1
+    assert "SETUP.md#harness-memory" in out
+    assert "Traceback" not in out
+    assert "Permission denied" in out
+
+
+def test_harness_memory_off_reports_a_raw_os_error_reading_settings_cleanly(tmp_home, tmp_path, monkeypatch):
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+
+    def boom(f):
+        raise PermissionError(13, "Permission denied", str(f))
+    monkeypatch.setattr(hm, "_read_settings", boom)
+    code, out = run(["harness-memory", "off", "--harness", "claude-code", "--yes"])
+    assert code == 1
+    assert "SETUP.md#harness-memory" in out
+    assert "Traceback" not in out
+    assert "Permission denied" in out
+
+
+def test_harness_memory_off_reports_an_unwritable_state_dir_cleanly(tmp_home, tmp_path, monkeypatch):
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+
+    def boom(d):
+        raise OSError("disk full")
+    monkeypatch.setattr(hm, "_save_records", boom)
+    code, out = run(["harness-memory", "off", "--harness", "claude-code", "--yes"])
+    assert code == 1
+    assert "SETUP.md#harness-memory" in out
+    assert "Traceback" not in out
+    assert "disk full" in out
+
+
+# --- uninstall with a Codex record whose LIVE state cannot be read: never silent -----------------------------------
+
+def test_uninstall_preview_names_a_codex_record_left_in_place_when_its_state_is_unknown(tmp_home, tmp_path, monkeypatch, fake_pg):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir(); (tmp_path / ".codex").mkdir()
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    from slopymemory import harness_memory as hm
+    import subprocess as sp
+    monkeypatch.setattr(hm, "_codex_available", lambda: True)
+
+    def working(cmd, **kw):
+        return sp.CompletedProcess(cmd, 0, stdout="memories  stable  true\n", stderr="")
+    monkeypatch.setattr(hm.subprocess, "run", working)
+    assert run(["harness-memory", "off", "--harness", "codex", "--yes"])[0] == 0
+
+    def broken(cmd, **kw):
+        raise sp.CalledProcessError(1, cmd, stderr="codex is broken")
+    monkeypatch.setattr(hm.subprocess, "run", broken)
+
+    code, out = run(["uninstall"], stdin="n\n")
+    assert code == 1
+    head = out[:out.index("remove these?")]
+    assert "Codex" in head and "unknown" in head and "codex is broken" in head
+    assert "restore by hand" in head
+    assert "codex features enable memories" in head
