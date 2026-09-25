@@ -204,14 +204,42 @@ def test_off_and_on_set_the_mode_on_the_temp_file_before_the_replace(home, monke
     assert seen_modes_at_replace == [0o600]
     assert stat.S_IMODE(settings(home).stat().st_mode) == 0o600
 
-    def raise_on_chmod(*a, **k):
-        raise OSError("no permission to chmod")
-    monkeypatch.setattr(hm.os, "chmod", raise_on_chmod)
+
+def test_the_temp_file_is_created_at_the_target_mode_not_chmodded_after(home, monkeypatch):
+    """The mode must be passed to the call that CREATES the temp file, not applied with a separate chmod
+    once it already holds content — otherwise the content sits at the umask's mode for however long the
+    two calls are apart."""
+    settings(home).write_text('{"theme": "dark"}')
+    settings(home).chmod(0o600)
+
+    seen = []
+    real_open = hm.os.open
+
+    def spy_open(path, flags, mode=0o777):
+        seen.append(mode)
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(hm.os, "open", spy_open)
+    monkeypatch.setattr(hm.os, "chmod", lambda *a, **k: pytest.fail("mode must not be set with a separate chmod"))
+    hm.turn_off("claude-code")
+    assert seen and seen[-1] == 0o600
+
+
+def test_a_failed_restore_write_removes_the_temp_file_and_leaves_the_target_untouched(home, monkeypatch):
+    settings(home).write_text('{"theme": "dark"}')
+    settings(home).chmod(0o600)
+    hm.turn_off("claude-code")
     before = settings(home).read_text()
+
+    def boom(tmp, target):
+        raise OSError("disk full")
+    monkeypatch.setattr(hm, "_replace", boom)
     with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory") as exc:
         hm.turn_on("claude-code", choose=lambda p, c: pytest.fail("no conflict expected"))
     assert "not changed" in str(exc.value)
-    assert settings(home).read_text() == before                     # a chmod failure must never leave a half write
+    assert settings(home).read_text() == before                     # a failed write must never leave a half write
+    tmp = settings(home).parent / (settings(home).name + ".tmp")
+    assert not tmp.exists()                                          # nothing stray left behind either
 
 
 def test_off_and_on_write_through_a_symlinked_settings_file(home):
@@ -375,7 +403,7 @@ def test_codex_on_raises_and_keeps_the_record_when_the_restore_command_fails(hom
 
     hm.turn_on("codex", choose=lambda p, c: pytest.fail("no conflict expected"))   # retry once it works
     assert state["enabled"] is True
-    assert "codex" not in json.loads(hm.STATE_FILE().read_text())
+    assert not hm.STATE_FILE().exists()                                # the last record cleared: no file left behind
 
 
 def test_codex_other_os_error_is_reported(home, monkeypatch):
@@ -462,3 +490,91 @@ def test_status_reports_unknown_when_the_codex_command_fails(home, monkeypatch):
     monkeypatch.setattr(hm.subprocess, "run", boom)
     out = hm.status()
     assert out["codex"].startswith("unknown (") and "nope" in out["codex"]
+
+
+def test_codex_calls_pass_stdin_devnull_so_a_prompting_build_never_stalls(home, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(hm, "_codex_available", lambda: True)
+    seen_kwargs = []
+
+    def spy(cmd, **kw):
+        seen_kwargs.append(kw)
+        return subprocess.CompletedProcess(cmd, 0, stdout="memories  stable  true\n", stderr="")
+
+    monkeypatch.setattr(hm.subprocess, "run", spy)
+    hm.status()
+    assert seen_kwargs and seen_kwargs[0].get("stdin") is subprocess.DEVNULL
+
+
+# --- the last record cleared deletes the state file rather than leaving `{}` behind -------------------------------
+
+def test_on_deletes_the_state_file_when_the_last_record_is_cleared(home):
+    settings(home).write_text('{"autoMemoryEnabled": true}')
+    hm.turn_off("claude-code")
+    assert hm.STATE_FILE().exists()
+    hm.turn_on("claude-code", choose=lambda p, c: pytest.fail("no conflict expected"))
+    assert not hm.STATE_FILE().exists()                               # not left behind as an empty `{}`
+
+
+def test_codex_on_deletes_the_state_file_when_the_last_record_is_cleared(codex):
+    hm.turn_off("codex")
+    assert hm.STATE_FILE().exists()
+    hm.turn_on("codex", choose=lambda p, c: pytest.fail("no conflict expected"))
+    assert not hm.STATE_FILE().exists()
+
+
+# --- an already-false Claude Code setting: recorded without a rewrite, Codex's wording -----------------------
+
+def test_off_on_an_already_false_setting_does_not_rewrite_the_file_and_matches_codexs_wording(home):
+    original = '{"autoMemoryEnabled":false,"theme":"dark"}'
+    settings(home).write_text(original)
+    out = hm.turn_off("claude-code")
+    assert "already off" in out and "recorded, nothing changed" in out    # Codex's own wording for this case
+    assert settings(home).read_text() == original                        # off never rewrote/reformatted it
+    assert hm.status()["claude-code"] == "off (slopymemory)"
+    hm.turn_on("claude-code", choose=lambda p, c: pytest.fail("no conflict expected"))
+    assert settings(home).read_text() == original                        # bytes unchanged through the whole round trip
+
+
+# --- the record write that clears state AFTER a successful restore can itself fail — that must be said, not raw --
+
+def test_on_reports_when_the_restore_succeeds_but_the_final_record_write_fails(home, monkeypatch):
+    settings(home).write_text('{"autoMemoryEnabled": true}')
+    hm.turn_off("claude-code")
+
+    def boom(d):
+        raise OSError("disk full")
+    monkeypatch.setattr(hm, "_save_records", boom)
+
+    with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory") as exc:
+        hm.turn_on("claude-code", choose=lambda p, c: pytest.fail("no conflict expected"))
+
+    msg = str(exc.value)
+    assert "restored" in msg and "record" in msg and "could not" in msg
+    # the setting itself WAS restored even though the record write failed
+    assert json.loads(settings(home).read_text()) == {"autoMemoryEnabled": True}
+
+
+def test_codex_on_reports_when_the_restore_succeeds_but_the_final_record_write_fails(codex, monkeypatch):
+    hm.turn_off("codex")
+
+    def boom(d):
+        raise OSError("disk full")
+    monkeypatch.setattr(hm, "_save_records", boom)
+
+    with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory") as exc:
+        hm.turn_on("codex", choose=lambda p, c: pytest.fail("no conflict expected"))
+
+    msg = str(exc.value)
+    assert "restored" in msg and "record" in msg and "could not" in msg
+    assert codex.enabled is True                                          # codex ITSELF was restored
+
+
+# --- has_record(): whether slopymemory holds a record, independent of whether current state can be read ----------
+
+def test_has_record_true_only_while_a_record_exists(home):
+    assert hm.has_record("claude-code") is False
+    hm.turn_off("claude-code")
+    assert hm.has_record("claude-code") is True
+    hm.turn_on("claude-code", choose=lambda p, c: pytest.fail("no conflict expected"))
+    assert hm.has_record("claude-code") is False

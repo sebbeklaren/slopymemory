@@ -41,8 +41,18 @@ def _records() -> dict:
 
 
 def _save_records(d: dict) -> None:
+    if not d:
+        STATE_FILE().unlink(missing_ok=True)   # no record left: no file left for `slopymem uninstall` to name
+        return
     STATE_FILE().parent.mkdir(parents=True, exist_ok=True)
     paths.write_atomic(STATE_FILE(), json.dumps(d, indent=2) + "\n")
+
+
+def has_record(harness_id: str) -> bool:
+    """Whether slopymemory holds a record of having switched `harness_id`'s own memory off — true even when
+    the harness's CURRENT state cannot be read right now (e.g. `codex features list` failing), so a caller
+    can tell "no record" apart from "a record exists but its live state can't be compared this moment"."""
+    return harness_id in _records()
 
 
 def _read_settings(f: Path) -> tuple[str | None, dict]:
@@ -93,14 +103,20 @@ def _replace(tmp: Path, target: Path) -> None:
 
 
 def _atomic_write_with_mode(target: Path, text: str, mode: int | None) -> None:
-    """Write `text` to `target` atomically, with `mode` (if given) set on the temp file BEFORE the
-    rename — so a 0600 file is never briefly 0644, and a failure anywhere here (including the chmod)
-    leaves `target` completely untouched: there is no post-replace step left to fail."""
+    """Write `text` to `target` atomically, with `mode` (if given) set on the temp file the moment it is
+    CREATED — via `os.open`'s own mode argument, never a chmod once it already holds content — so a 0600
+    file is never even briefly at the umask's mode. A failure anywhere here (opening, writing, or the
+    rename) removes the temp file and leaves `target` completely untouched: there is no post-replace step
+    left to fail, and no stray `.tmp` left behind either."""
     tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(text)
-    if mode is not None:
-        os.chmod(tmp, mode)
-    _replace(tmp, target)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode if mode is not None else 0o666)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        _replace(tmp, target)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _write_settings(f: Path, text: str) -> None:
@@ -114,12 +130,37 @@ def _unlink_settings(f: Path) -> None:
     _target(f).unlink(missing_ok=True)
 
 
+def _clear_record_after_restore(recs: dict, key: str, message: str) -> str:
+    """Called once the setting itself has already been put back — this only clears slopymemory's own
+    bookkeeping of that. If THIS write fails, the setting is already fine; only the record is stuck, so
+    the failure says exactly that (never a bare OSError) rather than leaving the next `status` to wrongly
+    report the setting as changed since slopymemory itself is the one that changed it back."""
+    del recs[key]
+    try:
+        _save_records(recs)
+    except OSError as e:
+        raise HarnessMemoryError(
+            f"the setting was restored, but the record of it could not be cleared ({e}); until it is, "
+            f"`slopymem harness-memory status` may wrongly say it changed since — run `slopymem harness-memory on` "
+            f"again to clear it{ANCHOR}"
+        ) from None
+    return message
+
+
 def _claude_off() -> str:
     recs = _records()
     existing = recs.get("claude-code")
     f = claude_settings()
     text, d = _read_settings(f)
     current = d.get(KEY, "absent")
+
+    if existing is None and current is False:
+        # already off, by the user's own choice or an earlier install: record it as slopymemory's own so
+        # `on` restores it in meaning, but never rewrite the file for a value that is already what we want
+        recs["claude-code"] = {"file_existed": True, "original_text": text,
+                               "prior": False, "wrote": False, "written_text": text}
+        _save_records(recs)
+        return "Claude Code file memory was already off; recorded, nothing changed"
 
     if existing is not None:
         if _json_eq(current, existing["wrote"]):
@@ -177,10 +218,10 @@ def _claude_on(choose: Callable[[str, str], str]) -> str:
             # the record is left exactly as it was — untouched above — so the restore target survives and a
             # retry can succeed once whatever blocked the write clears
             raise HarnessMemoryError(f"could not restore {f} ({e}); it was not changed{ANCHOR}") from None
-        del recs["claude-code"]; _save_records(recs)
-        if deleted and rec["original_text"] is not None:
-            return f"Claude Code file memory recreated {f} as it was before slopymemory switched it off"
-        return f"Claude Code file memory restored ({KEY} {'removed' if rec['prior'] == 'absent' else '= ' + _spell(rec['prior'])})"
+        message = (f"Claude Code file memory recreated {f} as it was before slopymemory switched it off"
+                   if deleted and rec["original_text"] is not None else
+                   f"Claude Code file memory restored ({KEY} {'removed' if rec['prior'] == 'absent' else '= ' + _spell(rec['prior'])})")
+        return _clear_record_after_restore(recs, "claude-code", message)
 
     # other keys changed meanwhile: restore our key only, leave the rest of the current file as it is
     if rec["prior"] == "absent":
@@ -191,8 +232,8 @@ def _claude_on(choose: Callable[[str, str], str]) -> str:
         _write_settings(f, json.dumps(d, indent=2) + "\n")
     except OSError as e:
         raise HarnessMemoryError(f"could not restore {f} ({e}); it was not changed{ANCHOR}") from None
-    del recs["claude-code"]; _save_records(recs)
-    return f"Claude Code file memory restored ({KEY} {'removed' if rec['prior'] == 'absent' else '= ' + _spell(rec['prior'])})"
+    message = f"Claude Code file memory restored ({KEY} {'removed' if rec['prior'] == 'absent' else '= ' + _spell(rec['prior'])})"
+    return _clear_record_after_restore(recs, "claude-code", message)
 
 
 def _codex_available() -> bool:
@@ -203,7 +244,8 @@ def _codex(*args: str) -> str:
     if not _codex_available():
         raise HarnessMemoryError(f"codex is not on PATH; nothing to do for Codex's own memory{ANCHOR}")
     try:
-        return subprocess.run(["codex", *args], check=True, capture_output=True, text=True, timeout=30).stdout
+        return subprocess.run(["codex", *args], check=True, capture_output=True, text=True, timeout=30,
+                              stdin=subprocess.DEVNULL).stdout
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         # OSError also catches FileNotFoundError — a race against the check above, not the normal path
         raise HarnessMemoryError(f"`codex {' '.join(args)}` failed: {getattr(e, 'stderr', '') or e}{ANCHOR}") from None
@@ -259,8 +301,8 @@ def _codex_on(choose: Callable[[str, str], str]) -> str:
         _codex("features", "enable", "memories")
     elif not rec["prior"] and current:
         _codex("features", "disable", "memories")
-    del recs["codex"]; _save_records(recs)
-    return f"Codex memories restored ({'on' if rec['prior'] else 'off'})"
+    message = f"Codex memories restored ({'on' if rec['prior'] else 'off'})"
+    return _clear_record_after_restore(recs, "codex", message)
 
 
 def turn_off(harness_id: str) -> str:
