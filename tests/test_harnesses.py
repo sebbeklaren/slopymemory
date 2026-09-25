@@ -121,7 +121,8 @@ OLDER_LINE = ("If the memory tools show only `memory_init`, tell the user this p
 def test_offer_line_carries_the_second_layer_and_a_stable_prefix():
     assert harnesses.OFFER_LINE.startswith(harnesses.OFFER_LINE_PREFIX)
     assert "Never save passwords, keys or tokens" in harnesses.OFFER_LINE
-    assert OLDER_LINE.startswith(harnesses.OFFER_LINE_PREFIX) and OLDER_LINE != harnesses.OFFER_LINE
+    assert any(OLDER_LINE.startswith(p) for p in harnesses.LEGACY_PREFIXES)
+    assert harnesses.OFFER_LINE.startswith(harnesses.TRIGGER_PREFIX) and OLDER_LINE != harnesses.OFFER_LINE
 
 
 def test_offer_line_replaces_an_older_version_in_place(tmp_path, monkeypatch, capsys):
@@ -293,6 +294,9 @@ def test_an_older_registration_under_memory_is_renamed_on_a_yes_add_first(tmp_pa
 
 def test_an_older_registration_is_left_alone_on_a_no(tmp_path, monkeypatch, capsys):
     ran = _migration(tmp_path, monkeypatch, OURS_AS_MEMORY)
+    # A decline leaves the harness registered as `memory`, so the instructions file's already-current line
+    # is the one naming THAT registration, not the default `slopymemory` one `_migration` seeds.
+    (tmp_path / ".claude" / "CLAUDE.md").write_text(f"# slopymemory\n{harnesses.trigger_line('memory')}\n")
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO("n\n"))
     assert harnesses.register("claude-code", yes=False) == 0
     assert ran == []
@@ -332,3 +336,46 @@ def test_a_name_the_user_chose_is_never_offered_a_rename(tmp_path, monkeypatch, 
     ran = _migration(tmp_path, monkeypatch, '{"mcpServers": {"mem2": {"command": "/x/slopymem-mcp"}}}')
     assert harnesses.register("claude-code", yes=True) == 0
     assert ran == [] and "rename" not in capsys.readouterr().out
+
+
+# --- the trigger line: tells the agent when to use memory, naming the server as registered ---
+
+LEGACY_LINE = ("If the memory tools show only `memory_init`, tell the user this project has no memory yet and offer "
+               "to set it up. Never save passwords, keys or tokens to memory; save where they live.")
+
+
+def test_trigger_line_carries_the_triggers_and_the_secret_rule():
+    line = harnesses.trigger_line("slopymemory")
+    assert line.startswith(harnesses.TRIGGER_PREFIX) and "`slopymemory`" in line
+    for s in ("Before planning or building", "query_concepts", "weigh what comes back", "save each decision with its why",
+              "Never save passwords, keys or tokens"):
+        assert s in line
+    assert harnesses.OFFER_LINE == line
+
+
+def test_old_offer_line_is_replaced_by_the_trigger(tmp_path):
+    f = tmp_path / "CLAUDE.md"
+    f.write_text(f"# mine\n\n# slopymemory\n{LEGACY_LINE}\n\n# after\n")
+    assert harnesses.offer_line_state(f, harnesses.OFFER_LINE) == "stale"
+    assert harnesses.ensure_offer_line(f, harnesses.OFFER_LINE) == "replaced"
+    assert f.read_text() == f"# mine\n\n# slopymemory\n{harnesses.OFFER_LINE}\n\n# after\n"
+    assert harnesses.ensure_offer_line(f, harnesses.OFFER_LINE) == "present"     # never a second line
+    assert f.read_text().count("slopymemory") == 2                                 # the heading and the one line
+
+
+def test_remove_offer_line_takes_a_legacy_line_too(tmp_path):
+    f = tmp_path / "AGENTS.md"
+    f.write_text(f"keep\n\n# slopymemory\n{LEGACY_LINE}\n")
+    assert harnesses.remove_offer_line(f) is True
+    assert f.read_text() == "keep\n"                      # the existing removal keeps the final newline
+
+
+def test_trigger_names_the_registered_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude.json").write_text('{"mcpServers": {"mem2": {"command": "/x/slopymem-mcp"}}}')
+    (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "launcher_path", lambda: "/x/slopymem-mcp")
+    monkeypatch.setattr(claude_code.HARNESS, "detect", lambda: True)
+    monkeypatch.setattr(harnesses.subprocess, "run", lambda cmd, **kw: None)
+    assert harnesses.register("claude-code", yes=True) == 0
+    assert harnesses.trigger_line("mem2") in (tmp_path / ".claude" / "CLAUDE.md").read_text()

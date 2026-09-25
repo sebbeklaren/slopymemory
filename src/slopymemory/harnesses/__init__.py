@@ -11,13 +11,23 @@ from .. import SERVER_NAME, paths
 
 LEGACY_NAME = "memory"      # what installs before the distinct name registered the launcher as
 
-# The one line slopymem offers to append to a harness's machine-wide instruction file. Its prefix is the
-# stable part: a later version of the line REPLACES an earlier one found by this prefix, so a file never
-# carries two of them. The second sentence is the first layer against secrets in memory (the server's
-# guard on memory_save is the second): the shape of a key can be recognised, a password in prose cannot.
-OFFER_LINE_PREFIX = "If the memory tools show only"
-OFFER_LINE = (f"{OFFER_LINE_PREFIX} `memory_init`, tell the user this project has no memory yet "
-              "and offer to set it up. Never save passwords, keys or tokens to memory; save where they live.")
+# The one line slopymem offers for a harness's machine-wide instruction file: the TRIGGER — when to use memory. The
+# full rules ride the MCP server's instructions (usage_rules.py); a harness may show those only after the server is
+# first used, so this line must be visible before the agent decides whether to use memory. It names the server as
+# registered in that harness (a user's own name when they chose one). Its prefix is the stable part: a later version
+# of the line REPLACES an earlier one found by this prefix or by a legacy prefix, so a file never carries two.
+TRIGGER_PREFIX = "Before planning or building, and whenever something earlier comes up, check the"
+LEGACY_PREFIXES = ("If the memory tools show only",)      # the offer line of earlier installs
+OUR_PREFIXES = (TRIGGER_PREFIX, *LEGACY_PREFIXES)
+
+
+def trigger_line(name: str) -> str:
+    return (f"{TRIGGER_PREFIX} `{name}` memory tools (retrieve with query_concepts) and weigh what comes back; save "
+            "each decision with its why when it is made. Never save passwords, keys or tokens; save where they live.")
+
+
+OFFER_LINE = trigger_line(SERVER_NAME)
+OFFER_LINE_PREFIX = TRIGGER_PREFIX       # kept for callers that name it
 
 
 def offer_line_state(f: Path, line: str) -> str:
@@ -25,7 +35,7 @@ def offer_line_state(f: Path, line: str) -> str:
     if not f.exists():
         return "absent"
     for existing in f.read_text().splitlines():
-        if existing.strip().startswith(OFFER_LINE_PREFIX):
+        if existing.strip().startswith(OUR_PREFIXES):
             return "present" if existing.strip() == line else "stale"
     return "absent"
 
@@ -44,7 +54,7 @@ def ensure_offer_line(f: Path, line: str) -> str:
         mode = target.stat().st_mode & 0o7777
         lines = target.read_text().split("\n")
         for i, existing in enumerate(lines):
-            if existing.strip().startswith(OFFER_LINE_PREFIX):
+            if existing.strip().startswith(OUR_PREFIXES):
                 lines[i] = line
                 break
         paths.write_atomic(target, "\n".join(lines))
@@ -66,7 +76,7 @@ def remove_offer_line(f: Path) -> bool:
     mode = target.stat().st_mode & 0o7777
     lines = target.read_text().split("\n")
     for i, existing in enumerate(lines):
-        if existing.strip().startswith(OFFER_LINE_PREFIX):
+        if existing.strip().startswith(OUR_PREFIXES):
             start = i
             if i > 0 and lines[i - 1].strip() == "# slopymemory":
                 start = i - 1
@@ -225,12 +235,15 @@ def _rename_step(h: Harness, lp: str, yes: bool, confirm) -> bool:
 
 
 def _offer_line_step(h: Harness, yes: bool, confirm, quiet_when_present: bool = False) -> int:
-    """Offer (and on a yes, apply) the instruction line for one harness. Returns 1 when the user declined an
-    update that was needed or the file cannot be read or written, else 0 — a declined append after a fresh
-    registration was never a failure."""
+    """Offer (and on a yes, apply) the instruction line for one harness, naming the server as it is actually
+    registered there (a user's own name when they chose one; SERVER_NAME when the config isn't readable yet).
+    Returns 1 when the user declined an update that was needed or the file cannot be read or written, else 0 —
+    a declined append after a fresh registration was never a failure."""
     f = h.instructions_file()
+    name = (h.registered_as(launcher_path()) if h.registered_as is not None else None) or SERVER_NAME
+    line = trigger_line(name)
     try:
-        state = offer_line_state(f, h.offer_line)
+        state = offer_line_state(f, line)
         if state == "present":
             if not quiet_when_present:
                 print("offer line already present")
@@ -238,7 +251,7 @@ def _offer_line_step(h: Harness, yes: bool, confirm, quiet_when_present: bool = 
         verb = "update the offer line in" if state == "stale" else "append the offer line to"
         if not confirm(f"{verb} {f}?", yes):
             print(f"offer line left as it is in {f}"); return 1 if state == "stale" else 0
-        done = ensure_offer_line(f, h.offer_line)
+        done = ensure_offer_line(f, line)
     except OSError as e:
         print(f"{h.name}: the offer line could not be read or written in {f}: {e} — see SETUP.md#harnesses", file=sys.stderr)
         return 1
