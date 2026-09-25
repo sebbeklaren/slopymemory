@@ -170,7 +170,7 @@ def status() -> "Finding":
         for k, v in hm.status().items():
             if v == "off (slopymemory)":
                 rows.append(f"{k} file memory is OFF (slopymemory harness-memory); projects without a store have no memory there")
-    except hm.HarnessMemoryError as e:
+    except (hm.HarnessMemoryError, OSError) as e:
         rows.append(str(e))
     return Finding(not bad, "; ".join(rows) or "no known harness detected")
 

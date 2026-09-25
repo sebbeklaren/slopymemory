@@ -390,3 +390,21 @@ def test_status_reports_harness_memory_off_without_failing(tmp_path, tmp_home, m
     hm.turn_off("claude-code")
     f = harnesses.status()
     assert f.ok and "file memory is OFF" in f.detail and "projects without a store have no memory" in f.detail
+
+
+def test_status_survives_an_os_error_reading_harness_memory_and_keeps_the_registration_rows(tmp_path, monkeypatch):
+    """A registered harness's row must not be lost just because harness-memory's own state (a settings file
+    with a permissions problem, say) raised something other than HarnessMemoryError."""
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude.json").write_text('{"mcpServers": {"slopymemory": {"command": "/x/slopymem-mcp"}}}')
+    monkeypatch.setattr(harnesses, "launcher_path", lambda: "/x/slopymem-mcp")
+    monkeypatch.setattr(claude_code.HARNESS, "detect", lambda: True)
+    monkeypatch.setattr(harnesses, "detected", lambda: [claude_code.HARNESS])
+
+    def boom():
+        raise OSError("permission denied")
+    monkeypatch.setattr(hm, "status", boom)
+    f = harnesses.status()
+    assert f.ok and "Claude Code: registered" in f.detail
+    assert "permission denied" in f.detail

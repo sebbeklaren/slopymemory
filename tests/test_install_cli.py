@@ -341,8 +341,98 @@ def test_uninstall_restores_harness_memory_first(tmp_home, tmp_path, monkeypatch
     monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
     _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
     run(["harness-memory", "off", "--harness", "claude-code", "--yes"])
-    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("y\n"))
-    code, out = run(["uninstall", "--yes", "--data"])
+    code, out = run(["uninstall", "--yes", "--data"], stdin="y\n")
     assert "Claude Code file memory restored" in out
-    assert out.index("file memory restored") < out.index("removed")
+    # "dropped database" is printed only by an actual removal step (never by the restore message
+    # itself, which cannot contain it) — a real ordering violation moves this index before it.
+    assert "dropped database" in out
+    assert out.index("Claude Code file memory restored") < out.index("dropped database")
     assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_uninstall_preview_lists_the_harness_memory_restore(tmp_home, tmp_path, monkeypatch, fake_pg):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    run(["harness-memory", "off", "--harness", "claude-code", "--yes"])
+    code, out = run(["uninstall"], stdin="n\n")
+    assert code == 1
+    head = out[:out.index("remove these?")]
+    assert "harness memory switched off by slopymemory: restored first" in head
+
+
+def test_uninstall_survives_an_unreadable_settings_file_and_leaves_it_untouched(tmp_home, tmp_path, monkeypatch, fake_pg):
+    """A user who never touched harness-memory but has a hand-broken ~/.claude/settings.json must still be
+    able to uninstall: harness-memory state is said as unreadable and left alone, not a blocker."""
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    broken = "{not json"
+    (tmp_path / ".claude" / "settings.json").write_text(broken)
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    code, out = run(["uninstall"], stdin="y\ny\n")
+    assert code == 0
+    assert "harness memory state unreadable" in out
+    assert "SETUP.md#harness-memory" in out and "left as it is" in out
+    assert (tmp_path / ".claude" / "settings.json").read_text() == broken
+
+
+def test_uninstall_conflict_question_during_uninstall_names_the_harness_and_restores_on_r(tmp_home, tmp_path, monkeypatch, fake_pg):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    run(["harness-memory", "off", "--harness", "claude-code", "--yes"])
+    (tmp_path / ".claude" / "settings.json").write_text('{"autoMemoryEnabled": true}')     # changed since
+    code, out = run(["uninstall", "--yes", "--data"], stdin="r\ny\n")
+    assert code == 0
+    assert "claude-code: it changed after slopymemory set it" in out
+    assert "Claude Code file memory restored" in out
+
+
+def test_harness_memory_status_on_unreadable_file_fails_cleanly_no_traceback(tmp_home, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{not json")
+    code, out = run(["harness-memory", "status"])
+    assert code == 1
+    assert "SETUP.md#harness-memory" in out
+    assert "Traceback" not in out
+
+
+class _Detected:
+    def __init__(self, id):
+        self.id = id
+
+
+def test_harness_memory_bare_off_and_on_say_none_detected(tmp_home, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    code, out = run(["harness-memory", "off"])
+    assert code == 0 and "no harness with a switch detected (Claude Code, Codex)" in out
+    assert "EVERY project" not in out                     # no warning/question when there is nothing to switch
+    code, out = run(["harness-memory", "on"])
+    assert code == 0 and "no harness with a switch detected (Claude Code, Codex)" in out
+
+
+def test_harness_memory_bare_on_reports_nothing_to_restore_but_explicit_harness_still_refuses(tmp_home, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [_Detected("claude-code")])
+    code, out = run(["harness-memory", "on"])
+    assert code == 0 and "claude-code: nothing to restore" in out
+    code, out = run(["harness-memory", "on", "--harness", "claude-code"])
+    assert code == 1 and "no record" in out
+
+
+def test_harness_memory_conflict_question_names_the_harness(tmp_home, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    run(["harness-memory", "off", "--harness", "claude-code", "--yes"])
+    (tmp_path / ".claude" / "settings.json").write_text('{"autoMemoryEnabled": true}')
+    code, out = run(["harness-memory", "on", "--harness", "claude-code", "--yes"], stdin="k\n")
+    assert "claude-code: it changed after slopymemory set it" in out
+
+
+def test_uninstall_data_declined_after_restore_says_it_was_restored(tmp_home, tmp_path, monkeypatch, fake_pg):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    _installed_home(tmp_home, tmp_path, monkeypatch, fake_pg)
+    run(["harness-memory", "off", "--harness", "claude-code", "--yes"])
+    code, out = run(["uninstall", "--data"], stdin="y\ny\nn\n")
+    assert code == 1
+    assert "restored" in out
+    assert "slopymem: nothing removed" not in out          # the bare message would be false: something WAS restored
+    assert not (tmp_path / ".claude" / "settings.json").exists()     # the restore itself did happen
+    assert fake_pg.dropped == []

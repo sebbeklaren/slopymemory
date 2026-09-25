@@ -8,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 import psycopg
-from . import embedded_pg, install_steps, paths, server as srv
+from . import embedded_pg, harness_memory as hm, install_steps, paths, server as srv
 from .checks import run_all
 from .embedded_pg import EmbeddedPostgres
 from . import harnesses
@@ -34,6 +34,13 @@ def confirm(prompt: str, yes: bool) -> bool:
 def fail(msg: str, code: int = 1) -> int:
     print(f"slopymem: {msg}", file=sys.stderr)
     return code
+
+
+def _hm_reason(e: Exception) -> str:
+    """The text of a harness_memory read failure, its own trailing anchor stripped — a caller that wraps
+    it in a longer message adds the anchor itself, once."""
+    s = str(e)
+    return s[: -len(hm.ANCHOR)] if s.endswith(hm.ANCHOR) else s
 
 
 def cmd_init(a) -> int:
@@ -242,12 +249,14 @@ def cmd_scan_store(a) -> int:
 
 
 def cmd_harness_memory(a) -> int:
-    from . import harness_memory as hm
     if a.action == "status":
         for k, v in hm.status().items():
             print(f"{k}: {v}")
         return 0
     targets = [a.harness] if a.harness else [h.id for h in harnesses.detected() if h.id in ("claude-code", "codex")]
+    if not targets:
+        print("no harness with a switch detected (Claude Code, Codex)")
+        return 0
     if a.action == "off":
         print("This switches the harness's OWN file memory off in EVERY project on this machine (user settings), "
               "not only where slopymemory has a store. A project without a store then has no memory at all in that "
@@ -261,17 +270,27 @@ def cmd_harness_memory(a) -> int:
             if a.action == "off":
                 print(hm.turn_off(t))
             else:
-                print(hm.turn_on(t, choose=_ask_restore))
+                print(hm.turn_on(t, choose=_ask_restore(t)))
         except hm.HarnessMemoryError as e:
-            rc = fail(str(e))
+            # A bare (no --harness) `on` covers every detected harness with a switch; one of them
+            # never having been switched off by slopymemory is information, not a failure. An
+            # explicit --harness still refuses: the user asked about exactly that one.
+            if a.action == "on" and a.harness is None and "no record" in str(e):
+                print(f"{t}: nothing to restore")
+            else:
+                rc = fail(str(e))
     return rc
 
 
-def _ask_restore(prior: str, current: str) -> str:
-    """Asked when the value changed after slopymemory set it; --yes never answers this."""
-    print(f"it changed after slopymemory set it: before slopymemory it was {prior}, now it is {current}")
-    print("restore the earlier value (r) or keep the current one (k)? ", end="", flush=True)
-    return "restore" if sys.stdin.readline().strip().lower() == "r" else "keep"
+def _ask_restore(harness_id: str):
+    """The conflict handler passed to `turn_on`, bound to the harness it is asking about — during
+    uninstall or a bare `on` covering several harnesses, "it changed" alone would not say which one.
+    Asked when the value changed after slopymemory set it; --yes never answers this."""
+    def ask(prior: str, current: str) -> str:
+        print(f"{harness_id}: it changed after slopymemory set it: before slopymemory it was {prior}, now it is {current}")
+        print("restore the earlier value (r) or keep the current one (k)? ", end="", flush=True)
+        return "restore" if sys.stdin.readline().strip().lower() == "r" else "keep"
+    return ask
 
 
 def cmd_register(a) -> int:
@@ -377,7 +396,6 @@ def cmd_uninstall(a) -> int:
     if a.yes and not a.data:
         return fail("uninstall refuses --yes without --data: the stores stay behind and you must see that; run it "
                     "without --yes, or add --data to remove the stores too (asked a third time, by name)", code=2)
-    from . import harness_memory as hm
     home, venv, logs, reg = paths.home(), paths.home() / "venv", paths.logs_dir(), paths.registry_file()
     stores_dir, pgdir = paths.stores_dir(), paths.embedded_pg_dir()
     stores = all_stores()
@@ -385,13 +403,24 @@ def cmd_uninstall(a) -> int:
     to_unregister = [h for h in harnesses.detected() if h.registered(lp)]
     offer_files = [(h, h.instructions_file()) for h in harnesses.KNOWN if h.instructions_file is not None
                    and harnesses.offer_line_state(h.instructions_file(), h.offer_line) != "absent"]
-    to_restore = [t for t, v in hm.status().items()
+    # harness-memory state can be unreadable for reasons that have nothing to do with slopymemory (a
+    # malformed ~/.claude/settings.json the user broke by hand, a permissions problem) — that must never
+    # block uninstall for a user who may never have touched harness-memory. It is said and left alone.
+    hm_unreadable = None
+    try:
+        hm_status = hm.status()
+    except (hm.HarnessMemoryError, OSError) as e:
+        hm_status = {}
+        hm_unreadable = _hm_reason(e)
+    to_restore = [t for t, v in hm_status.items()
                   if v in ("off (slopymemory)", "on (changed since slopymemory switched it off)")]
     names = ", ".join(st.name for st in stores) or "none"
-    if not home.exists() and not to_unregister and not offer_files and not to_restore:
+    if not home.exists() and not to_unregister and not offer_files and not to_restore and not hm_unreadable:
         print(f"nothing to uninstall: {home} does not exist and no harness has the launcher registered"); return 0
     print("uninstall will remove:")
-    if to_restore:
+    if hm_unreadable:
+        print(f"  harness memory state unreadable: {hm_unreadable} — see SETUP.md#harness-memory; left as it is")
+    elif to_restore:
         print("  harness memory switched off by slopymemory: restored first")
     if pgdir.exists():                      # its binaries live in the venv: a cluster left running would outlive them
         print("  (first: stop the embedded Postgres if it is running — its data is kept" + ("" if a.data else " unless --data") + ")")
@@ -408,15 +437,19 @@ def cmd_uninstall(a) -> int:
     if not confirm("really? this cannot be undone", a.yes):
         return fail("nothing removed")
     rc = 0
+    restored = []
     for t in to_restore:                    # a record must never outlive the install silently: restored FIRST
         try:
-            print(hm.turn_on(t, choose=_ask_restore))
+            print(hm.turn_on(t, choose=_ask_restore(t)))
+            restored.append(t)
         except hm.HarnessMemoryError as e:
             rc = fail(str(e))
     if a.data:
         print(f"the stores whose databases will be DROPPED: {names}")
         print("type y to drop them (--yes does not answer this one): ", end="", flush=True)
         if sys.stdin.readline().strip().lower() != "y":
+            if restored:
+                return fail(f"harness memory ({', '.join(restored)}) was already restored above; nothing else removed")
             return fail("nothing removed")
     for st in stores:                       # the servers first, in both modes: the venv they run from is going
         try:
@@ -525,6 +558,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return a.fn(a)
     except ConfigError as e:            # a registry/store file that does not read: the message, not a traceback
+        return fail(str(e))
+    except hm.HarnessMemoryError as e:  # a harness-memory read/write failure a command did not already catch itself
         return fail(str(e))
 
 
