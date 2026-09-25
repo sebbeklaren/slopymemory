@@ -265,6 +265,29 @@ def test_off_treats_an_integer_zero_as_different_from_json_false(home):
     assert asked                                                     # must be treated as a conflict, not silently "still off"
 
 
+def test_off_and_on_ignore_a_stale_tmp_files_own_mode(home):
+    """A `.tmp` left beside settings.json from an earlier crash or kill carries its OWN mode — that must
+    never survive onto the target: opening the temp file with plain O_CREAT reuses whatever mode a
+    leftover file already has instead of the one being preserved."""
+    settings(home).write_text('{"theme": "dark"}')
+    settings(home).chmod(0o600)
+    tmp = settings(home).parent / (settings(home).name + ".tmp")
+
+    def leave_a_stale_tmp():
+        tmp.write_text("leftover from an earlier crash")
+        tmp.chmod(0o644)
+
+    leave_a_stale_tmp()
+    hm.turn_off("claude-code")
+    assert stat.S_IMODE(settings(home).stat().st_mode) == 0o600
+    assert not tmp.exists()
+
+    leave_a_stale_tmp()
+    hm.turn_on("claude-code", choose=lambda p, c: pytest.fail("no conflict expected"))
+    assert stat.S_IMODE(settings(home).stat().st_mode) == 0o600
+    assert not tmp.exists()
+
+
 def test_off_and_on_preserve_the_settings_files_permission_mode(home):
     settings(home).write_text('{"theme": "dark"}')
     settings(home).chmod(0o600)

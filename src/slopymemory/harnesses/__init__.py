@@ -49,7 +49,7 @@ def ensure_offer_line(f: Path, line: str) -> str:
         return "present"
     if state == "stale":
         # Through the link, at the real file: an atomic replace of the link path would sever a dotfiles symlink
-        # and leave the repo copy on the old line. The target keeps its mode.
+        # and leave the repo copy on the old line. The target keeps its mode, exactly, through the write.
         target = f.resolve()
         mode = target.stat().st_mode & 0o7777
         lines = target.read_text().split("\n")
@@ -57,8 +57,7 @@ def ensure_offer_line(f: Path, line: str) -> str:
             if existing.strip().startswith(OUR_PREFIXES):
                 lines[i] = line
                 break
-        paths.write_atomic(target, "\n".join(lines))
-        target.chmod(mode)
+        paths.write_atomic_with_mode(target, "\n".join(lines), mode)
         return "replaced"
     f.parent.mkdir(parents=True, exist_ok=True)
     with open(f, "a") as fh:
@@ -84,8 +83,7 @@ def remove_offer_line(f: Path) -> bool:
                     start -= 1
             del lines[start:i + 1]
             break
-    paths.write_atomic(target, "\n".join(lines))
-    target.chmod(mode)
+    paths.write_atomic_with_mode(target, "\n".join(lines), mode)
     return True
 
 

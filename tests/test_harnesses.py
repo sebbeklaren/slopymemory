@@ -1,4 +1,5 @@
 import subprocess
+import pytest
 from slopymemory import harnesses
 from slopymemory.harnesses import claude_code, codex
 
@@ -179,6 +180,76 @@ def test_register_reports_an_unreadable_instructions_file_instead_of_a_traceback
     assert harnesses.register("claude-code", yes=True) == 1
     err = capsys.readouterr().err
     assert "offer line" in err and str(f) in err and "SETUP.md#harnesses" in err
+
+
+def test_ensure_offer_line_keeps_the_exact_mode_through_a_stale_tmp(tmp_path):
+    f = tmp_path / "CLAUDE.md"
+    f.write_text(f"# mine\n{OLDER_LINE}\n")
+    f.chmod(0o600)
+    tmp = tmp_path / "CLAUDE.md.tmp"
+    tmp.write_text("leftover from an earlier crash")
+    tmp.chmod(0o644)
+
+    assert harnesses.ensure_offer_line(f, harnesses.OFFER_LINE) == "replaced"
+    assert (f.stat().st_mode & 0o777) == 0o600
+    assert not tmp.exists()
+    assert f.read_text() == f"# mine\n{harnesses.OFFER_LINE}\n"
+
+
+def test_ensure_offer_line_keeps_the_exact_mode_through_a_symlink(tmp_path):
+    target = tmp_path / "dotfiles" / "claude.md"; target.parent.mkdir()
+    target.write_text(f"# mine\n{OLDER_LINE}\n")
+    target.chmod(0o600)
+    f = tmp_path / "CLAUDE.md"; f.symlink_to(target)
+
+    assert harnesses.ensure_offer_line(f, harnesses.OFFER_LINE) == "replaced"
+    assert f.is_symlink()
+    assert (target.stat().st_mode & 0o777) == 0o600
+    assert target.read_text() == f"# mine\n{harnesses.OFFER_LINE}\n"
+
+
+def test_remove_offer_line_keeps_the_exact_mode(tmp_path):
+    f = tmp_path / "AGENTS.md"
+    f.write_text(f"keep\n\n# slopymemory\n{OLDER_LINE}\n")
+    f.chmod(0o600)
+
+    assert harnesses.remove_offer_line(f) is True
+    assert (f.stat().st_mode & 0o777) == 0o600
+    assert f.read_text() == "keep\n"
+
+
+def test_ensure_offer_line_failed_write_leaves_no_tmp_and_the_file_unchanged(tmp_path, monkeypatch):
+    f = tmp_path / "CLAUDE.md"
+    f.write_text(f"# mine\n{OLDER_LINE}\n")
+    f.chmod(0o600)
+    before = f.read_text()
+
+    def boom(tmp, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(harnesses.paths.os, "replace", boom)
+    with pytest.raises(OSError):
+        harnesses.ensure_offer_line(f, harnesses.OFFER_LINE)
+    assert f.read_text() == before
+    assert (f.stat().st_mode & 0o777) == 0o600
+    assert not (tmp_path / "CLAUDE.md.tmp").exists()
+
+
+def test_remove_offer_line_failed_write_leaves_no_tmp_and_the_file_unchanged(tmp_path, monkeypatch):
+    f = tmp_path / "AGENTS.md"
+    f.write_text(f"keep\n\n# slopymemory\n{OLDER_LINE}\n")
+    f.chmod(0o600)
+    before = f.read_text()
+
+    def boom(tmp, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(harnesses.paths.os, "replace", boom)
+    with pytest.raises(OSError):
+        harnesses.remove_offer_line(f)
+    assert f.read_text() == before
+    assert (f.stat().st_mode & 0o777) == 0o600
+    assert not (tmp_path / "AGENTS.md.tmp").exists()
 
 
 def test_a_stale_line_in_a_symlinked_instructions_file_is_replaced_through_the_link(tmp_path, monkeypatch):

@@ -102,28 +102,10 @@ def _replace(tmp: Path, target: Path) -> None:
     os.replace(tmp, target)
 
 
-def _atomic_write_with_mode(target: Path, text: str, mode: int | None) -> None:
-    """Write `text` to `target` atomically, with `mode` (if given) set on the temp file the moment it is
-    CREATED — via `os.open`'s own mode argument, never a chmod once it already holds content — so a 0600
-    file is never even briefly at the umask's mode. A failure anywhere here (opening, writing, or the
-    rename) removes the temp file and leaves `target` completely untouched: there is no post-replace step
-    left to fail, and no stray `.tmp` left behind either."""
-    tmp = target.with_name(target.name + ".tmp")
-    try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode if mode is not None else 0o666)
-        with os.fdopen(fd, "w") as fh:
-            fh.write(text)
-        _replace(tmp, target)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-
-
 def _write_settings(f: Path, text: str) -> None:
     target = _target(f)
     mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write_with_mode(target, text, mode)
+    paths.write_atomic_with_mode(target, text, mode, replace=_replace)
 
 
 def _unlink_settings(f: Path) -> None:
