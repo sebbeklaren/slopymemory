@@ -429,18 +429,34 @@ def test_summary_names_only_what_is_true(tmp_path, tmp_home, monkeypatch):
 
 
 # --- the harness-memory part: one true line PER HARNESS, from its actual status() spelling --------------------
+#
+# A harness earns a line only if it is DETECTED, or slopymemory holds a RECORD for it (state "off
+# (slopymemory)" or "on (changed since slopymemory switched it off)") — a record is true information even
+# for a harness that's since been removed. hm.status() always checks claude-code whether or not Claude
+# Code exists on this machine, so without this filter a clean-container install (nothing detected, no
+# record) would get a line naming a harness that was never there.
+
+def test_summary_says_nothing_about_a_harness_that_is_neither_detected_nor_on_record(tmp_path, tmp_home, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    lines = "\n".join(harnesses.summary())
+    assert "Claude Code" not in lines
+    assert "harness's own memory" not in lines and "harness's own file memory" not in lines
+    assert "slopymem harness-memory off" not in lines
+
 
 def test_summary_harness_memory_line_for_on(tmp_path, tmp_home, monkeypatch):
     """`on` (untouched): the unchanged/fallback line, named for this harness, and the off-hint (since a
-    harness IS on)."""
+    harness IS on) — shown because the harness is detected."""
     monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
-    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    monkeypatch.setattr(harnesses, "detected", lambda: [claude_code.HARNESS])
     lines = "\n".join(harnesses.summary())
     assert "Your harness's own memory (Claude Code): unchanged" in lines and "stays as a fallback" in lines
     assert "slopymem harness-memory off" in lines
 
 
-def test_summary_harness_memory_line_for_off_by_slopymemory(tmp_path, tmp_home, monkeypatch):
+def test_summary_harness_memory_line_for_off_by_slopymemory_shown_without_detection(tmp_path, tmp_home, monkeypatch):
+    """A record is true information even when the harness is gone — shown though nothing is detected."""
     from slopymemory import harness_memory as hm
     monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
     monkeypatch.setattr(harnesses, "detected", lambda: [])
@@ -464,8 +480,9 @@ def test_summary_harness_memory_line_for_changed_back_on(tmp_path, tmp_home, mon
 
 
 def test_summary_harness_memory_line_for_off_not_by_slopymemory(tmp_path, tmp_home, monkeypatch):
+    """`off (not by slopymemory)` is not a slopymemory record, so it needs detection to be shown at all."""
     monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
-    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    monkeypatch.setattr(harnesses, "detected", lambda: [claude_code.HARNESS])
     (tmp_path / ".claude" / "settings.json").write_text('{"autoMemoryEnabled": false}')   # the user's own choice
     lines = "\n".join(harnesses.summary())
     assert "off by your own choice" in lines and "no fallback memory there" in lines
@@ -474,9 +491,10 @@ def test_summary_harness_memory_line_for_off_not_by_slopymemory(tmp_path, tmp_ho
 
 
 def test_summary_harness_memory_line_for_unknown_state(tmp_path, tmp_home, monkeypatch):
+    """`unknown (...)` is not a slopymemory record either — Codex needs to be detected for its line to show."""
     from slopymemory import harness_memory as hm
     monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
-    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    monkeypatch.setattr(harnesses, "detected", lambda: [codex.HARNESS])
     monkeypatch.setattr(hm, "_codex_available", lambda: True)
 
     def boom(cmd, **kw):
@@ -487,9 +505,10 @@ def test_summary_harness_memory_line_for_unknown_state(tmp_path, tmp_home, monke
 
 
 def test_summary_harness_memory_mixed_states_prints_both_true_lines(tmp_path, tmp_home, monkeypatch):
+    """claude-code's line shows via its RECORD (undetected); codex's shows via DETECTION (no record)."""
     from slopymemory import harness_memory as hm
     monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
-    monkeypatch.setattr(harnesses, "detected", lambda: [])
+    monkeypatch.setattr(harnesses, "detected", lambda: [codex.HARNESS])
     monkeypatch.setattr(hm, "_codex_available", lambda: True)
     monkeypatch.setattr(hm, "codex_memories_enabled", lambda: True)     # codex: untouched, "on"
     hm.turn_off("claude-code")                                          # claude-code: "off (slopymemory)"

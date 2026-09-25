@@ -311,7 +311,8 @@ def summary() -> list[str]:
     raises: an unreadable harness-memory state is said as a line, not an exception."""
     from .. import harness_memory as hm
     lp = launcher_path()
-    reg = [h for h in detected() if h.registered(lp)]
+    det = detected()
+    reg = [h for h in det if h.registered(lp)]
     lines = ["slopymemory is set up."]
 
     by_name: dict[str, list[str]] = {}
@@ -339,10 +340,17 @@ def summary() -> list[str]:
         lines.append(f"  Harness memory state unreadable: {_hm_reason(e)} — see SETUP.md#harness-memory")
 
     if hm_status is not None:
+        # A harness earns a line only if it is actually here (detected) or slopymemory holds a record for it — a
+        # record is true information even for a harness that's since been removed. Without either, hm.status()'s
+        # entry (it always checks claude-code, whether or not Claude Code exists on this machine) would be a line
+        # about a harness that was never there.
+        detected_ids = {h.id for h in det}
+        record_states = ("off (slopymemory)", "on (changed since slopymemory switched it off)")
+        shown = {k: v for k, v in hm_status.items() if k in detected_ids or v in record_states}
         id_to_name = {h.id: h.name for h in KNOWN}
-        for key, state in hm_status.items():
+        for key, state in shown.items():
             lines.append(_harness_memory_line(state, id_to_name.get(key, key)))
-        if any(v == "on" for v in hm_status.values()):
+        if any(v == "on" for v in shown.values()):
             lines.append("  To turn your harness's own file memory off (its index is re-sent on every request): "
                           "slopymem harness-memory off")
 
