@@ -303,7 +303,9 @@ def _harness_memory_line(state: str, name: str) -> str:
         return (f"  Your harness's own file memory in {name}: switched back on since slopymemory turned it off "
                  "(slopymem harness-memory on clears the record)")
     if state == "off (not by slopymemory)":
-        return f"  Your harness's own memory ({name}) is off by your own choice — there is no fallback memory there."
+        # "not by slopymemory" covers a harness that ships with its memory off as well as a user's own choice — the
+        # status cannot tell which, so the line says only what is known.
+        return f"  Your harness's own memory ({name}) is off (not switched off by slopymemory) — there is no fallback memory there."
     if state.startswith("unknown (") and state.endswith(")"):
         return f"  Your harness's own memory ({name}): state unknown ({state[len('unknown ('):-1]})."
     return f"  Your harness's own memory ({name}): {state}"      # a future status() spelling — never dropped silently
@@ -331,7 +333,10 @@ def summary() -> list[str]:
         if h.instructions_file is None:
             continue
         f = h.instructions_file()
-        state = offer_line_state(f, OFFER_LINE)
+        # Compare with the line for the name this harness is ACTUALLY registered under — register writes that line,
+        # so comparing with the default name's line would call the line register just wrote "earlier".
+        name = (h.registered_as(lp) if h.registered_as is not None else None) or SERVER_NAME
+        state = offer_line_state(f, trigger_line(name))
         if state == "present":
             files.append(str(f))
         elif state == "stale":

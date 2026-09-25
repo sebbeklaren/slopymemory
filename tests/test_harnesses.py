@@ -590,9 +590,9 @@ def test_summary_harness_memory_line_for_off_not_by_slopymemory(tmp_path, tmp_ho
     """`off (not by slopymemory)` is not a slopymemory record, so it needs detection to be shown at all."""
     monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
     monkeypatch.setattr(harnesses, "detected", lambda: [claude_code.HARNESS])
-    (tmp_path / ".claude" / "settings.json").write_text('{"autoMemoryEnabled": false}')   # the user's own choice
+    (tmp_path / ".claude" / "settings.json").write_text('{"autoMemoryEnabled": false}')   # off, but not by slopymemory
     lines = "\n".join(harnesses.summary())
-    assert "off by your own choice" in lines and "no fallback memory there" in lines
+    assert "off (not switched off by slopymemory)" in lines and "no fallback memory there" in lines
     assert "stays as a fallback" not in lines                     # an off harness must never be worded as a fallback
     assert "slopymem harness-memory off" not in lines             # no harness here is "on"
 
@@ -703,3 +703,25 @@ def test_register_detected_no_summary_suppresses_the_block(tmp_path, tmp_home, m
     assert harnesses.register_detected(yes=True, print_summary=False) == 0
     out = capsys.readouterr().out
     assert "slopymemory is set up." not in out
+
+
+def test_summary_counts_the_line_for_the_name_actually_registered(tmp_path, tmp_home, monkeypatch):
+    """A harness registered under its old name `memory` carries the trigger line naming `memory` — the line register
+    just wrote. The summary must call it added, not "an earlier line", which was false right after register."""
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude.json").write_text('{"mcpServers": {"memory": {"command": "/x/slopymem-mcp"}}}')
+    f = tmp_path / ".claude" / "CLAUDE.md"
+    f.write_text(f"# slopymemory\n{harnesses.trigger_line('memory')}\n")
+    monkeypatch.setattr(harnesses, "launcher_path", lambda: "/x/slopymem-mcp")
+    monkeypatch.setattr(harnesses, "detected", lambda: [claude_code.HARNESS])
+    lines = "\n".join(harnesses.summary())
+    assert f"Added one line to: {f}" in lines
+    assert "earlier line" not in lines
+
+
+def test_summary_does_not_claim_the_user_switched_memory_off():
+    """"off (not by slopymemory)" covers a harness that ships with its memory off as well as a user's choice; the
+    summary cannot tell which, so it must not say "your own choice"."""
+    line = harnesses._harness_memory_line("off (not by slopymemory)", "Codex")
+    assert "own choice" not in line
+    assert "not switched off by slopymemory" in line and "no fallback memory there" in line
