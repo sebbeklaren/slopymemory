@@ -58,7 +58,7 @@ effect.
 **What using it costs, on top of your harness's own baseline.** Every one of these is additional context
 sent to the model; none of it replaces the other:
 
-- The instructions above: measured at **≈530 tokens** per session (the difference in total input tokens —
+- The instructions above: measured at **≈610 tokens** per session (the difference in total input tokens —
   fresh plus cached — between an otherwise identical session with slopymemory registered and one without).
 - The two tool schemas (`memory_retrieve`, `memory_save`): **≈1–2k tokens**, once per session — on first
   actual use of a memory tool for a harness that defers tool schemas, or at session start for one that
