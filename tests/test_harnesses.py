@@ -408,6 +408,25 @@ def test_status_survives_an_os_error_reading_harness_memory_and_keeps_the_regist
     f = harnesses.status()
     assert f.ok and "Claude Code: registered" in f.detail
     assert "permission denied" in f.detail
+    # the same prefix and anchor summary() already uses — never a bare str(e) pointing at the wrong section
+    assert "harness memory state unreadable:" in f.detail
+    assert "SETUP.md#harness-memory" in f.detail
+
+
+def test_status_reports_the_changed_back_on_state_as_reported_not_failed(tmp_path, tmp_home, monkeypatch):
+    """doctor is silent today on a record that outlives a user's own flip back on — summary() already makes
+    it visible; status() should too, as a reported row, not a failure."""
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude.json").write_text('{"mcpServers": {"slopymemory": {"command": "/x/slopymem-mcp"}}}')
+    monkeypatch.setattr(harnesses, "launcher_path", lambda: "/x/slopymem-mcp")
+    monkeypatch.setattr(claude_code.HARNESS, "detect", lambda: True)
+    monkeypatch.setattr(harnesses, "detected", lambda: [claude_code.HARNESS])
+    hm.turn_off("claude-code")
+    (tmp_path / ".claude" / "settings.json").write_text('{"autoMemoryEnabled": true}')   # switched back on since
+    f = harnesses.status()
+    assert f.ok                                            # reported, not failed
+    assert "changed since" in f.detail or "switched back on" in f.detail
 
 
 # --- summary(): the first-run block, only lines that are true --------------------------------------------------
@@ -426,6 +445,23 @@ def test_summary_names_only_what_is_true(tmp_path, tmp_home, monkeypatch):
     assert "slopymem harness-memory off" in lines and "slopymem uninstall" in lines
     import re
     assert not re.search(r"\d[\d.,]*\s*k?\s*tokens", lines)                 # no token figure is printed
+
+
+def test_summary_never_reports_a_stale_legacy_line_as_added(tmp_path, tmp_home, monkeypatch):
+    """A file still carrying the LEGACY offer line (state 'stale') is not the current line — reporting it
+    as 'Added one line to ... (tells the agent when to use memory)' would be false for every pre-existing
+    install that runs `slopymem summary` before re-registering."""
+    monkeypatch.setenv("HOME", str(tmp_path)); (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude.json").write_text('{"mcpServers": {"slopymemory": {"command": "/x/slopymem-mcp"}}}')
+    claude_md = tmp_path / ".claude" / "CLAUDE.md"
+    claude_md.write_text("If the memory tools show only an older line here\n")
+    monkeypatch.setattr(harnesses, "launcher_path", lambda: "/x/slopymem-mcp")
+    monkeypatch.setattr(harnesses, "detected", lambda: [claude_code.HARNESS])
+    lines = harnesses.summary()
+    added_lines = [l for l in lines if l.strip().startswith("Added one line to")]
+    assert not any(str(claude_md) in l for l in added_lines)          # a stale line is never counted as "added"
+    stale_lines = [l for l in lines if str(claude_md) in l]
+    assert stale_lines and "register" in stale_lines[0] and "tells the agent when to use memory" not in stale_lines[0]
 
 
 # --- the harness-memory part: one true line PER HARNESS, from its actual status() spelling --------------------
@@ -486,7 +522,7 @@ def test_summary_harness_memory_line_for_off_not_by_slopymemory(tmp_path, tmp_ho
     (tmp_path / ".claude" / "settings.json").write_text('{"autoMemoryEnabled": false}')   # the user's own choice
     lines = "\n".join(harnesses.summary())
     assert "off by your own choice" in lines and "no fallback memory there" in lines
-    assert "stays as a fallback" not in lines                     # the false line the review caught
+    assert "stays as a fallback" not in lines                     # an off harness must never be worded as a fallback
     assert "slopymem harness-memory off" not in lines             # no harness here is "on"
 
 

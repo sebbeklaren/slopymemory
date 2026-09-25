@@ -160,6 +160,7 @@ def detected() -> list[Harness]:
 def status() -> "Finding":
     from ..checks import Finding     # lazy: checks imports this module's status() at its top; this breaks the cycle
     from .. import harness_memory as hm
+    from ..cli import _hm_reason     # strips a HarnessMemoryError's own trailing anchor so it is never doubled
     rows, bad = [], False
     lp = launcher_path()
     for h in detected():
@@ -167,11 +168,16 @@ def status() -> "Finding":
         bad |= not ok
         rows.append(f"{h.name}: {'registered' if ok else 'NOT registered'}")
     try:
-        for k, v in hm.status().items():
+        hm_status = hm.status()
+    except (hm.HarnessMemoryError, OSError) as e:
+        rows.append(f"harness memory state unreadable: {_hm_reason(e)} — see SETUP.md#harness-memory")
+    else:
+        for k, v in hm_status.items():
             if v == "off (slopymemory)":
                 rows.append(f"{k} file memory is OFF (slopymemory harness-memory); projects without a store have no memory there")
-    except (hm.HarnessMemoryError, OSError) as e:
-        rows.append(str(e))
+            elif v == "on (changed since slopymemory switched it off)":
+                rows.append(f"{k} file memory: switched back on since slopymemory turned it off "
+                            "(slopymem harness-memory on clears the record)")
     return Finding(not bad, "; ".join(rows) or "no known harness detected")
 
 
@@ -322,15 +328,20 @@ def summary() -> list[str]:
     for name in sorted(by_name):
         lines.append(f'  Registered as the MCP server "{name}" in: {", ".join(by_name[name])}')
 
-    files = []
+    files, stale_files = [], []
     for h in reg:
         if h.instructions_file is None:
             continue
         f = h.instructions_file()
-        if offer_line_state(f, OFFER_LINE) != "absent":
+        state = offer_line_state(f, OFFER_LINE)
+        if state == "present":
             files.append(str(f))
+        elif state == "stale":
+            stale_files.append(str(f))
     if files:
         lines.append(f"  Added one line to: {', '.join(files)}  (tells the agent when to use memory)")
+    if stale_files:
+        lines.append(f"  An earlier line is in: {', '.join(stale_files)} — slopymem register updates it")
 
     try:
         hm_status = hm.status()
