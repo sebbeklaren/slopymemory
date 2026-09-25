@@ -27,6 +27,7 @@ from .provision import TEMPLATE_HINT, InitRefused, SystemPostgres, apply_init, c
 from .paths import ConfigError
 from .registry import Registry
 from .store import Store
+from .usage_rules import USAGE_RULES
 
 INIT_DESCRIPTION = (
     "This project has no memory store. Calling this creates one: a database and a state directory "
@@ -104,7 +105,7 @@ class Launcher:
         self._attempts = 0                     # connect attempts started; a call compares to see if one ran since it looked
         self._connected = False                # did the current attempt ever establish a session? (words the announcement)
         self._reconnecting = asyncio.Lock()    # concurrent callers that found the same loss share one attempt
-        self.server = Server(SERVER_NAME)
+        self.server = Server(SERVER_NAME, instructions=USAGE_RULES)
         self._register_handlers()
         if active := [h for h in TEST_HOOKS if os.environ.get(h)]:
             # Never silent: with SLOPYMEM_FAKE_PG set, memory_init reports a store "created" with no

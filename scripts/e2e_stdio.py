@@ -65,6 +65,14 @@ def assert_init_mode(tools: list[str]) -> None:
         raise Deviation(f"expected the tool list ['memory_init'] from a project with no store, got {tools}", tools)
 
 
+def assert_rules(instructions: str | None) -> None:
+    """The installed launcher must send the usage rules verbatim — read from the INSTALLED package, so a build that
+    dropped or truncated them fails here, not silently in a user's session."""
+    from slopymemory.usage_rules import USAGE_RULES
+    if not instructions or instructions != USAGE_RULES:
+        raise Deviation("the launcher's initialize result did not carry the usage rules verbatim", instructions)
+
+
 def assert_memory_tools(tools: list[str]) -> None:
     """After `memory_init`: the store's tools, `memory_save` and `memory_retrieve` among them, `memory_init` gone."""
     missing = [t for t in ("memory_save", "memory_retrieve") if t not in tools]
@@ -147,7 +155,9 @@ async def _run(project: Path, launcher: str) -> int:
     async with stdio_client(params, errlog=sys.stderr) as (read, write):   # the launcher's stderr, live, on ours
         async with ClientSession(read, write) as s:
             t0 = time.monotonic()
-            await asyncio.wait_for(s.initialize(), CALL_TIMEOUT_S)
+            init = await asyncio.wait_for(s.initialize(), CALL_TIMEOUT_S)
+            assert_rules(init.instructions)
+            _say("rules", t0, "the usage rules arrive with initialize")
             tools = [t.name for t in (await asyncio.wait_for(s.list_tools(), CALL_TIMEOUT_S)).tools]
             assert_init_mode(tools)
             _say("tools", t0, "memory_init only, as for a project with no store")

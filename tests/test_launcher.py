@@ -27,7 +27,9 @@ async def test_bridges_to_the_stores_server_starting_it_on_demand(tmp_home, tmp_
         with open(errlog, "w") as err:
             async with stdio_client(params, errlog=err) as (rd, wr):
                 async with ClientSession(rd, wr) as s:
-                    await s.initialize()                       # answered before the server is up
+                    init = await s.initialize()                # answered before the server is up
+                    from slopymemory.usage_rules import USAGE_RULES
+                    assert init.instructions == USAGE_RULES    # store mode sends the same rules
                     names = [t.name for t in (await s.list_tools()).tools]
                     assert names == ["memory_ping", "memory_session"]
                     res = await s.call_tool("memory_ping", {"text": "hi"})
@@ -56,6 +58,8 @@ async def test_init_mode_offers_memory_init_then_switches_to_the_store(tmp_home,
             async with ClientSession(rd, wr, message_handler=on_message) as s:
                 init = await s.initialize()
                 assert init.serverInfo.name == "slopymemory"        # the distinct name, as registered
+                from slopymemory.usage_rules import USAGE_RULES
+                assert init.instructions == USAGE_RULES              # the rules ride the initialize result
                 tools = (await s.list_tools()).tools
                 assert [t.name for t in tools] == ["memory_init"]
                 assert "Ask the user before calling it" in tools[0].description

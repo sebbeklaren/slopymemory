@@ -77,6 +77,23 @@ def test_the_twelve_memories_are_distinct_and_the_expected_one_is_among_them():
     assert all(space in ("function", "semantic") for _, concepts in e2e.MEMORIES for space, _ in concepts)
 
 
+def test_rules_must_arrive_verbatim():
+    from slopymemory.usage_rules import USAGE_RULES
+    e2e.assert_rules(USAGE_RULES)
+    for bad in (None, "", USAGE_RULES[:-10], "some other server's instructions"):
+        with pytest.raises(e2e.Deviation, match="usage rules"):
+            e2e.assert_rules(bad)
+
+
+def test_the_rules_keep_their_load_bearing_sentences():
+    from slopymemory.usage_rules import USAGE_RULES
+    for s in ("Retrieve as often as needed", "query_concepts", "Before planning or building anything",
+              "act on what converges, and surface what does not", "leave the disagreement open, say so, and ask",
+              "tell the user, and fall back to your harness's own memory",
+              "save it at once with its why", "only memory tool is memory_init", "Never save passwords, keys or tokens"):
+        assert s in USAGE_RULES
+
+
 # --- the whole run: the real launcher, the fake server's canned store -------------------------------------------------
 
 LAUNCHER = f"{sys.executable} -m slopymemory.launcher"
