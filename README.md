@@ -44,10 +44,9 @@ touching anything; your stores are kept unless you ask it to drop them too.
 Claude Code's project memory, or Codex's equivalent — is never touched by installing or registering
 slopymemory. The instructions sent with every session tell the agent to check the store before planning or
 building, weigh what it gets back, and treat a file memory index, where one exists, as a fallback after the
-store. If slopymemory itself becomes unavailable during a session — a tool errors, or the store reports it
-can't take a save — the agent says so and falls back to your harness's own memory until slopymemory is
-working again. Nothing about the harness's own memory changes unless you ask it to (see "Turning the
-harness's own index off" below).
+store. If the memory tools fail or report the store unavailable during a session, the agent says so and
+falls back to your harness's own memory until slopymemory is working again. Nothing about the harness's own
+memory changes unless you ask it to (see "Turning the harness's own index off" below).
 
 Those instructions ship because a build test found they matter: given both the store and a planted decision
 it was never told about, a session with no instructions acted on it 2 times out of 6; with an earlier
