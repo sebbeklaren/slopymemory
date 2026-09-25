@@ -44,61 +44,67 @@ touching anything; your stores are kept unless you ask it to drop them too.
 Claude Code's project memory, or Codex's equivalent — is never touched by installing or registering
 slopymemory. The instructions sent with every session tell the agent to check the store before planning or
 building, weigh what it gets back, and treat a file memory index, where one exists, as a fallback after the
-store. Nothing about the harness's own memory changes unless you ask it to (see "Turning the harness's own
-index off" below).
+store. If slopymemory itself becomes unavailable during a session — a tool errors, or the store reports it
+can't take a save — the agent says so and falls back to your harness's own memory until slopymemory is
+working again. Nothing about the harness's own memory changes unless you ask it to (see "Turning the
+harness's own index off" below).
 
 Those instructions ship because a build test found they matter: given both the store and a planted decision
-it was never told about, a session with no instructions acted on it 2 times out of 6; with instructions
-telling it to retrieve, weigh, and act, 6 out of 6. That is why the launcher sends them as its own MCP
-instructions on every session, rather than leaving retrieval to chance. That result is about having rules
-at all; a build test of the exact wording above, arriving from the server with nothing else telling the
-agent to use memory, is still pending, and no claim is made here about that wording's own effect.
+it was never told about, a session with no instructions acted on it 2 times out of 6; with an earlier
+version of the rules, telling it to retrieve and follow what it found, 6 out of 6. That is why the launcher
+sends instructions with every session, rather than leaving retrieval to chance. That result is about having
+rules at all, not about the exact wording shipped today — no claim is made here about this wording's own
+effect.
 
 **What using it costs, on top of your harness's own baseline.** Every one of these is additional context
 sent to the model; none of it replaces the other:
 
 - The instructions above: measured at **≈530 tokens** per session (the difference in total input tokens —
   fresh plus cached — between an otherwise identical session with slopymemory registered and one without).
-- The two tool schemas (`memory_retrieve`, `memory_save`): **≈1–2k tokens**, sent once, the first time a
-  session actually calls a memory tool (harnesses that support deferred tools don't pay this until then).
+- The two tool schemas (`memory_retrieve`, `memory_save`): **≈1–2k tokens**, once per session — on first
+  actual use of a memory tool for a harness that defers tool schemas, or at session start for one that
+  doesn't.
 - Each retrieval: **≈2k tokens**, and — like the rest of the conversation — it is re-sent on every later
   request in the same session, not only once.
 - Each save: **under 1k tokens**.
 - Your harness's own file memory index, where one exists, is re-sent on every request too, at whatever size
   your index has grown to; slopymemory does not change that cost either way.
 
-Roughly: if a session does a handful of retrievals spread across the session, or two or three all at the
-start, the tokens saved by not re-deriving what's in them from scratch break even with what the rules,
-schemas and retrievals cost to carry. Below that it's a net cost for the judgment it buys; above it, memory
-gets cheaper than re-deriving the same ground each time.
+Break-even, against the harness index specifically: roughly five retrievals in a session, spread across it,
+or two or three landing together at the start, is where our own added cost — the instructions once, the
+schemas once, each retrieval and save re-sent as the session goes on — reaches what continuing to carry the
+harness's own index on every request already costs. That's the comparison for deciding whether to turn the
+index off (below): short of that many retrievals in a typical session, the index is the cheaper of the two;
+past it, the store is.
 
 **The ordering is for this job, not a general ranking.** The instructions put the store before the file
 index because this is about recall of decisions made in earlier sessions: a fact that lives only in the
-store cannot be reached from a file index at all, while a fact the index holds is also something the store
-can answer from. That is not a claim that slopymemory is better than your harness's own memory in general —
-only that, for recalling what was decided before, checking the store first is the ordering the evidence
-supports.
+store cannot be reached from a file index at all. In the corpus this was measured on, a fact the index held
+was also something the store could answer — not a claim that every user's index is fully duplicated in
+their store, or that slopymemory is better than your harness's own memory in general, only that checking
+the store first is the ordering the evidence from that corpus supports.
 
 **How a memory gets corrected.** When you confirm that a decision has changed, save the new one with
 `supersedes` pointing at the memory it replaces — that's this implementation's explicit correction link,
 used on your confirmation, not something the agent decides on its own. It is not the only way an older
 memory stops being acted on: at retrieval time a memory that converges more strongly with the question at
 hand can simply outweigh one that converges less, with nothing superseded. Retrieval is never capped to
-save tokens — there's no recommended number of results to ask for, and a smaller `k` isn't a way to cut
-cost; the tokens above are what each retrieval costs regardless of how many results it returns.
+save tokens — there's no recommended number of results to ask for, and a smaller `k` is not a way to cut
+cost.
 
 **Turning the harness's own index off.** If you'd rather stop paying for the harness's own index once a
 project has a store, `slopymem harness-memory off` switches it off — for Claude Code, `autoMemoryEnabled`
 in your user settings; for Codex, its own feature flag. This is a **user-scope, machine-wide** switch, not a
 per-project one: it turns the index off in every project on the machine, including ones with no store yet,
-and a project with no store then has no memory at all in that harness until it gets one. The command says
-this before it asks. `slopymem harness-memory on` puts back exactly what was there before — the key it
-added is removed, a value it changed is restored, never just forced to `true`; if the setting was changed
-by something else since, it tells you both values and asks rather than guessing. `slopymem harness-memory
-status` reports the current state without changing anything. `slopymem uninstall` runs the `on` side of
-this first, then removes the registration — your harness's own memory ends up exactly as it was before you
-installed slopymemory. Nothing here deletes a memory file, in either direction. `slopymem summary` reports
-what slopymemory has changed on this machine at any time, read-only.
+and a project with no store then has no memory at all in that harness until it gets one. With the index
+off, there is also nothing left to fall back to if slopymemory itself becomes unavailable — the command
+says both of these before it asks. `slopymem harness-memory on` puts back exactly what was there before —
+the key it added is removed, a value it changed is restored, never just forced to `true`; if the setting
+was changed by something else since, it tells you both values and asks rather than guessing. `slopymem
+harness-memory status` reports the current state without changing anything. `slopymem uninstall` runs the
+`on` side of this first, then removes the registration — your harness's own memory ends up exactly as it
+was before you installed slopymemory. Nothing here deletes a memory file, in either direction. `slopymem
+summary` reports what slopymemory has changed on this machine at any time, read-only.
 
 **Pointers to files are allowed, not required.** A saved memory can carry a path to a longer document
 ("Full detail: <path>") for material that belongs in a file rather than a memory's text. That's a pattern
