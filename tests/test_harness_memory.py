@@ -106,8 +106,9 @@ def test_on_restores_the_whole_file_when_it_was_deleted_while_off(home):
     settings(home).write_text(original)
     hm.turn_off("claude-code")
     settings(home).unlink()                                    # the whole file, not just our key, went away
-    hm.turn_on("claude-code", choose=lambda p, c: "restore")
+    out = hm.turn_on("claude-code", choose=lambda p, c: "restore")
     assert settings(home).read_text() == original               # not a fresh file holding only our key
+    assert "recreated" in out
 
 
 def test_on_leaves_no_file_when_none_existed_before_off_and_it_was_deleted_while_off(home):
@@ -148,24 +149,69 @@ def test_off_reapplies_when_the_value_changed_back_since_the_record_was_made(hom
 
 
 def test_off_saves_the_record_before_the_settings_write_and_cleans_up_if_it_fails(home, monkeypatch):
-    real_write_atomic = hm.paths.write_atomic
-    seen_record_first = []
+    def boom(tmp, target):
+        # by the time the settings write is attempted, the record must already be on disk
+        recorded = hm.STATE_FILE().exists() and "claude-code" in json.loads(hm.STATE_FILE().read_text())
+        assert recorded, "the record must be saved before the settings write is attempted"
+        raise OSError("disk full")
 
-    def spy(path, text):
-        if path == settings(home):
-            # by the time the settings write is attempted, the record must already be on disk
-            recorded = hm.STATE_FILE().exists() and "claude-code" in json.loads(hm.STATE_FILE().read_text())
-            seen_record_first.append(recorded)
-            raise OSError("disk full")
-        return real_write_atomic(path, text)
-
-    monkeypatch.setattr(hm.paths, "write_atomic", spy)
+    monkeypatch.setattr(hm, "_replace", boom)
     with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory"):
         hm.turn_off("claude-code")
 
-    assert seen_record_first == [True]                              # record-first ordering, proven
     assert not hm.STATE_FILE().exists() or "claude-code" not in json.loads(hm.STATE_FILE().read_text())
     assert not settings(home).exists()                              # the settings file itself was never touched
+
+
+def test_on_raises_with_the_anchor_and_keeps_the_record_when_the_restore_write_fails(home, monkeypatch):
+    settings(home).write_text('{"autoMemoryEnabled": true}')
+    hm.turn_off("claude-code")
+
+    real_replace = hm._replace
+    calls = {"n": 0}
+
+    def flaky(tmp, target):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("disk full")
+        return real_replace(tmp, target)
+
+    monkeypatch.setattr(hm, "_replace", flaky)
+    with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory"):
+        hm.turn_on("claude-code", choose=lambda p, c: pytest.fail("no conflict expected"))
+
+    assert "claude-code" in json.loads(hm.STATE_FILE().read_text())     # the restore target survived the failure
+
+    # a retry once whatever blocked the write clears succeeds
+    hm.turn_on("claude-code", choose=lambda p, c: pytest.fail("no conflict expected"))
+    assert json.loads(settings(home).read_text()) == {"autoMemoryEnabled": True}
+
+
+def test_off_and_on_set_the_mode_on_the_temp_file_before_the_replace(home, monkeypatch):
+    settings(home).write_text('{"theme": "dark"}')
+    settings(home).chmod(0o600)
+
+    seen_modes_at_replace = []
+    real_replace = hm._replace
+
+    def spy(tmp, target):
+        # the temp file's mode must already be right BEFORE the rename makes it visible at `target`
+        seen_modes_at_replace.append(stat.S_IMODE(tmp.stat().st_mode))
+        return real_replace(tmp, target)
+
+    monkeypatch.setattr(hm, "_replace", spy)
+    hm.turn_off("claude-code")
+    assert seen_modes_at_replace == [0o600]
+    assert stat.S_IMODE(settings(home).stat().st_mode) == 0o600
+
+    def raise_on_chmod(*a, **k):
+        raise OSError("no permission to chmod")
+    monkeypatch.setattr(hm.os, "chmod", raise_on_chmod)
+    before = settings(home).read_text()
+    with pytest.raises(hm.HarnessMemoryError, match="SETUP.md#harness-memory") as exc:
+        hm.turn_on("claude-code", choose=lambda p, c: pytest.fail("no conflict expected"))
+    assert "not changed" in str(exc.value)
+    assert settings(home).read_text() == before                     # a chmod failure must never leave a half write
 
 
 def test_off_and_on_write_through_a_symlinked_settings_file(home):

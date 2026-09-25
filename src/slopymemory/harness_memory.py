@@ -69,11 +69,14 @@ def _json_eq(a, b) -> bool:
 
 
 def _spell(v) -> str:
-    """JSON spelling for a value that is only ever True/False/the "absent" sentinel, for messages and choose()."""
+    """JSON spelling for a value, for messages and choose(): True/False/None/the "absent" sentinel as
+    true/false/null/absent, not Python's spellings."""
     if v is True:
         return "true"
     if v is False:
         return "false"
+    if v is None:
+        return "null"
     return str(v)
 
 
@@ -83,13 +86,26 @@ def _target(f: Path) -> Path:
     return f.resolve() if f.is_symlink() else f
 
 
+def _replace(tmp: Path, target: Path) -> None:
+    os.replace(tmp, target)
+
+
+def _atomic_write_with_mode(target: Path, text: str, mode: int | None) -> None:
+    """Write `text` to `target` atomically, with `mode` (if given) set on the temp file BEFORE the
+    rename — so a 0600 file is never briefly 0644, and a failure anywhere here (including the chmod)
+    leaves `target` completely untouched: there is no post-replace step left to fail."""
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(text)
+    if mode is not None:
+        os.chmod(tmp, mode)
+    _replace(tmp, target)
+
+
 def _write_settings(f: Path, text: str) -> None:
     target = _target(f)
     mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
     target.parent.mkdir(parents=True, exist_ok=True)
-    paths.write_atomic(target, text)
-    if mode is not None:
-        os.chmod(target, mode)
+    _atomic_write_with_mode(target, text, mode)
 
 
 def _unlink_settings(f: Path) -> None:
@@ -150,10 +166,15 @@ def _claude_on(choose: Callable[[str, str], str]) -> str:
     unchanged = (not deleted) and written_text is not None and _json_eq(d, json.loads(written_text))
 
     if deleted or unchanged:                                # nothing of substance survives to preserve: put the original back
-        if rec["original_text"] is None:
-            _unlink_settings(f)
-        else:
-            _write_settings(f, rec["original_text"])
+        try:
+            if rec["original_text"] is None:
+                _unlink_settings(f)
+            else:
+                _write_settings(f, rec["original_text"])
+        except OSError as e:
+            # the record is left exactly as it was — untouched above — so the restore target survives and a
+            # retry can succeed once whatever blocked the write clears
+            raise HarnessMemoryError(f"could not restore {f} ({e}); it was not changed{ANCHOR}") from None
         del recs["claude-code"]; _save_records(recs)
         if deleted and rec["original_text"] is not None:
             return f"Claude Code file memory recreated {f} as it was before slopymemory switched it off"
@@ -164,7 +185,10 @@ def _claude_on(choose: Callable[[str, str], str]) -> str:
         d.pop(KEY, None)
     else:
         d[KEY] = rec["prior"]
-    _write_settings(f, json.dumps(d, indent=2) + "\n")
+    try:
+        _write_settings(f, json.dumps(d, indent=2) + "\n")
+    except OSError as e:
+        raise HarnessMemoryError(f"could not restore {f} ({e}); it was not changed{ANCHOR}") from None
     del recs["claude-code"]; _save_records(recs)
     return f"Claude Code file memory restored ({KEY} {'removed' if rec['prior'] == 'absent' else '= ' + _spell(rec['prior'])})"
 
