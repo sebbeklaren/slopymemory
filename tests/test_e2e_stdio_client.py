@@ -90,11 +90,18 @@ def test_the_rules_keep_their_load_bearing_sentences():
     for s in ("Retrieve as often as needed", "query_concepts", "Before planning or building anything",
               "act on what converges, and surface what does not", "leave the disagreement open, say so, and ask",
               "tell the user, and fall back to your harness's own memory",
-              "it does not count as a convention until the user confirms it",
               "A later date is not a correction; only an explicit correction link is",
               "Two decisions without one are a disagreement: name it and ask",
               "save it at once with its why", "only memory tool is memory_init", "Never save passwords, keys or tokens"):
         assert s in USAGE_RULES
+
+
+def test_the_rules_keep_memories_anonymous():
+    """A memory does not say where it came from: the rules never ask the agent to mark a save as its own or as
+    unconfirmed. Corrections go through the explicit correction link instead."""
+    from slopymemory.usage_rules import USAGE_RULES
+    for s in ("made yourself", "not yet confirmed", "until the user confirms"):
+        assert s not in USAGE_RULES
 
 
 # --- the whole run: the real launcher, the fake server's canned store -------------------------------------------------
