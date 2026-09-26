@@ -23,7 +23,6 @@ import yaml
 
 HERE = Path(__file__).resolve().parent.parent / "tests" / "substrate" / "retrieval_probes"
 CORPUS, PROBES, BASELINE = HERE / "corpus.yaml", HERE / "probes.yaml", HERE / "baseline.json"
-BOOTSTRAP_N = 12                      # the coding dialect's warm-up size
 TABLES = "m3_facet, m3_memory, m3_memory_supersession, m3_positive_link, m3_negative_link, m3_synapse, m3_node"
 
 
@@ -37,17 +36,31 @@ def load_probes(path: Path = PROBES) -> list[dict]:
     return probes
 
 
-def coding_dialect(workdir: Path):
-    """The settings the coding dialect's store server runs with, and the save path's files in a scratch directory
-    (never the caller's checkout). Returns the patched settings object, installed where the save and retrieve
-    paths read it."""
+# The coding dialect's server environment (slopymemory.store.DIALECT_ENV["coding"]), as the settings fields it
+# sets — read from the product's own table, so the probes cannot drift from what a coding store runs.
+ENV_FIELDS = {"AM_M3_RETRIEVAL_MODE": ("m3_retrieval_mode", str),
+              "AM_M3_WORD_DEPTH_STEEPNESS": ("m3_word_depth_steepness", float),
+              "AM_M3_BOOTSTRAP_N": ("m3_bootstrap_n", int),
+              "AM_M3_CONCEPT_SEED_SPACES": ("m3_concept_seed_spaces", str)}
+
+
+def coding_dialect(workdir: Path, **override):
+    """Install the coding dialect's settings where the save and retrieve paths read them, with the save path's
+    files in a scratch directory (never the caller's checkout). `override` replaces single fields — a
+    counterfactual reading, e.g. m3_concept_seed_spaces="own"."""
     import agent_memory.spaces.live_store_state as ls
     import agent_memory.spaces.word_vote as wv
-    s = dataclasses.replace(ls.settings, m3_retrieval_mode="concept_primary", m3_word_depth_steepness=4.0,
-                            m3_bootstrap_n=BOOTSTRAP_N, m3_buffer_path=str(workdir / "m3_buffer.jsonl"),
-                            m3_projector_path=str(workdir / "m3_projector.pkl"))
+    from slopymemory.store import DIALECT_ENV
+    env = DIALECT_ENV["coding"]
+    unknown = set(env) - set(ENV_FIELDS)
+    if unknown:
+        raise RuntimeError(f"the coding dialect sets {sorted(unknown)}, which the probes do not apply")
+    fields = {f: cast(env[k]) for k, (f, cast) in ENV_FIELDS.items() if k in env}
+    fields.update(override)
+    s = dataclasses.replace(ls.settings, m3_buffer_path=str(workdir / "m3_buffer.jsonl"),
+                            m3_projector_path=str(workdir / "m3_projector.pkl"), **fields)
     ls.settings = s
-    wv.settings = dataclasses.replace(wv.settings, m3_word_depth_steepness=4.0)
+    wv.settings = dataclasses.replace(wv.settings, **fields)
     return s
 
 
@@ -59,7 +72,8 @@ def load_corpus(conn, embedder, path: Path = CORPUS):
     with conn.cursor() as cur:
         cur.execute(f"TRUNCATE {TABLES} CASCADE")
     m3.seed_spaces(conn)
-    store = LiveStore(embedder, mode="bootstrap", bootstrap_n=BOOTSTRAP_N)
+    from agent_memory.spaces.live_store_state import settings
+    store = LiveStore(embedder, mode="bootstrap", bootstrap_n=settings.m3_bootstrap_n)
     for session in yaml.safe_load(path.read_text())["sessions"]:
         for m in session["memories"]:
             out = store.save(conn, m["text"], session_key=session["session"], thread=m.get("thread"),
@@ -67,7 +81,7 @@ def load_corpus(conn, embedder, path: Path = CORPUS):
             if out.get("status") not in ("saved", "buffered"):
                 raise RuntimeError(f"corpus save failed: {out} for {m['text'][:60]!r}")
     if not store.warm:
-        raise RuntimeError(f"the corpus has fewer than {BOOTSTRAP_N} memories; the store never warmed")
+        raise RuntimeError(f"the corpus has fewer than {store.bootstrap_n} memories; the store never warmed")
     return store
 
 

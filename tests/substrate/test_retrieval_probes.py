@@ -39,6 +39,30 @@ def test_the_retrieval_probes_hold_their_baseline(loaded):
     assert cur == base, f"the reading moved without the baseline being updated: {report}"
 
 
+@pytest.mark.embed
+def test_the_probes_can_fail_seeding_only_the_named_space_loses_every_cross_space_probe(loaded):
+    """The instrument's own failure, shown: the same corpus read with each query concept seeded only in the space
+    the probe named. Every cross-space probe misses — so a green reading is the seeding working, not an easy set."""
+    import dataclasses
+    import agent_memory.spaces.word_vote as wv
+    conn, store = loaded
+    probes = ks.load_probes()
+    kept = wv.settings
+    wv.settings = dataclasses.replace(kept, m3_concept_seed_spaces="own")
+    try:
+        narrowed = ks.reading(conn, store, probes)
+    finally:
+        wv.settings = kept
+    cross = [p["id"] for p in probes if p["kind"] == "cross-space"]
+    assert cross and all(narrowed["ranks"][pid] is None for pid in cross), narrowed["ranks"]
+    assert narrowed["hits"] < json.loads(ks.BASELINE.read_text())["hits"]
+
+
+def test_the_probes_apply_every_setting_the_coding_dialect_sets():
+    from slopymemory.store import DIALECT_ENV
+    assert set(DIALECT_ENV["coding"]) <= set(ks.ENV_FIELDS)
+
+
 def test_compare_names_a_regression_and_refuses_a_different_corpus():
     base = {"corpus": {"memories": 45}, "hits": 2, "ranks": {"a": 1, "b": 3}}
     worse = {"corpus": {"memories": 45}, "hits": 1, "ranks": {"a": 2, "b": None}}

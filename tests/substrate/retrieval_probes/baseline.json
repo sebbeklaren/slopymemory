@@ -4,7 +4,7 @@
   "nodes": 184,
   "synapses": 122
  },
- "hits": 3,
+ "hits": 9,
  "kinds": {
   "add-column": "direct",
   "class-naming-via-thread": "thread-only",
@@ -24,14 +24,14 @@
   "add-column": 1,
   "class-naming-via-thread": null,
   "delete-button-direct": 1,
-  "delete-button-real-1": null,
-  "delete-button-real-2": null,
-  "delete-button-real-3": null,
+  "delete-button-real-1": 4,
+  "delete-button-real-2": 2,
+  "delete-button-real-3": 3,
   "long-list": null,
   "request-logging": 1,
-  "retry-http": null,
-  "show-local-time": null,
+  "retry-http": 1,
+  "show-local-time": 1,
   "stay-logged-in": null,
-  "toggle-feature": null
+  "toggle-feature": 2
  }
 }

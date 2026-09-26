@@ -82,15 +82,21 @@ def _concept_primary_seeds(conn, embedder, query_concepts, per_space_k):
     vanilla-vector-search default). Each extracted query-concept lights its cosine-nearest
     memory-concepts IN ITS OWN concept-space; the seed activation is the cosine similarity
     (proximity kernel K, identity form). Query_concepts: [(base_space, label)]. Nodes lit
-    by more than one query-concept take the MAX. This replaces retrieve_word_vote's whole-query cosine."""
+    by more than one query-concept take the MAX. This replaces retrieve_word_vote's whole-query cosine.
+    settings.m3_concept_seed_spaces = "all" seeds every label in every concept space instead of only the one the
+    caller named (the label is embedded once either way)."""
     from agent_memory.spaces.concepts import CONCEPT_SPACES
+    mode = settings.m3_concept_seed_spaces
+    if mode not in ("own", "all"):
+        raise ValueError(f"m3_concept_seed_spaces must be 'own' or 'all', not {mode!r}")
     seeds: dict[str, float] = {}
     for base_space, label in query_concepts:
-        cspace = CONCEPT_SPACES[base_space]
+        spaces = CONCEPT_SPACES.values() if mode == "all" else [CONCEPT_SPACES[base_space]]
         norm = " ".join(label.strip().lower().split())
         qvec = embedder.embed_document(norm)
-        for nid, cos in _cosine_nearest_concepts(conn, cspace, qvec, per_space_k):
-            seeds[nid] = max(seeds.get(nid, 0.0), float(cos))
+        for cspace in spaces:
+            for nid, cos in _cosine_nearest_concepts(conn, cspace, qvec, per_space_k):
+                seeds[nid] = max(seeds.get(nid, 0.0), float(cos))
     return seeds
 
 

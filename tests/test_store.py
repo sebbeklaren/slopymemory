@@ -104,3 +104,10 @@ def test_an_unknown_postgres_backend_in_store_toml_is_a_config_error(tmp_home):
     with pytest.raises(ConfigError) as e:
         Store.load("odd")
     assert "postgres" in str(e.value) and "system | embedded" in str(e.value) and "SETUP.md#registry" in str(e.value)
+
+
+def test_the_coding_dialect_seeds_query_concepts_in_every_space_and_design_does_not(tmp_home):
+    """Agents file a concept in one space and later ask in the other; the coding dialect's retrieval seeds each
+    query concept in every concept space. The design dialect keeps the substrate's own-space default."""
+    assert mk().server_env()["AM_M3_CONCEPT_SEED_SPACES"] == "all"
+    assert "AM_M3_CONCEPT_SEED_SPACES" not in mk(dialect="design").server_env()

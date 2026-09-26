@@ -134,6 +134,10 @@ class Settings:
     # Per-concept-space cosine cap: how many nearest concepts (by concept_embedding cosine) each
     # concept-space contributes to a query's vote tally.
     m3_word_query_concepts: int = int(os.getenv("AM_M3_WORD_QUERY_CONCEPTS", "8"))
+    # Which concept spaces a query concept seeds in concept-primary retrieval. "own" (default) = only the space
+    # the caller named; "all" = every concept space, so a concept an agent filed in one space is still reached
+    # when a later question names it in another. Measured on the retrieval probes (coding dialect): 3/12 -> 9/12.
+    m3_concept_seed_spaces: str = os.getenv("AM_M3_CONCEPT_SEED_SPACES", "own")
     # Provenance stamp for the (B) concept extractor (concept nodes + their vote links). Must NEVER
     # signal input drift — bump only on a genuine extractor/prompt change.
     m3_word_extractor_version: str = os.getenv("AM_M3_WORD_EXTRACTOR_VERSION", "claude-concept-v1")
