@@ -1,0 +1,68 @@
+# The retrieval probes: a question, the concepts an agent passes with it, and the memory it should reach within k.
+# kind says what the probe leans on:
+#   cross-space   the question's concepts sit in the other space from the target's (agents do this; the concept
+#                 sets marked "real" are copied from what agents actually sent for a delete-button task)
+#   direct        concepts and target in the same space — a control that must keep working
+#   paraphrase    the question shares no words with the target
+#   thread-only   the target is reachable only as a thread neighbour of what matches (not reached today)
+probes:
+  - id: delete-button-real-1
+    kind: cross-space
+    query: "settings page styling and conventions for buttons and colors"
+    query_concepts: [[function, settings page], [function, button styling]]
+    expect_prefix: "Destructive actions"
+  - id: delete-button-real-2
+    kind: cross-space
+    query: "settings page styling and button conventions"
+    query_concepts: [[function, settings page], [function, danger button styling]]
+    expect_prefix: "Destructive actions"
+  - id: delete-button-real-3
+    kind: cross-space
+    query: "settings page button styles conventions"
+    query_concepts: [[function, settings page], [function, button styling], [semantic, delete account]]
+    expect_prefix: "Destructive actions"
+  - id: retry-http
+    kind: cross-space
+    query: "what should the client do when a call to the payment provider fails?"
+    query_concepts: [[function, retry failed requests], [function, http client]]
+    expect_prefix: "Outbound HTTP calls retry"
+  - id: show-local-time
+    kind: cross-space
+    query: "how do I show an order's time to the user?"
+    query_concepts: [[function, date formatting], [function, timezone conversion]]
+    expect_prefix: "Timestamps are stored in UTC"
+  - id: toggle-feature
+    kind: cross-space
+    query: "how do I ship a feature switched off?"
+    query_concepts: [[function, feature toggle], [function, config file]]
+    expect_prefix: "Feature flags live"
+  - id: delete-button-direct
+    kind: direct
+    query: "how are destructive buttons styled?"
+    query_concepts: [[semantic, destructive action button], [semantic, danger button style]]
+    expect_prefix: "Destructive actions"
+  - id: request-logging
+    kind: direct
+    query: "what do we log per request?"
+    query_concepts: [[function, request logging]]
+    expect_prefix: "Every request logs"
+  - id: add-column
+    kind: direct
+    query: "how do I add a column safely?"
+    query_concepts: [[function, database migration], [function, add a column]]
+    expect_prefix: "Migrations are forward-only"
+  - id: long-list
+    kind: paraphrase
+    query: "how should the API hand back a very long list of orders?"
+    query_concepts: [[function, large result sets], [function, orders api]]
+    expect_prefix: "List endpoints return"
+  - id: stay-logged-in
+    kind: paraphrase
+    query: "how long does a user stay logged in?"
+    query_concepts: [[function, keep user logged in], [semantic, login lifetime]]
+    expect_prefix: "Sessions end after"
+  - id: class-naming-via-thread
+    kind: thread-only
+    query: "settings page styling and conventions for buttons and colors"
+    query_concepts: [[function, settings page], [function, button styling]]
+    expect_prefix: "CSS naming"

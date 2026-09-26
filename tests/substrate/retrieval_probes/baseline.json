@@ -1,0 +1,37 @@
+{
+ "corpus": {
+  "memories": 45,
+  "nodes": 184,
+  "synapses": 122
+ },
+ "hits": 3,
+ "kinds": {
+  "add-column": "direct",
+  "class-naming-via-thread": "thread-only",
+  "delete-button-direct": "direct",
+  "delete-button-real-1": "cross-space",
+  "delete-button-real-2": "cross-space",
+  "delete-button-real-3": "cross-space",
+  "long-list": "paraphrase",
+  "request-logging": "direct",
+  "retry-http": "cross-space",
+  "show-local-time": "cross-space",
+  "stay-logged-in": "paraphrase",
+  "toggle-feature": "cross-space"
+ },
+ "n": 12,
+ "ranks": {
+  "add-column": 1,
+  "class-naming-via-thread": null,
+  "delete-button-direct": 1,
+  "delete-button-real-1": null,
+  "delete-button-real-2": null,
+  "delete-button-real-3": null,
+  "long-list": null,
+  "request-logging": 1,
+  "retry-http": null,
+  "show-local-time": null,
+  "stay-logged-in": null,
+  "toggle-feature": null
+ }
+}

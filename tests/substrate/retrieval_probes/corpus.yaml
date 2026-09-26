@@ -1,0 +1,166 @@
+# The retrieval-probe corpus: the memories of a made-up web app ("Harbor", an order-tracking service), saved through the
+# real save path. Sessions group saves the way one working session would; threads tie a design topic together.
+# Concepts are [space, label] in the coding dialect (function = what the code does, semantic = what it is about),
+# filed the way an agent files them — which is not always the space a later question uses. That is the point.
+#
+# Kinds of memory in here, so a reader can see what each probe leans on:
+#   targets that a natural question reaches only across spaces (the question's concepts in one space, the
+#   memory's in the other); targets that share no words with the question; distractors that share the
+#   question's vocabulary and are the wrong answer; one memory reachable only through its thread; and ordinary
+#   project memories so a top-5 window has real competition.
+sessions:
+  - session: frontend-1
+    memories:
+      - text: "Primary action buttons use teal #0F766E; blue is never used for actions in the app. Why: contrast on the dark theme."
+        thread: frontend-style
+        concepts: [[semantic, frontend colour], [semantic, primary button colour], [function, button styling]]
+      - text: "Destructive actions (delete, remove, reset) use the btn-danger-outline class — an outlined button, never a filled red one — and always open a confirm dialog first. Why: filled red buttons were mis-clicked in user tests."
+        thread: frontend-style
+        concepts: [[semantic, destructive action button], [function, delete confirmation dialog], [semantic, danger button style]]
+      - text: "CSS naming: every class we add is kebab-case with the hb- prefix (hb-card, hb-danger-zone); only the shared button classes are unprefixed. Why: avoids collisions with third-party widgets."
+        thread: frontend-style
+        concepts: [[semantic, css class naming], [function, class prefix convention]]
+      - text: "The settings page is a single column of hb-card sections, one card per concern (profile, notifications, account), with the save button at the bottom of each card."
+        thread: settings-page
+        concepts: [[function, settings page], [semantic, card layout]]
+      - text: "Form validation messages appear under the field in hb-field-error, never as a toast. Why: toasts vanish before screen readers finish."
+        thread: forms
+        concepts: [[function, form validation], [semantic, error message placement]]
+  - session: frontend-2
+    memories:
+      - text: "The marketing site (separate repository) uses blue #2563EB for links and call-to-action buttons; this does not apply to the app."
+        thread: marketing-site
+        concepts: [[semantic, marketing site colour], [semantic, link colour]]
+      - text: "Email templates use a red #DC2626 banner for security alerts such as password resets."
+        thread: email-templates
+        concepts: [[semantic, email template colour], [semantic, security alert banner]]
+      - text: "Icons come from one inline SVG sprite; never add an icon font. Why: the font blocked first paint on slow networks."
+        thread: frontend-assets
+        concepts: [[function, icon loading], [semantic, svg sprite]]
+      - text: "Tables longer than 20 rows get sticky headers and zebra striping via hb-table."
+        thread: tables
+        concepts: [[function, table styling], [semantic, sticky header]]
+      - text: "Modals trap focus and close on Escape; the confirm dialog is the shared hb-modal with two buttons, cancel on the left."
+        thread: modals
+        concepts: [[function, modal behaviour], [semantic, focus trap]]
+  - session: api-1
+    memories:
+      - text: "Outbound HTTP calls retry 3 times with exponential backoff from 200 ms; a POST is never retried without an idempotency key. Why: a double-charged order in the first month."
+        thread: http-client
+        concepts: [[semantic, retry policy], [semantic, exponential backoff], [function, idempotency key]]
+      - text: "Background jobs retry up to 5 times and then land in the dead-letter queue, which is reviewed every Monday."
+        thread: jobs
+        concepts: [[function, background job retries], [semantic, dead-letter queue]]
+      - text: "List endpoints return at most 50 items plus an opaque cursor for the next page; never offset pagination. Why: offsets skipped rows while orders were being inserted."
+        thread: api-design
+        concepts: [[function, pagination], [function, list endpoint], [semantic, cursor]]
+      - text: "API errors are JSON with code, message and request_id; the HTTP status is never the only signal."
+        thread: api-design
+        concepts: [[function, api error format], [semantic, error codes]]
+      - text: "Every request logs its request id at entry and exit; the id is returned in the X-Request-Id header."
+        thread: logging
+        concepts: [[function, request logging], [semantic, request id]]
+      - text: "Rate limiting is per API key: 100 requests per minute, answered with 429 and a Retry-After header."
+        thread: api-design
+        concepts: [[function, rate limiting], [semantic, api key quota]]
+  - session: api-2
+    memories:
+      - text: "Webhooks are signed with HMAC-SHA256 over the raw body; a delivery is retried for 24 hours."
+        thread: webhooks
+        concepts: [[function, webhook signing], [function, webhook delivery]]
+      - text: "The orders API is versioned in the path (/v1/orders); a breaking change gets a new version, never a flag."
+        thread: api-design
+        concepts: [[function, api versioning], [function, orders api]]
+      - text: "Money is stored as integer cents with a currency code; floats are never used for amounts."
+        thread: money
+        concepts: [[semantic, money representation], [function, currency amounts]]
+      - text: "Search uses Postgres full-text search over order notes; no external search service until it measurably hurts."
+        thread: search
+        concepts: [[function, order search], [semantic, full-text search]]
+  - session: data-1
+    memories:
+      - text: "Timestamps are stored in UTC in the database and converted to the viewer's timezone only in the UI layer."
+        thread: time
+        concepts: [[semantic, timezone handling], [semantic, utc storage]]
+      - text: "The build server's clock and every cron schedule are in UTC; schedules in the repo are written in UTC too."
+        thread: ops
+        concepts: [[function, cron schedule], [semantic, build server timezone]]
+      - text: "Migrations are forward-only: a column is added with a default before any code reads it, and dropped only one release after the code stopped using it."
+        thread: migrations
+        concepts: [[function, database migration], [semantic, forward-only schema change]]
+      - text: "Soft delete: orders are never removed; a deleted_at timestamp hides them, and a nightly job purges rows older than 7 years."
+        thread: retention
+        concepts: [[semantic, soft delete], [function, data retention]]
+      - text: "Every table has created_at and updated_at, set by the database, never by application code."
+        thread: migrations
+        concepts: [[function, audit columns], [semantic, database defaults]]
+  - session: data-2
+    memories:
+      - text: "Read replicas serve reports only; anything a user just wrote is read from the primary."
+        thread: database
+        concepts: [[function, read replica routing], [semantic, read-your-writes]]
+      - text: "Connection pool: 20 connections per app instance, statement timeout 5 s."
+        thread: database
+        concepts: [[function, connection pool], [semantic, statement timeout]]
+      - text: "Exports to CSV run as a background job and are emailed as a link that expires after 24 hours."
+        thread: exports
+        concepts: [[function, csv export], [semantic, expiring download link]]
+  - session: auth-1
+    memories:
+      - text: "Sessions end after 30 minutes without activity; refresh tokens rotate on every use and a reused one revokes the whole family."
+        thread: auth
+        concepts: [[function, session expiry], [semantic, refresh token rotation]]
+      - text: "Passwords are hashed with argon2id; the parameters live in config, not code."
+        thread: auth
+        concepts: [[function, password hashing], [semantic, argon2id]]
+      - text: "Admin actions require a second factor within the last 10 minutes, asked again if older."
+        thread: auth
+        concepts: [[function, admin step-up auth], [semantic, second factor]]
+      - text: "The command-line tool deletes an order only with --force and prints what it removed."
+        thread: cli
+        concepts: [[function, cli delete command], [semantic, force flag]]
+  - session: ops-1
+    memories:
+      - text: "Feature flags live in config/flags.toml, default off; a flag is removed within two releases of launch."
+        thread: flags
+        concepts: [[semantic, feature flags], [semantic, flag cleanup]]
+      - text: "Deploys go out behind a canary: 5 % of traffic for 15 minutes, rolled back automatically on an error-rate jump."
+        thread: deploys
+        concepts: [[function, canary deploy], [semantic, automatic rollback]]
+      - text: "Secrets come from the environment at start-up; nothing secret is ever committed, and the app refuses to start without them."
+        thread: ops
+        concepts: [[function, secret loading], [semantic, environment variables]]
+      - text: "Health checks answer 200 only when the database and the queue are reachable."
+        thread: ops
+        concepts: [[function, health check], [semantic, dependency reachability]]
+      - text: "Logs are JSON lines, one event per line, shipped to the log store; no multi-line stack traces."
+        thread: logging
+        concepts: [[function, log format], [semantic, structured logging]]
+  - session: tests-1
+    memories:
+      - text: "Unit tests never touch the network or the clock; integration tests run against a throwaway Postgres in a container."
+        thread: testing
+        concepts: [[function, unit tests], [function, integration tests]]
+      - text: "A bug fix lands with a test that failed before the fix. Why: two regressions came back in one quarter."
+        thread: testing
+        concepts: [[function, regression test], [semantic, test-first bug fix]]
+      - text: "Test fixtures are built by factories, never by loading production dumps."
+        thread: testing
+        concepts: [[function, test fixtures], [semantic, factories]]
+      - text: "Flaky tests are quarantined within a day with an issue linked; a quarantined test is fixed or deleted within two weeks."
+        thread: testing
+        concepts: [[function, flaky test handling], [semantic, quarantine]]
+  - session: misc-1
+    memories:
+      - text: "Dependencies are pinned with a lock file and updated in one batch each month, never one by one."
+        thread: dependencies
+        concepts: [[function, dependency updates], [semantic, lock file]]
+      - text: "Code review needs one approval; a change to money handling needs two."
+        thread: process
+        concepts: [[function, code review], [semantic, approval count]]
+      - text: "The notifications service sends at most one email per order per hour; everything else is batched into a digest."
+        thread: notifications
+        concepts: [[function, email throttling], [semantic, notification digest]]
+      - text: "Uploaded images are resized to three widths on upload and served from the CDN; the originals are kept private."
+        thread: uploads
+        concepts: [[function, image resizing], [semantic, cdn]]
