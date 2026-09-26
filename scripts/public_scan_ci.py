@@ -6,6 +6,8 @@ Usage: public_scan_ci.py <repo-root> [files...]      (no files → all tracked f
        public_scan_ci.py --history <repo-root>       git metadata: every commit's author EMAIL against the
                                                      PRIVATE_EMAIL shape, any `Claude-Session:` trailer line, and the
                                                      commit BODY against BUILD_RECORD and the review-label shapes.
+       public_scan_ci.py --author <email>              the email a commit is about to carry, against PRIVATE_EMAIL
+                                                     (the pre-commit hook: refused before the commit exists).
        public_scan_ci.py --ast <repo-root> [files-or-dirs...]
                                                      tokenizer/AST mode: comments, docstrings and string literals only
                                                      (identifiers and code are never scanned). A directory scans every
@@ -194,8 +196,24 @@ def scan_ast(root: Path, files: list[str], allow_file: str | None = None) -> int
     return hits
 
 
+def check_author(email: str) -> int:
+    """1 when the email is empty or has a private mailbox's shape: an author line should carry the GitHub noreply
+    address, and a private one written into a commit cannot be taken back once pushed."""
+    if not email.strip():
+        print("public_scan --author: no author email set — set the GitHub noreply address (git config user.email)")
+        return 1
+    if any(re.search(p, email, re.IGNORECASE) for p in PRIVATE_EMAIL):
+        print("public_scan --author: a private author email — commit refused; set the GitHub noreply address "
+              "(git config user.email)")
+        return 1
+    print("public_scan --author: clean")
+    return 0
+
+
 def main() -> int:
     args = sys.argv[1:]
+    if args[:1] == ["--author"]:
+        return check_author(args[1] if len(args) > 1 else "")
     history = "--history" in args
     ast_mode = "--ast" in args
     allow_file = None

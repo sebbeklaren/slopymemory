@@ -164,6 +164,13 @@ refused, on a push and on a pull request alike. Commit with your GitHub noreply 
 "Keep my email addresses private"): a commit authored from a gmail, outlook or similar mailbox fails the history
 scan, and the fix is an amend, not a discussion.
 
+The same checks run on your machine before a commit and before a push, from the hooks in `.githooks/`. Enable them
+once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Licence
 
 MIT — see `LICENSE`.

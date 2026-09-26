@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Before anything is published: every commit's author email, any Claude-Session trailer, and every commit body's
+# build-record jargon. The same scan CI runs on every push.
+# Enable once per clone: git config core.hooksPath .githooks
+# A maintainer's further checks run after it when `git config slopymem.extraScan` names a command; it gets
+# `--history .`. Unset, nothing else runs.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+python3 scripts/public_scan_ci.py --history .
+extra="$(git config --get slopymem.extraScan || true)"
+if [ -n "$extra" ]; then eval "$extra" --history '.'; fi
