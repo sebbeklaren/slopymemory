@@ -50,7 +50,7 @@ def _python() -> Finding:
 
 
 def _package() -> Finding:
-    """The substrate is vendored inside the slopymemory distribution (src/agent_memory) — there is no separate
+    """The substrate ships inside the slopymemory distribution (src/agent_memory) — there is no separate
     `agent-memory` package to look up; what matters is that both import from this venv."""
     try:
         version = md.version("slopymemory")
@@ -59,7 +59,7 @@ def _package() -> Finding:
     try:
         import agent_memory
     except ImportError as e:
-        return Finding(False, f"slopymemory {version} but the vendored substrate does not import: {e}")
+        return Finding(False, f"slopymemory {version} but the substrate (agent_memory) does not import: {e}")
     return Finding(True, f"slopymemory {version}; substrate agent_memory {Path(agent_memory.__file__).parent}")
 
 
@@ -148,7 +148,7 @@ def _model() -> Finding:
     try:
         from agent_memory.config import settings
     except ImportError as e:
-        return Finding(False, f"the vendored substrate does not import, so the pins cannot be read: {e} — see SETUP.md#package")
+        return Finding(False, f"the substrate (agent_memory) does not import, so the pins cannot be read: {e} — see SETUP.md#package")
     model, pin, code_pin = settings.embed_model, settings.embed_revision, settings.embed_code_revision
     where = install_steps.model_cache_dir(model)
     fetch = "run `slopymem install-model`"
@@ -326,7 +326,7 @@ _LOCAL_SHAPES = [("a home path", re.compile(r"/home/[A-Za-z]")), ("a macOS home 
 
 
 def _local_paths(roots: list[Path] | None = None) -> Finding:
-    """Both installed packages — the wiring and the vendored substrate, the one that ever carried the author's
+    """Both installed packages — the wiring and the substrate, the one that ever carried the author's
     machine — against `_LOCAL_SHAPES`. A hit names the file, the shape and the matched text."""
     if roots is None:
         import slopymemory, agent_memory
@@ -385,10 +385,10 @@ CHECKS: list[Check] = [
           "existing stores can be scanned with `slopymem scan-store <name>`, which reports and never deletes",
           "slopymem scan-store <name>", "remove the memory by hand; tell the agent to save where the secret lives", _secrets),
     Check("local-paths", "a leak of the author's machine into the package",
-          "no file of the two installed packages (slopymemory and the vendored agent_memory) contains a home path (/home/<user>, /Users/<user>) "
+          "no file of the two installed packages (slopymemory and agent_memory) contains a home path (/home/<user>, /Users/<user>) "
           "or a private mailbox; a hit names the file and the shape",
           "grep -rE '/home/[A-Za-z]|/Users/[A-Za-z]|@(gmail|outlook|hotmail|yahoo|icloud|proton)' ~/.slopymemory/venv/lib/python3.13/site-packages/slopymemory ~/.slopymemory/venv/lib/python3.13/site-packages/agent_memory",
-          "report it — the export scanner missed it", _local_paths),
+          "report it — the repository's scanner missed it", _local_paths),
 ]
 
 

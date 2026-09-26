@@ -1,6 +1,6 @@
 # Three jobs on every push and pull request:
 #   scan          the public scanner over the tree and the history (secrets, home paths, private mailboxes, session trailers)
-#   unit          the test suite against a pgvector service — the wiring, and the vendored substrate's own tests on a
+#   unit          the test suite against a pgvector service — the wiring, and the substrate's own tests on a
 #                 *_test database; the model-dependent tests (marked `embed`) are left to the end-to-end job
 #   e2e-embedded  the stranger's path, verbatim: ./install.sh on a bare runner (embedded Postgres, no harness), then a
 #                 real session through the launcher over stdio — memory_init, twelve saves, a retrieve that must bring

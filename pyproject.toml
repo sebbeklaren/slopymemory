@@ -7,7 +7,7 @@ license = "MIT"
 dependencies = [
     "mcp>=1.27,<1.28",
     "tomli-w>=1.0",
-    # the substrate (vendored under src/agent_memory)
+    # the substrate (src/agent_memory)
     "psycopg[binary]>=3.2", "pgvector>=0.4,<0.5", "pyyaml>=6.0", "numpy>=2.0", "scipy>=1.13",
     "umap-learn>=0.5", "huggingface_hub>=0.30",
     "sentence-transformers>=5.5,<5.6", "einops>=0.8", "transformers>=5.9,<5.10", "torch>=2.12,<2.13",
@@ -36,7 +36,7 @@ explicit = true
 torch = { index = "pytorch-cpu" }
 
 [tool.pytest.ini_options]
-markers = ["pg: creates and drops a real database (slopymem_test_<pid>)", "embed: loads the real embedder", "substrate: the vendored substrate's own tests (need a *_test database)"]
+markers = ["pg: creates and drops a real database (slopymem_test_<pid>)", "embed: loads the real embedder", "substrate: the substrate's own tests (need a *_test database)"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
 

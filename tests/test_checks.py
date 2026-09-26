@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -157,7 +158,7 @@ def test_space_check_follows_the_paths_each_stores_env_names(tmp_home, tmp_path,
     assert f.ok is True and "3 MB of store data" in f.detail
 
 
-def test_package_check_verifies_the_vendored_substrate_not_a_separate_distribution(monkeypatch):
+def test_package_check_verifies_the_substrate_not_a_separate_distribution(monkeypatch):
     """The substrate ships inside the slopymemory distribution; there is no `agent-memory` package to look up."""
     def version(name):
         if name == "slopymemory": return "0.2.0"
@@ -388,7 +389,7 @@ def test_python_check_says_which_home_is_in_use_and_why(tmp_home, monkeypatch):
 
 
 def test_local_paths_check_scans_both_packages_for_home_paths_and_a_private_mailbox(tmp_path):
-    """The vendored substrate is the package that ever carried the author's machine; the check reads it too, for
+    """The substrate is the package that ever carried the author's machine; the check reads it too, for
     three shapes — a Linux home path, a macOS home path, a private mailbox — and a hit names the file and the shape.
     The fixtures are assembled from halves: the repository's own scanner refuses these shapes as text, in tests too."""
     linux, mac, mailbox = "/home/" + "someone/x", "/Users/" + "someone/x", "someone@" + "gmail.com"
@@ -415,3 +416,15 @@ def test_local_paths_check_is_clean_on_the_installed_packages_including_checks_p
     installed packages carry no home path and no mailbox."""
     f = checks.by_id("local-paths").run()
     assert f.ok, f.detail
+
+
+def test_nothing_the_user_reads_calls_the_substrate_vendored_or_exported():
+    """The substrate is this repository's own code: no message, check text or document may send a reader looking
+    for a source it was copied from."""
+    root = Path(__file__).resolve().parent.parent
+    files = [*(root / "src").rglob("*.py"), root / "SETUP.md", root / "README.md", root / "pyproject.toml"]
+    stale = re.compile(r"vendored|export scanner|the export\b|maintainers' export")
+    hits = [f"{f.relative_to(root)}:{i}" for f in files for i, line in enumerate(f.read_text().splitlines(), 1)
+            if stale.search(line)]
+    assert not hits, hits
+    assert not (root / "EXPORT.txt").exists()

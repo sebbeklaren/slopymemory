@@ -225,9 +225,9 @@ def cmd_scan_store(a) -> int:
         return fail(f"no store named {a.store} — `slopymem list` — see SETUP.md#registry")
     st = Store.load(a.store)
     try:
-        from agent_memory.guard import find_secret     # the vendored substrate's guard: one test for saves and scans
+        from agent_memory.guard import find_secret     # the substrate's guard: one test for saves and scans
     except ImportError as e:
-        return fail(f"the vendored substrate does not import: {e} — see SETUP.md#package")
+        return fail(f"the substrate (agent_memory) does not import: {e} — see SETUP.md#package")
     try:
         rows = read_memories(st)
     except psycopg.Error as e:
