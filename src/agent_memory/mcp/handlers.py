@@ -33,9 +33,21 @@ def _validate_query_facets(query_facets) -> None:
     _validate_facet_map(query_facets, arg="query_facets")
 
 
+def check_save(text, facets, supersedes) -> dict | None:
+    """The checks that need no database and can never succeed on a retry — answered before anything is held:
+    a noop reply for empty text, ValueError for a bad facet map or supersedes; None when the save may go ahead."""
+    _validate_facet_map(facets, arg="facets")
+    if supersedes is not None and (not isinstance(supersedes, str) or not supersedes.strip()):
+        raise ValueError("supersedes must be a memory_id string or None")
+    if not text or not text.strip():
+        return {"status": "noop", "note": "empty input — nothing saved"}
+    return None
+
+
 def memory_save(conn, store, tenant: str, session_key: str, text: str, scope: str | None = None,
                 thread: str | None = None, facets: dict[str, str] | None = None,
-                save_concepts: list | None = None, supersedes: str | None = None) -> dict:
+                save_concepts: list | None = None, supersedes: str | None = None, *,
+                memory_id: str | None = None, now=None, known_ids: set | None = None) -> dict:
     """Save agent text into the m3 live store under `session_key` (co-occurrence). Empty -> explicit
     no-op. During bootstrap returns {status: buffered, ...}; warm returns {status: saved, memory_id}.
     Optional `thread` durably associates saves sharing the label across sessions.
@@ -57,9 +69,9 @@ def memory_save(conn, store, tenant: str, session_key: str, text: str, scope: st
         raise ValueError("supersedes must be a memory_id string or None")
     if not text or not text.strip():
         return {"status": "noop", "note": "empty input — nothing saved"}
-    return store.save(conn, text, session_key=session_key, now=datetime.now(timezone.utc),
+    return store.save(conn, text, session_key=session_key, now=now or datetime.now(timezone.utc),
                       scope=scope, thread=thread, facets=facets, save_concepts=save_concepts,
-                      supersedes=supersedes)
+                      supersedes=supersedes, memory_id=memory_id, known_ids=known_ids)
 
 
 def memory_retrieve(conn, store, tenant: str, query: str, k: int = 5,

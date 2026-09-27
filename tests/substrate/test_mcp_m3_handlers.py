@@ -6,7 +6,7 @@ from agent_memory.mcp import handlers
 
 class _FakeStore:
     def __init__(self): self.saved = []; self.saved_threads = []; self.saved_facets = []; self._warm = True; self.last_query_facets = "unset"
-    def save(self, conn, text, *, session_key, now, scope=None, memory_id=None, thread=None, facets=None, save_concepts=None, supersedes=None):
+    def save(self, conn, text, *, session_key, now, scope=None, memory_id=None, thread=None, facets=None, save_concepts=None, supersedes=None, known_ids=None):
         self.saved.append((text, session_key, scope)); self.saved_threads.append(thread); self.saved_facets.append(facets)
         return {"status": "saved", "memory_id": "m1"}
     def retrieve(self, conn, query, k, *, query_facets=None, facets=None, epoch_range=None, **kwargs):

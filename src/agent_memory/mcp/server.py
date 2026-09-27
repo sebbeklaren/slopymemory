@@ -7,7 +7,10 @@ nomic embedder + the m3 LiveStore (projector warm-loaded via `_store.warmup()`) 
 once at startup and stay warm.
 """
 import json
+import threading
 import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg
@@ -15,6 +18,7 @@ from pgvector.psycopg import register_vector
 
 from mcp.server.fastmcp import Context, FastMCP
 
+from agent_memory import durability as du
 from agent_memory.config import settings
 from agent_memory.embed.nomic import NomicEmbedder
 from agent_memory.guard import find_secret_in_save, kind_in_field, refusal_message
@@ -29,10 +33,44 @@ _embedder: NomicEmbedder | None = None
 _store: "LiveStore | None" = None
 
 
+HELD_MESSAGE = ("Saved to disk, not yet to the database; it will be written when the database is back. Tell the "
+                "user. Fix: SETUP.md#postgres. To report it: slopymem doctor --report")
+# One lock over hold -> save -> release, the drain and the session map: the design does not rely on FastMCP running
+# sync tools one at a time on its event loop, which is true today and not a promise.
+_lock = threading.Lock()
+# schema_ready: the schema-ensure ran on a successful connection (once per process — the server may start while
+# the database is down). failing: the last database call failed; db-status.json follows every change.
+_state = {"schema_ready": False, "failing": False}
+
+
 def _connect() -> psycopg.Connection:
-    conn = psycopg.connect(settings.database_url, autocommit=True)
+    """A short connect_timeout, so a database that hangs rather than refuses answers `held` promptly."""
+    conn = psycopg.connect(settings.database_url, autocommit=True, connect_timeout=3)
     register_vector(conn)
+    if not _state["schema_ready"]:
+        _ensure_schema(conn)
+        _state["schema_ready"] = True
     return conn
+
+
+def _mark(ok: bool, err: str | None = None) -> None:
+    """Record the database state in db-status.json for `slopymem doctor`, which reads files only."""
+    now = datetime.now(timezone.utc).isoformat()
+    if ok:
+        if _state["failing"] or du.read_status(du.state_dir()) not in (None, {"state": "ok"}):
+            du.write_status({"state": "ok"})
+    else:
+        prev = du.read_status(du.state_dir()) or {}
+        held, failed = du.counts()
+        du.write_status({"state": "failing", "error": err,
+                         "since": prev.get("since") if prev.get("state") == "failing" else now,
+                         "last_seen": now, "held": held, "failed": failed})
+    _state["failing"] = not ok
+
+
+def _held_reply(memory_id: str, err: str) -> dict:
+    return {"status": "held", "memory_id": memory_id, "held_count": du.counts()[0], "error": err,
+            "message": HELD_MESSAGE}
 
 
 def _log(record: dict) -> None:
@@ -105,17 +143,33 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
               "refused": "secret", "kind": kind, "field": field, "status": "refused"})
         return {"status": "refused", "reason": "secret", "kind": kind, "field": field,
                 "message": refusal_message(secret, field)}
-    conn = _connect()
-    try:
-        out = handlers.memory_save(conn, _store, tenant, session_key, text, scope, thread, facets,
-                                   save_concepts, supersedes)
-    finally:
-        conn.close()
+    noop = handlers.check_save(text, facets, supersedes)
+    if noop is not None:
+        return noop
+    mid, now = uuid.uuid4().hex, datetime.now(timezone.utc)
+    with _lock:
+        # Write first: from here on the save survives whatever the database does. An unwritable held/ raises
+        # (the save fails loudly with that error, nothing is claimed).
+        path = du.hold(du.record(mid, text, session_key, scope, now, thread, facets, save_concepts, supersedes))
+        try:
+            conn = _connect()
+            try:
+                out = handlers.memory_save(conn, _store, tenant, session_key, text, scope, thread, facets,
+                                           save_concepts, supersedes, memory_id=mid, now=now,
+                                           known_ids=du.held_ids() - {mid})
+            finally:
+                conn.close()
+            du.release(path)
+            _mark(True)
+        except psycopg.Error as e:
+            err = du.clean_error(e)
+            _mark(False, err)
+            out = _held_reply(mid, err)
     _log({"tool": "memory_save", "tenant": tenant, "session_key": session_key,
           # FULL text, not an 80-char snippet: a warm save's text is recoverable via memory_id, but
           # a BUFFERED save returns memory_id None, so its (text -> concepts) pair would survive only
           # in the WAL. Under a real-use harvest there is no re-run to recover it from.
-          "memory_id": out.get("memory_id", ""), "text": text or "",
+          "memory_id": out.get("memory_id") or mid, "text": text or "",
           # Log the agent's extraction VERBATIM, not a count/keys summary: the (text -> concepts)
           # pairs cannot be reconstructed after the fact, so they are kept verbatim here so they can
           # be replayed (guarded by a regression test that asserts this field is logged verbatim).
@@ -196,15 +250,19 @@ def _ensure_schema(conn: psycopg.Connection) -> None:
 
 
 def main() -> None:
+    """The server starts with the database down: saves are held and retrievals answer `unavailable` until it
+    answers; the schema-ensure runs on the first successful connection."""
     global _embedder, _store
-    boot = _connect()
-    try:
-        _ensure_schema(boot)
-    finally:
-        boot.close()
     _embedder = NomicEmbedder()  # load once, stay warm
     _store = LiveStore(_embedder)
     _store.warmup()
+    try:
+        _connect().close()
+    except psycopg.Error as e:
+        err = du.clean_error(e)
+        _mark(False, err)
+        print(f"memory server: the database is not reachable at start ({err}); saves are held until it answers "
+              "— see SETUP.md#postgres", flush=True)
     mcp.run(transport="streamable-http")
 
 
