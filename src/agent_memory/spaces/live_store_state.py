@@ -15,6 +15,7 @@ from agent_memory.spaces.live_store import (save_memory, retrieve_memories, _mem
                                             thread_semantic_nodes, place_facets)
 from agent_memory.spaces.concepts import place_text_concepts
 from agent_memory.spaces.memory_supersession import note_memory_supersession, attach_supersessions
+from agent_memory.spaces.related import attach_related
 
 log = logging.getLogger(__name__)
 
@@ -291,7 +292,8 @@ class LiveStore:
         if settings.m3_retrieval_mode == "concept_primary" and query_concepts:
             from agent_memory.spaces.word_vote import retrieve_concept_primary
             results = retrieve_concept_primary(conn, self.embedder, query_concepts, k)
-            return {"status": "ok", "results": attach_supersessions(conn, results)}
+            return {"status": "ok", "results": attach_related(conn, attach_supersessions(conn, results),
+                                                              settings.m3_related_per_result)}
         # query_facets (B1 enhancer): None -> raw-text fallback; dict (possibly {}) -> in-distribution
         # facet seeding (no raw-text facet transforms). `facets` is the legacy project/episodic knob.
         mems = retrieve_memories(conn, self.projector, self.embedder, query, k,
@@ -302,4 +304,5 @@ class LiveStore:
             log.warning("retrieve: %d/%d results have no text row (pre-fix legacy data)",
                         sum(1 for m, _ in mems if m not in texts), len(mems))
         results = [{"memory_id": m, "score": round(s, 4), "text": texts.get(m)} for m, s in mems]
-        return {"status": "ok", "results": attach_supersessions(conn, results)}
+        return {"status": "ok", "results": attach_related(conn, attach_supersessions(conn, results),
+                                                          settings.m3_related_per_result)}

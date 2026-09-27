@@ -215,3 +215,9 @@ def test_memory_save_description_tells_the_agent_never_to_save_secrets():
     tool = server.mcp._tool_manager.get_tool("memory_save")
     assert "Never save passwords, keys or tokens" in tool.description
     assert "refused" in tool.description
+
+
+def test_memory_retrieve_description_says_what_related_is():
+    from agent_memory.mcp import server
+    desc = server.mcp._tool_manager.get_tool("memory_retrieve").description
+    assert "related" in desc and "same thread" in desc

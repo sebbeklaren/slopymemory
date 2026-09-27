@@ -138,6 +138,9 @@ class Settings:
     # the caller named; "all" = every concept space, so a concept an agent filed in one space is still reached
     # when a later question names it in another. Measured on the retrieval probes (coding dialect): 3/12 -> 9/12.
     m3_concept_seed_spaces: str = os.getenv("AM_M3_CONCEPT_SEED_SPACES", "own")
+    # How many related memories (same thread, or >= 2 shared concepts) ride with each retrieved result under
+    # `related` — added to the reply, never replacing a result. 0 (default) = the reply is unchanged.
+    m3_related_per_result: int = int(os.getenv("AM_M3_RELATED_PER_RESULT", "0"))
     # Provenance stamp for the (B) concept extractor (concept nodes + their vote links). Must NEVER
     # signal input drift — bump only on a genuine extractor/prompt change.
     m3_word_extractor_version: str = os.getenv("AM_M3_WORD_EXTRACTOR_VERSION", "claude-concept-v1")

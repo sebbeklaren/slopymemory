@@ -111,3 +111,8 @@ def test_the_coding_dialect_seeds_query_concepts_in_every_space_and_design_does_
     query concept in every concept space. The design dialect keeps the substrate's own-space default."""
     assert mk().server_env()["AM_M3_CONCEPT_SEED_SPACES"] == "all"
     assert "AM_M3_CONCEPT_SEED_SPACES" not in mk(dialect="design").server_env()
+
+
+def test_the_coding_dialect_attaches_two_related_memories_per_result_and_design_does_not(tmp_home):
+    assert mk().server_env()["AM_M3_RELATED_PER_RESULT"] == "2"
+    assert "AM_M3_RELATED_PER_RESULT" not in mk(dialect="design").server_env()

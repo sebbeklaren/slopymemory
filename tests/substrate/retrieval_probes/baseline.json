@@ -1,4 +1,18 @@
 {
+ "attached": {
+  "add-column": null,
+  "class-naming-via-thread": 1,
+  "delete-button-direct": null,
+  "delete-button-real-1": null,
+  "delete-button-real-2": null,
+  "delete-button-real-3": null,
+  "long-list": 1,
+  "request-logging": null,
+  "retry-http": null,
+  "show-local-time": null,
+  "stay-logged-in": null,
+  "toggle-feature": null
+ },
  "corpus": {
   "memories": 45,
   "nodes": 184,
@@ -33,5 +47,11 @@
   "show-local-time": 1,
   "stay-logged-in": null,
   "toggle-feature": 2
+ },
+ "reached": 11,
+ "wrong": {
+  "show-local-time": [
+   "listed: The build server's clock and every cron "
+  ]
  }
 }

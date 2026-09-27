@@ -41,7 +41,8 @@ def load_probes(path: Path = PROBES) -> list[dict]:
 ENV_FIELDS = {"AM_M3_RETRIEVAL_MODE": ("m3_retrieval_mode", str),
               "AM_M3_WORD_DEPTH_STEEPNESS": ("m3_word_depth_steepness", float),
               "AM_M3_BOOTSTRAP_N": ("m3_bootstrap_n", int),
-              "AM_M3_CONCEPT_SEED_SPACES": ("m3_concept_seed_spaces", str)}
+              "AM_M3_CONCEPT_SEED_SPACES": ("m3_concept_seed_spaces", str),
+              "AM_M3_RELATED_PER_RESULT": ("m3_related_per_result", int)}
 
 
 def coding_dialect(workdir: Path, **override):
@@ -94,20 +95,35 @@ def corpus_state(conn) -> dict:
     return out
 
 
-def rank(conn, store, probe: dict) -> int | None:
-    """1-based rank of the first result whose text starts with expect_prefix, within the probe's k; None when
-    it is not there."""
+def look(conn, store, probe: dict) -> dict:
+    """Where the target arrived: `rank` = 1-based position in the top k (None when not there); `attached` = the
+    rank of the result that carried it under `related` (None when it did not ride along); `wrong` = every
+    memory in the reply, listed or attached, whose text starts with one of the probe's avoid prefixes."""
     out = store.retrieve(conn, probe["query"], probe["k"], query_concepts=[list(c) for c in probe["query_concepts"]])
+    rank = attached = None
+    wrong = []
+    avoid = tuple(probe.get("avoid_prefixes", ()))
     for i, r in enumerate(out["results"], 1):
-        if (r.get("text") or "").startswith(probe["expect_prefix"]):
-            return i
-    return None
+        for text, carried in [(r.get("text") or "", False)] + [(x.get("text") or "", True) for x in r.get("related", [])]:
+            if text.startswith(probe["expect_prefix"]):
+                if carried and attached is None:
+                    attached = i
+                elif not carried and rank is None:
+                    rank = i
+            if avoid and text.startswith(avoid):
+                wrong.append(("attached: " if carried else "listed: ") + text[:40])
+    return {"rank": rank, "attached": attached, "wrong": wrong}
 
 
 def reading(conn, store, probes: list[dict]) -> dict:
-    ranks = {p["id"]: rank(conn, store, p) for p in probes}
-    return {"corpus": corpus_state(conn), "hits": sum(r is not None for r in ranks.values()), "n": len(ranks),
-            "ranks": ranks, "kinds": {p["id"]: p["kind"] for p in probes}}
+    looks = {p["id"]: look(conn, store, p) for p in probes}
+    ranks = {pid: v["rank"] for pid, v in looks.items()}
+    attached = {pid: v["attached"] for pid, v in looks.items()}
+    reached = sum(r is not None or attached[pid] is not None for pid, r in ranks.items())
+    return {"corpus": corpus_state(conn), "hits": sum(r is not None for r in ranks.values()), "reached": reached,
+            "n": len(ranks), "ranks": ranks, "attached": attached,
+            "wrong": {pid: v["wrong"] for pid, v in looks.items() if v["wrong"]},
+            "kinds": {p["id"]: p["kind"] for p in probes}}
 
 
 def classify(old: int | None, new: int | None) -> str:
@@ -129,8 +145,12 @@ def compare(baseline: dict, current: dict) -> dict:
         raise ValueError(f"the corpus changed size ({baseline['corpus']['memories']} -> "
                          f"{current['corpus']['memories']} memories); take a new baseline on the unchanged code first")
     deltas = {pid: classify(baseline["ranks"][pid], current["ranks"][pid]) for pid in current["ranks"]}
+    lost = sorted(p for p, a in baseline.get("attached", {}).items()
+                  if a is not None and current.get("attached", {}).get(p) is None and current["ranks"][p] is None)
     return {"deltas": deltas, "hits": (baseline["hits"], current["hits"]),
-            "regressed": sorted(p for p, d in deltas.items() if d == "regressed")}
+            "reached": (baseline.get("reached", baseline["hits"]), current.get("reached", current["hits"])),
+            "regressed": sorted({p for p, d in deltas.items() if d == "regressed"} | set(lost)),
+            "wrong": current.get("wrong", {})}
 
 
 def main(argv=None) -> int:
@@ -157,12 +177,15 @@ def main(argv=None) -> int:
     if a.json:
         print(json.dumps(cur, indent=1, sort_keys=True))
         return 0
-    print(f"retrieval probes: {cur['hits']}/{cur['n']} probes reach their target within k "
+    print(f"retrieval probes: {cur['hits']}/{cur['n']} in the top k, {cur['reached']}/{cur['n']} reached with related "
           f"[corpus: {cur['corpus']['memories']} memories, {cur['corpus']['nodes']} nodes]")
     base = json.loads(Path(a.baseline).read_text()) if Path(a.baseline).exists() else None
     for pid, r in cur["ranks"].items():
         delta = f"  {classify(base['ranks'][pid], r)} (was {base['ranks'][pid]})" if base and pid in base["ranks"] else ""
-        print(f"  {pid:28} {cur['kinds'][pid]:12} rank {r if r else 'MISS'}{delta}")
+        via = f" (attached to #{cur['attached'][pid]})" if cur["attached"][pid] else ""
+        print(f"  {pid:28} {cur['kinds'][pid]:12} rank {r if r else 'MISS'}{via}{delta}")
+    if cur["wrong"]:
+        print(f"  WRONG memories in replies: {cur['wrong']}")
     if base:
         report = compare(base, cur)
         print(f"baseline {report['hits'][0]} -> now {report['hits'][1]}; regressed: {report['regressed'] or 'none'}")

@@ -149,7 +149,10 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
         "A result may carry superseded_by: the user has confirmed that memory CORRECTED — treat the "
         "attached standing version (full text included) as current and the result's own text as "
         "historical. superseded_by.conflict=true means the corrections disagree (reciprocal/divergent) "
-        "— surface both candidates to the user to resolve; NEVER silently pick one."
+        "— surface both candidates to the user to resolve; NEVER silently pick one. "
+        "A result may also carry related: memories strongly tied to it (the same thread, or several shared "
+        "concepts) that the query did not reach on its own — conventions and decisions that belong with it. "
+        "Read them as part of the result; they are extra, never a replacement for one."
     )
 )
 def memory_retrieve(tenant: str, query: str, k: int = 5,

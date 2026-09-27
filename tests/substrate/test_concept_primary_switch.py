@@ -39,3 +39,19 @@ def test_default_flag_is_byte_identical_current_path(monkeypatch):
     out = _warm_store().retrieve(None, "q", 5, query_concepts=[["function", "x"]])
     assert calls == ["mem"]                       # current path taken, concept-primary skipped
     assert out["status"] == "ok"
+
+
+def test_retrieve_attaches_related_memories_by_the_setting(conn, monkeypatch):
+    """Both retrieval paths hand their results to attach_related with the configured count; 0 skips nothing
+    because attach_related itself leaves the results as they are."""
+    seen = []
+    monkeypatch.setattr(wv, "retrieve_concept_primary",
+                        lambda conn, emb, qc, k: [{"memory_id": "CP", "score": 1.0, "text": "cp"}])
+    monkeypatch.setattr(ls, "attach_related", lambda conn, results, n: seen.append(n) or results)
+    monkeypatch.setattr(ls, "settings", dataclasses.replace(ls.settings, m3_retrieval_mode="concept_primary",
+                                                           m3_related_per_result=2))
+    _warm_store().retrieve(conn, "q", 5, query_concepts=[["function", "x"]])
+    monkeypatch.setattr(ls, "retrieve_memories", lambda *a, **k: [])
+    monkeypatch.setattr(ls, "_memory_texts", lambda *a, **k: {})
+    _warm_store().retrieve(conn, "q", 5)                      # no concepts: the other path
+    assert seen == [2, 2]
