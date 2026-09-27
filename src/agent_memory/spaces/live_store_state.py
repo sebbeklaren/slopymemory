@@ -164,9 +164,6 @@ class LiveStore:
         ids = save_memory(conn, self.projector, self.embedder, self._epi, ref=mid, text=text,
                           timestamp=now, scope=scope, thread=thread,
                           prior_session_nodes=prior)
-        if not thread:
-            # tagged saves never join the session clique — the thread IS their boundary
-            self._session_nodes.setdefault(session_key, []).append(ids["semantic"])
         placed, deferred = [], []
         if facets:                                             # the gate: no facets -> byte-identical
             placed, deferred = place_facets(
@@ -179,6 +176,18 @@ class LiveStore:
                 conn, mid, [tuple(c) for c in save_concepts], self.embedder))
         return ids, placed, deferred, concepts_placed
 
+    def _note_session(self, session_key, thread, semantic_node_id) -> None:
+        """After a commit only: the in-memory session map must never name a node the database does not hold.
+        Tagged saves never join the session clique — the thread IS their boundary."""
+        if not thread:
+            self._session_nodes.setdefault(session_key, []).append(semantic_node_id)
+
+    @staticmethod
+    def _has_row(conn, memory_id) -> bool:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM m3_memory WHERE memory_id = %s", (memory_id,))
+            return cur.fetchone() is not None
+
     def _fit_and_place(self, conn) -> dict:
         """Fit the semantic projector on the buffered texts, then replay every buffered save through
         _place (which places each memory's facets AND concepts too). Returns
@@ -188,8 +197,9 @@ class LiveStore:
         results: dict = {}
         pending: list = []           # supersession links, written AFTER placement (both rows must exist)
         for mid, text, session_key, scope, ts, thread, facets, save_concepts, supersedes in self._buffer:
-            _, placed, deferred, concepts_placed = self._place(
+            ids, placed, deferred, concepts_placed = self._place(
                 conn, mid, text, session_key, scope, ts, thread, facets, save_concepts)
+            self._note_session(session_key, thread, ids["semantic"])
             results[mid] = (placed, deferred, concepts_placed)
             if supersedes:
                 pending.append((mid, supersedes))
@@ -201,7 +211,7 @@ class LiveStore:
         return results
 
     def save(self, conn, text, *, session_key, now=None, scope=None, memory_id=None, thread=None,
-             facets=None, save_concepts=None, supersedes=None) -> dict:
+             facets=None, save_concepts=None, supersedes=None, known_ids=None) -> dict:
         """Optional `facets` = {content-space: text} (validated at the MCP boundary). When
         provided + warm, each facet is persisted (m3_facet) and placed into its space (iff its
         projector is loaded) + bound to the semantic node; the reply gains facets_placed /
@@ -230,7 +240,7 @@ class LiveStore:
         supersedes = supersedes.strip() if isinstance(supersedes, str) else None
         supersedes = supersedes or None
         if supersedes:                                          # fail-loud existence check, pre-placement
-            buffered_ids = {b[0] for b in self._buffer}
+            buffered_ids = {b[0] for b in self._buffer} | set(known_ids or ())
             if supersedes not in buffered_ids:
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1 FROM m3_memory WHERE memory_id = %s", (supersedes,))
@@ -267,11 +277,20 @@ class LiveStore:
                 out["facets_placed"] = []
                 out["facets_deferred"] = sorted(facets)
             return out
-        _, placed, deferred, concepts_placed = self._place(
-            conn, mid, text, session_key, scope, now, thread, facets, save_concepts)
+        # A target known only as a held save has no row yet: the link is written when that save is drained (in
+        # order, so before this one), never here where its foreign key would fail.
+        pending = (supersedes if supersedes and supersedes in set(known_ids or ())
+                   and not self._has_row(conn, supersedes) else None)
+        with conn.transaction():                               # one save, one transaction
+            ids, placed, deferred, concepts_placed = self._place(
+                conn, mid, text, session_key, scope, now, thread, facets, save_concepts)
+            if supersedes and not pending:
+                note_memory_supersession(conn, mid, supersedes)
+        self._note_session(session_key, thread, ids["semantic"])
         out = {"status": "saved", "memory_id": mid}
-        if supersedes:
-            note_memory_supersession(conn, mid, supersedes)
+        if pending:
+            out["supersedes_pending"] = pending
+        elif supersedes:
             out["supersedes"] = supersedes
         if facets:
             out["facets_placed"] = placed
