@@ -386,7 +386,8 @@ def report() -> str:
     """One block to paste into an issue. Nothing is sent anywhere. Passed through the secrets guard first: a hit
     refuses the whole report — never redacted, per the guard's standing rule."""
     from agent_memory.guard import find_secret
-    text = "\n".join(["```", *_report_lines(), "```",
+    # The home directory (an embedded Postgres socket path, a log line) would put the user's name in a public issue.
+    text = "\n".join(["```", *(line.replace(str(Path.home()), "~") for line in _report_lines()), "```",
                       "Open an issue on the project's GitHub page (the repository the README clones from) and paste "
                       "the block above."])
     hit = find_secret(text)

@@ -271,6 +271,9 @@ class LiveStore:
             now = datetime.now(timezone.utc)
         if facets:
             self._ensure_facet_projectors()                    # load per-space projectors before placement
+        if not self.warm and any(b[0] == mid for b in self._buffer):
+            # the same record again (a held copy of a save the buffer already has): buffered once, never twice
+            return {"status": "buffered", "warming": True, "count": len(self._buffer), "need": self.bootstrap_n}
         if not self.warm:                                       # bootstrap buffering
             self._buffer.append((mid, text, session_key, scope, now, thread, facets, save_concepts,
                                  supersedes))

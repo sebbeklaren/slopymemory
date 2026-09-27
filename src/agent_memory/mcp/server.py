@@ -45,12 +45,27 @@ _state = {"schema_ready": False, "failing": False}
 
 def _connect() -> psycopg.Connection:
     """A short connect_timeout, so a database that hangs rather than refuses answers `held` promptly."""
-    conn = psycopg.connect(settings.database_url, autocommit=True, connect_timeout=3)
+    # connect_timeout bounds the connect; statement_timeout and keepalives bound a database that accepts the
+    # connection and then stalls — either way the call ends in an OperationalError and the save answers `held`.
+    conn = psycopg.connect(settings.database_url, autocommit=True, connect_timeout=3,
+                           options="-c statement_timeout=15000", keepalives=1, keepalives_idle=5,
+                           keepalives_interval=2, keepalives_count=3)
     register_vector(conn)
     if not _state["schema_ready"]:
         _ensure_schema(conn)
         _state["schema_ready"] = True
     return conn
+
+
+def _mark_safely(ok: bool, err: str | None = None) -> str | None:
+    """_mark, but a status file that cannot be written never changes the answer: the save's own file is what
+    matters, and it is already on disk. Returns the file error, or None."""
+    try:
+        _mark(ok, err)
+        return None
+    except OSError as e:
+        _state["failing"] = not ok
+        return du.clean_error(e)
 
 
 def _mark(ok: bool, err: str | None = None) -> None:
@@ -90,15 +105,20 @@ def _drain(conn, skip: Path | None = None) -> None:
             continue
         try:
             rec = du.load(path)
-        except (OSError, ValueError) as e:
+            if isinstance(rec, dict) and isinstance(rec.get("record"), dict) and "error" in rec:
+                rec = rec["record"]                 # a held-failed record moved back into held/ — the documented fix
+            mid, text, now = rec["memory_id"], rec["text"], datetime.fromisoformat(rec["now"])
+            if not isinstance(mid, str) or not isinstance(text, str):
+                raise TypeError("memory_id and text must be strings")
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
             keep(path, du.clean_error(e)); continue
-        if LiveStore._has_row(conn, rec["memory_id"]):
-            du.release(path); continue
+        if mid in {b[0] for b in getattr(_store, "_buffer", ())} or LiveStore._has_row(conn, mid):
+            du.release(path); continue              # already in the warm-up buffer or committed: never placed twice
         try:
-            out = handlers.memory_save(conn, _store, "default", rec["session_key"], rec["text"], rec["scope"],
-                                       rec["thread"], rec["facets"], rec["save_concepts"], rec["supersedes"],
-                                       memory_id=rec["memory_id"], now=datetime.fromisoformat(rec["now"]),
-                                       known_ids=du.held_ids() - {rec["memory_id"]})
+            out = handlers.memory_save(conn, _store, "default", rec.get("session_key") or "default", text,
+                                       rec.get("scope"), rec.get("thread"), rec.get("facets"),
+                                       rec.get("save_concepts"), rec.get("supersedes"),
+                                       memory_id=mid, now=now, known_ids=du.held_ids() - {mid})
         except psycopg.OperationalError:
             raise
         except Exception as e:                      # noqa: BLE001 — every other failure is kept, never lost
@@ -218,11 +238,11 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
             finally:
                 conn.close()
             du.release(path)
-            _mark(True)
+            _mark_safely(True)
             out = _with_recovered(out)
-        except psycopg.Error as e:
+        except (psycopg.Error, OSError) as e:        # OSError: a drain or status write failed — the save is on disk
             err = du.clean_error(e)
-            _mark(False, err)
+            _mark_safely(False, err)
             out = _held_reply(mid, err)
     _log({"tool": "memory_save", "tenant": tenant, "session_key": session_key,
           # FULL text, not an 80-char snippet: a warm save's text is recoverable via memory_id, but
@@ -281,10 +301,10 @@ def memory_retrieve(tenant: str, query: str, k: int = 5,
                                                query_concepts=query_concepts)
             finally:
                 conn.close()
-            _mark(True)
+            _mark_safely(True)
         except psycopg.Error as e:
             err = du.clean_error(e)
-            _mark(False, err)
+            _mark_safely(False, err)
             out = {"status": "unavailable", "results": [], "error": err, "held_count": du.counts()[0],
                    "message": UNAVAILABLE_MESSAGE}
         held, failed = du.counts()
