@@ -6,7 +6,7 @@ from slopymemory import checks
 from slopymemory.store import Store
 
 
-IDS = ["python", "package", "postgres", "model", "registry", "servers", "harnesses", "space", "logs", "secrets", "local-paths"]
+IDS = ["python", "package", "postgres", "model", "registry", "servers", "harnesses", "space", "logs", "secrets", "held", "local-paths"]
 
 
 def test_every_check_has_an_id_symptom_verify_and_fix():
@@ -428,3 +428,27 @@ def test_nothing_the_user_reads_calls_the_substrate_vendored_or_exported():
             if stale.search(line)]
     assert not hits, hits
     assert not (root / "EXPORT.txt").exists()
+
+
+def _store_dir(st):
+    return Path(st.server_env()["AM_M3_BUFFER_PATH"]).parent
+
+
+def test_held_check_reads_the_files_and_fails_while_anything_is_held_or_failed(tmp_home):
+    import json
+    st = Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system"); st.save()
+    d = _store_dir(st)
+    (d / "held").mkdir(parents=True); (d / "held-failed").mkdir()
+    (d / "held" / "00000000000000000001-a.json").write_text("{}")
+    (d / "held-failed" / "00000000000000000002-b.json").write_text(json.dumps({"error": "CheckViolation: x"}))
+    (d / "db-status.json").write_text(json.dumps({"state": "failing", "error": "OperationalError: refused",
+                                                  "since": "2026-01-01T14:02:00+00:00"}))
+    f = checks.by_id("held").run()
+    assert not f.ok and "1 save(s) held" in f.detail and "1 failed" in f.detail
+    assert "OperationalError: refused" in f.detail and "CheckViolation: x" in f.detail
+
+
+def test_held_check_is_ok_with_nothing_held(tmp_home):
+    Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system").save()
+    f = checks.by_id("held").run()
+    assert f.ok and "no save is held" in f.detail

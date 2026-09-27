@@ -244,6 +244,20 @@ slopymem scan-store <name>
 
 **Fix:** remove the memory by hand; tell the agent to save where the secret lives
 
+## held
+
+**Symptom:** a save answered `held`, or a retrieval says saves are not searchable yet
+
+**Verifies:** per store, from its files only: saves waiting in held/ for the database, saves in held-failed/ with their errors, and the database state the server last recorded
+
+**See for yourself:**
+
+```bash
+ls ~/.slopymemory/stores/*/held ~/.slopymemory/stores/*/held-failed
+```
+
+**Fix:** start Postgres (SETUP.md#postgres); held saves are written on the next tool call. A record in held-failed/ is kept with its error: fix the cause, then move the file back into held/
+
 ## local-paths
 
 **Symptom:** a leak of the author's machine into the package

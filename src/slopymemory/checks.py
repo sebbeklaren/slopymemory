@@ -319,6 +319,43 @@ def _secrets() -> Finding:
     return Finding(not unreadable, "; ".join(rows) or "no save refused as a secret in any store's invocation log")
 
 
+def _held_state(d: Path) -> tuple[list[Path], list[Path], dict]:
+    """A store's held/ and held-failed/ records and its last recorded database state — files only."""
+    held = sorted((d / "held").glob("*.json")) if (d / "held").exists() else []
+    failed = sorted((d / "held-failed").glob("*.json")) if (d / "held-failed").exists() else []
+    try:
+        status = json.loads((d / "db-status.json").read_text())
+    except (OSError, ValueError):
+        status = {}
+    return held, failed, status if isinstance(status, dict) else {}
+
+
+def _failed_error(p: Path) -> str:
+    try:
+        return str(json.loads(p.read_text()).get("error", "?"))
+    except (OSError, ValueError, AttributeError):
+        return "unreadable record"
+
+
+def _held() -> Finding:
+    """Saves waiting for the database, and saves that failed to be written, per store — from the store's files
+    only, so it answers with the server down."""
+    rows = []
+    for st in all_stores():
+        held, failed, status = _held_state(Path(st.server_env()["AM_M3_BUFFER_PATH"]).parent)
+        if not held and not failed:
+            continue
+        row = f"{st.name}: {len(held)} save(s) held"
+        if status.get("since"):
+            row += f" since {status['since']}"
+        if status.get("error"):
+            row += f" — database error: {status['error']}"
+        if failed:
+            row += f"; {len(failed)} failed: " + "; ".join(_failed_error(p) for p in failed)
+        rows.append(row)
+    return Finding(not rows, "; ".join(rows) or "no save is held or failed in any store")
+
+
 # Shapes, not names — the same three the repository's own scanner refuses. Written so that this module's own text
 # (these patterns, the grep in the check's command) is not a hit: no self-exclusion, so a leak here would show too.
 _LOCAL_SHAPES = [("a home path", re.compile(r"/home/[A-Za-z]")), ("a macOS home path", re.compile(r"/Users/[A-Za-z]")),
@@ -384,6 +421,12 @@ CHECKS: list[Check] = [
           "refused saves per store from the invocation logs (count, kinds, first/last time; the texts were never logged); "
           "existing stores can be scanned with `slopymem scan-store <name>`, which reports and never deletes",
           "slopymem scan-store <name>", "remove the memory by hand; tell the agent to save where the secret lives", _secrets),
+    Check("held", "a save answered `held`, or a retrieval says saves are not searchable yet",
+          "per store, from its files only: saves waiting in held/ for the database, saves in held-failed/ with their "
+          "errors, and the database state the server last recorded",
+          "ls ~/.slopymemory/stores/*/held ~/.slopymemory/stores/*/held-failed",
+          "start Postgres (SETUP.md#postgres); held saves are written on the next tool call. A record in held-failed/ "
+          "is kept with its error: fix the cause, then move the file back into held/", _held),
     Check("local-paths", "a leak of the author's machine into the package",
           "no file of the two installed packages (slopymemory and agent_memory) contains a home path (/home/<user>, /Users/<user>) "
           "or a private mailbox; a hit names the file and the shape",
