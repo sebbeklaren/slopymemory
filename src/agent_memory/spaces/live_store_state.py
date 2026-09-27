@@ -9,6 +9,8 @@ import os
 import uuid
 from pathlib import Path
 
+import psycopg
+
 from agent_memory.config import settings
 from agent_memory.spaces import coordinate_sources as cs
 from agent_memory.spaces.live_store import (save_memory, retrieve_memories, _memory_texts,
@@ -189,26 +191,43 @@ class LiveStore:
             return cur.fetchone() is not None
 
     def _fit_and_place(self, conn) -> dict:
-        """Fit the semantic projector on the buffered texts, then replay every buffered save through
-        _place (which places each memory's facets AND concepts too). Returns
-        {memory_id: (placed, deferred, concepts_placed)} so the triggering save() can report ITS own
-        facet/concept placement accurately."""
-        self.projector = self.fit_fn(self.embedder, [b[1] for b in self._buffer])
+        """Fit the semantic projector on the buffered texts, then replay every buffered save through _place (which
+        places each memory's facets AND concepts too) — all in one transaction. The projector is adopted, persisted
+        and the buffer file cleared only after the commit; on any failure the store stays cold with the buffer
+        whole and nothing placed, and the failure propagates. Returns {memory_id: (placed, deferred,
+        concepts_placed)} so the triggering save() can report ITS own facet/concept placement accurately."""
+        projector = self.fit_fn(self.embedder, [b[1] for b in self._buffer])
         results: dict = {}
-        pending: list = []           # supersession links, written AFTER placement (both rows must exist)
-        for mid, text, session_key, scope, ts, thread, facets, save_concepts, supersedes in self._buffer:
-            ids, placed, deferred, concepts_placed = self._place(
-                conn, mid, text, session_key, scope, ts, thread, facets, save_concepts)
-            self._note_session(session_key, thread, ids["semantic"])
-            results[mid] = (placed, deferred, concepts_placed)
-            if supersedes:
-                pending.append((mid, supersedes))
-        for mid, sup in pending:     # all buffered rows now exist -> FK targets are satisfiable
-            note_memory_supersession(conn, mid, sup)
+        sessions: list = []
+        self.projector = projector                  # _place reads it during the replay
+        try:
+            with conn.transaction():
+                pending = []                         # supersession links, written after every buffered row exists
+                for mid, text, session_key, scope, ts, thread, facets, save_concepts, supersedes in self._buffer:
+                    ids, placed, deferred, concepts_placed = self._place(
+                        conn, mid, text, session_key, scope, ts, thread, facets, save_concepts)
+                    results[mid] = (placed, deferred, concepts_placed)
+                    sessions.append((session_key, thread, ids["semantic"]))
+                    if supersedes:
+                        pending.append((mid, supersedes))
+                for mid, sup in pending:
+                    note_memory_supersession(conn, mid, sup)
+        except BaseException:
+            self.projector = None
+            raise
+        for session_key, thread, node in sessions:
+            self._note_session(session_key, thread, node)
         self._buffer = []
         cs.save_projector(self.projector, settings.m3_projector_path)
         self._wal_clear()
         return results
+
+    def retry_fit(self, conn) -> bool:
+        """A fit deferred by a database failure runs at the next tool call. True when it placed the buffer."""
+        if self.warm or len(self._buffer) < self.bootstrap_n:
+            return False
+        self._fit_and_place(conn)
+        return True
 
     def save(self, conn, text, *, session_key, now=None, scope=None, memory_id=None, thread=None,
              facets=None, save_concepts=None, supersedes=None, known_ids=None) -> dict:
@@ -258,7 +277,12 @@ class LiveStore:
             self._wal_append(mid, text, session_key, scope, now, thread, facets, save_concepts,
                              supersedes)
             if len(self._buffer) >= self.bootstrap_n:
-                results = self._fit_and_place(conn)             # writes buffered supersession links post-replay
+                try:
+                    results = self._fit_and_place(conn)         # writes buffered supersession links post-replay
+                except psycopg.Error as e:                      # cold, buffer whole: retried at the next call
+                    from agent_memory.durability import clean_error
+                    return {"status": "buffered", "warming": True, "count": len(self._buffer),
+                            "need": self.bootstrap_n, "fit_deferred": clean_error(e)}
                 out = {"status": "saved", "memory_id": mid, "warmed": True}
                 placed, deferred, concepts_placed = results.get(mid, ([], [], 0))
                 if supersedes:
