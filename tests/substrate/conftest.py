@@ -45,6 +45,20 @@ def _subprocess_env(tmp_path_factory):
     os.environ.setdefault("AM_M3_BACKGROUND_CORPUS_PATH", str(d / "background_corpus.txt"))
     os.environ.setdefault("AM_M3_BUFFER_PATH", str(d / "m3_buffer.jsonl"))
 
+@pytest.fixture(autouse=True)
+def _state_files_in_tmp(tmp_path, monkeypatch):
+    """The save path's files (pre-warm buffer, projector, held/, held-failed/, db-status.json) go to this test's temp
+    dir — never the checkout. The settings object is built at import, so the environment defaults above cannot reach
+    it; the modules that read it are patched instead. A test that patches these itself overrides this."""
+    import dataclasses
+    import agent_memory.durability as du
+    import agent_memory.spaces.live_store_state as ls
+    s = dataclasses.replace(ls.settings, m3_buffer_path=str(tmp_path / "m3_buffer.jsonl"),
+                            m3_projector_path=str(tmp_path / "m3_projector.pkl"))
+    monkeypatch.setattr(ls, "settings", s)
+    monkeypatch.setattr(du, "settings", s)
+
+
 @pytest.fixture(scope="session")
 def _db_ok():
     try:

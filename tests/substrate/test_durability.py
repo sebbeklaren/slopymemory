@@ -68,3 +68,10 @@ def test_clean_error_keeps_the_class_and_first_line_and_hides_urls_and_passwords
     out = du.clean_error(RuntimeError(msg))
     assert out.startswith("RuntimeError: ") and "\n" not in out
     assert "pw@" not in out and "s3cret" not in out and "a b c" not in out
+
+
+def test_substrate_tests_never_write_state_into_the_checkout():
+    """Every substrate test runs with the save path's files in a temporary directory: a held record or a buffer
+    left in the working tree would be read by the next run's drain, and could be committed."""
+    from pathlib import Path
+    assert not du.state_dir().resolve().is_relative_to(Path(__file__).resolve().parents[2])

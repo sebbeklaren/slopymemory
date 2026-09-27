@@ -173,6 +173,7 @@ def _fake_store_path(monkeypatch, server):
     """A save that reaches the store: the store and the connection are fakes, so only the guard's verdict matters."""
     calls = []
     monkeypatch.setattr(server, "_connect", lambda: type("C", (), {"close": lambda self: None})())
+    monkeypatch.setattr(server, "_store", type("S", (), {"retry_fit": lambda self, conn: False})())
     monkeypatch.setattr(server.handlers, "memory_save", lambda *a, **k: (calls.append(a), {"status": "saved", "memory_id": "m1"})[1])
     return calls
 
