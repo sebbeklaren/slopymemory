@@ -68,6 +68,62 @@ def _mark(ok: bool, err: str | None = None) -> None:
     _state["failing"] = not ok
 
 
+_recovered: dict | None = None              # the last drain's outcome, attached once to the next reply
+
+UNAVAILABLE_MESSAGE = ("The memory database is not reachable; nothing can be retrieved. Tell the user. "
+                       "Fix: SETUP.md#postgres. To report it: slopymem doctor --report")
+
+
+def _drain(conn, skip: Path | None = None) -> None:
+    """Held records in order, each through the same save path with its original id, time, session and fields. An
+    already-committed id is released without being placed again; a connection error stops the drain (the rest stay,
+    in order); any other failure moves that record to held-failed/ with its error and the drain goes on."""
+    global _recovered
+    written, failed, errors = 0, 0, []
+
+    def keep(path, err):
+        nonlocal failed
+        du.fail(path, err); failed += 1; errors.append(err)
+
+    for path in du.held_paths():
+        if path == skip:
+            continue
+        try:
+            rec = du.load(path)
+        except (OSError, ValueError) as e:
+            keep(path, du.clean_error(e)); continue
+        if LiveStore._has_row(conn, rec["memory_id"]):
+            du.release(path); continue
+        try:
+            out = handlers.memory_save(conn, _store, "default", rec["session_key"], rec["text"], rec["scope"],
+                                       rec["thread"], rec["facets"], rec["save_concepts"], rec["supersedes"],
+                                       memory_id=rec["memory_id"], now=datetime.fromisoformat(rec["now"]),
+                                       known_ids=du.held_ids() - {rec["memory_id"]})
+        except psycopg.OperationalError:
+            raise
+        except Exception as e:                      # noqa: BLE001 — every other failure is kept, never lost
+            keep(path, du.clean_error(e)); continue
+        if out.get("status") in ("error", "noop"):
+            keep(path, out.get("note", out.get("status"))); continue
+        du.release(path); written += 1
+    if written or failed:
+        _recovered = {"written": written, "failed": failed, "failed_errors": errors}
+
+
+def _prepare(conn, skip: Path | None = None) -> None:
+    """At the start of every tool call: drain what is held, then run a pre-warm fit a failure deferred."""
+    if du.held_paths():
+        _drain(conn, skip)
+    _store.retry_fit(conn)
+
+
+def _with_recovered(out: dict) -> dict:
+    global _recovered
+    if _recovered is not None:
+        out, _recovered = {**out, "recovered": _recovered}, None
+    return out
+
+
 def _held_reply(memory_id: str, err: str) -> dict:
     return {"status": "held", "memory_id": memory_id, "held_count": du.counts()[0], "error": err,
             "message": HELD_MESSAGE}
@@ -154,6 +210,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
         try:
             conn = _connect()
             try:
+                _prepare(conn, skip=path)          # earlier held saves first: the order they were made in
                 out = handlers.memory_save(conn, _store, tenant, session_key, text, scope, thread, facets,
                                            save_concepts, supersedes, memory_id=mid, now=now,
                                            known_ids=du.held_ids() - {mid})
@@ -161,6 +218,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
                 conn.close()
             du.release(path)
             _mark(True)
+            out = _with_recovered(out)
         except psycopg.Error as e:
             err = du.clean_error(e)
             _mark(False, err)
@@ -212,12 +270,22 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
 def memory_retrieve(tenant: str, query: str, k: int = 5,
                     query_facets: dict[str, str] | None = None,
                     query_concepts: list | None = None) -> dict:
-    conn = _connect()
-    try:
-        out = handlers.memory_retrieve(conn, _store, tenant, query, k, query_facets=query_facets,
-                                       query_concepts=query_concepts)
-    finally:
-        conn.close()
+    with _lock:
+        try:
+            conn = _connect()
+            try:
+                _prepare(conn)
+                out = handlers.memory_retrieve(conn, _store, tenant, query, k, query_facets=query_facets,
+                                               query_concepts=query_concepts)
+            finally:
+                conn.close()
+            _mark(True)
+        except psycopg.Error as e:
+            err = du.clean_error(e)
+            _mark(False, err)
+            out = {"status": "unavailable", "results": [], "error": err, "held_count": du.counts()[0],
+                   "message": UNAVAILABLE_MESSAGE}
+        out = _with_recovered(out)
     # THE IRRECOVERABLE HALF of the logged record: query_concepts / query_facets seed retrieval
     # and are then discarded — unlike the save side they are persisted NOWHERE. Logging len()/sorted()
     # instead of the values would destroy the (question -> extracted concepts) pair on every call —
@@ -257,7 +325,12 @@ def main() -> None:
     _store = LiveStore(_embedder)
     _store.warmup()
     try:
-        _connect().close()
+        conn = _connect()
+        try:
+            with _lock:
+                _prepare(conn)
+        finally:
+            conn.close()
     except psycopg.Error as e:
         err = du.clean_error(e)
         _mark(False, err)
