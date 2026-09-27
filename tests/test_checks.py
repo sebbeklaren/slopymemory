@@ -452,3 +452,34 @@ def test_held_check_is_ok_with_nothing_held(tmp_home):
     Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system").save()
     f = checks.by_id("held").run()
     assert f.ok and "no save is held" in f.detail
+
+
+def test_report_carries_state_and_errors_and_never_memory_text(tmp_home):
+    import json
+    st = Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system"); st.save()
+    d = _store_dir(st)
+    (d / "held").mkdir(parents=True); (d / "held-failed").mkdir()
+    canary = "CANARY-TEXT-" + "7f3a"
+    (d / "held" / "00000000000000000001-a.json").write_text(json.dumps({"text": canary}))
+    (d / "held-failed" / "00000000000000000002-b.json").write_text(
+        json.dumps({"record": {"text": canary}, "error": "CheckViolation: x"}))
+    (d / "db-status.json").write_text(json.dumps({"state": "failing", "error": "OperationalError: refused"}))
+    st.log_file().parent.mkdir(parents=True, exist_ok=True)
+    st.log_file().write_text("starting\nERROR: something broke\n")
+    out = checks.report()
+    assert "state failing" in out and "held 1" in out and "failed 1" in out
+    assert "OperationalError: refused" in out and "CheckViolation: x" in out and "ERROR: something broke" in out
+    assert canary not in out and "Open an issue" in out
+
+
+def test_report_refuses_when_a_secret_shaped_value_would_be_printed(tmp_home, monkeypatch):
+    import pytest
+    monkeypatch.setattr(checks, "_report_lines", lambda: ["token ghp_" + "c" * 36])
+    with pytest.raises(checks.ReportRefused):
+        checks.report()
+
+
+def test_doctor_report_prints_the_block_and_exits_zero(tmp_home, capsys):
+    from slopymemory import cli
+    assert cli.main(["doctor", "--report"]) == 0
+    assert "Open an issue" in capsys.readouterr().out

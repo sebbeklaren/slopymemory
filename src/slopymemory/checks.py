@@ -356,6 +356,46 @@ def _held() -> Finding:
     return Finding(not rows, "; ".join(rows) or "no save is held or failed in any store")
 
 
+class ReportRefused(Exception):
+    pass
+
+
+def _report_lines() -> list[str]:
+    """Versions, and per store: its state, held and failed counts, the failed records' errors and the last error
+    lines of its server log. Built from counts, states and error strings only — never a record's text, concepts or
+    facets, and the stored errors were cleaned of database URLs and passwords when they were written."""
+    import platform
+    lines = [f"slopymemory {md.version('slopymemory')} · Python {platform.python_version()} · {platform.platform()}"]
+    for st in all_stores():
+        held, failed, status = _held_state(Path(st.server_env()["AM_M3_BUFFER_PATH"]).parent)
+        row = (f"store {st.name} ({st.dialect}, {st.postgres} Postgres): state {status.get('state', 'unknown')}, "
+               f"held {len(held)}, failed {len(failed)}")
+        if status.get("error"):
+            row += f", error {status['error']}"
+        lines.append(row)
+        lines += [f"  failed: {_failed_error(p)}" for p in failed]
+        log = st.log_file()
+        if log.exists():
+            errs = [line.rstrip() for line in log.read_text(errors="replace").splitlines()
+                    if re.search(r"error|exception|traceback", line, re.I)][-40:]
+            lines += [f"  log: {line}" for line in errs]
+    return lines
+
+
+def report() -> str:
+    """One block to paste into an issue. Nothing is sent anywhere. Passed through the secrets guard first: a hit
+    refuses the whole report — never redacted, per the guard's standing rule."""
+    from agent_memory.guard import find_secret
+    text = "\n".join(["```", *_report_lines(), "```",
+                      "Open an issue on the project's GitHub page (the repository the README clones from) and paste "
+                      "the block above."])
+    hit = find_secret(text)
+    if hit is not None:
+        raise ReportRefused(f"the report would contain what looks like a {hit.kind}; nothing printed — remove it from "
+                            "the store's log or held-failed/ record and run it again — see SETUP.md#held")
+    return text
+
+
 # Shapes, not names — the same three the repository's own scanner refuses. Written so that this module's own text
 # (these patterns, the grep in the check's command) is not a hit: no self-exclusion, so a leak here would show too.
 _LOCAL_SHAPES = [("a home path", re.compile(r"/home/[A-Za-z]")), ("a macOS home path", re.compile(r"/Users/[A-Za-z]")),

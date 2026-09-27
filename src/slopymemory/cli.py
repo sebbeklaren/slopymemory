@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 import psycopg
 from . import embedded_pg, harness_memory as hm, install_steps, paths, server as srv
+from . import checks
 from .checks import run_all
 from .embedded_pg import EmbeddedPostgres
 from . import harnesses
@@ -202,6 +203,12 @@ def cmd_remove(a) -> int:
 
 
 def cmd_doctor(a) -> int:
+    if a.report:
+        try:
+            print(checks.report())
+        except checks.ReportRefused as e:
+            return fail(str(e))
+        return 0
     return run_all()
 
 
@@ -557,6 +564,7 @@ def build() -> argparse.ArgumentParser:
     s = sub.add_parser("stop"); s.add_argument("store", nargs="?"); s.add_argument("--all", action="store_true"); s.set_defaults(fn=cmd_stop)
     s = sub.add_parser("remove"); s.add_argument("store"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_remove)
     s = sub.add_parser("doctor"); s.set_defaults(fn=cmd_doctor)
+    s.add_argument("--report", action="store_true", help="print a block to paste into an issue (nothing is sent)")
     s = sub.add_parser("scan-store", help="report memories that look like secrets (never deletes)"); s.add_argument("store"); s.set_defaults(fn=cmd_scan_store)
     s = sub.add_parser("register"); s.add_argument("harness", nargs="?"); s.add_argument("--detected", action="store_true", help="every harness found on this machine")
     s.add_argument("--yes", action="store_true")
