@@ -179,7 +179,8 @@ def _session_key_from_context(ctx: "Context | None") -> str:
         "explicit confirmation — never infer supersession yourself. "
         "Never save passwords, keys or tokens: a save that contains one is refused; save where the "
         "secret lives instead. "
-        "Returns {status: saved|noop|buffered|refused}."
+        "Returns {status: saved|noop|buffered|refused|held}. "
+        "`held` or `unavailable` means the memory database is down — tell the user and show the error."
     )
 )
 def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | None = None,
@@ -264,7 +265,8 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
         "— surface both candidates to the user to resolve; NEVER silently pick one. "
         "A result may also carry related: memories strongly tied to it (the same thread, or several shared "
         "concepts) that the query did not reach on its own — conventions and decisions that belong with it. "
-        "Read them as part of the result; they are extra, never a replacement for one."
+        "Read them as part of the result; they are extra, never a replacement for one. "
+        "`held` or `unavailable` means the memory database is down — tell the user and show the error."
     )
 )
 def memory_retrieve(tenant: str, query: str, k: int = 5,
@@ -285,6 +287,11 @@ def memory_retrieve(tenant: str, query: str, k: int = 5,
             _mark(False, err)
             out = {"status": "unavailable", "results": [], "error": err, "held_count": du.counts()[0],
                    "message": UNAVAILABLE_MESSAGE}
+        held, failed = du.counts()
+        if out["status"] != "unavailable" and (held or failed):
+            out["incomplete"] = {"held": held, "failed": failed}
+            out["incomplete_message"] = (f"{held} saved memories are waiting to be written and {failed} failed to be "
+                                         "written; they are not searchable yet — see SETUP.md#held")
         out = _with_recovered(out)
     # THE IRRECOVERABLE HALF of the logged record: query_concepts / query_facets seed retrieval
     # and are then discarded — unlike the save side they are persisted NOWHERE. Logging len()/sorted()
