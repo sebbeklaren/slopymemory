@@ -2,25 +2,27 @@
 # slopymemory installer — Linux, no root. Six announced, idempotent steps; a second run repairs whatever is
 # missing and changes nothing that is already right. Nothing here edits your shell's rc files.
 #
-#   ./install.sh [--yes] [--postgres system|embedded] [--no-harness]
+#   ./install.sh [--yes] [--postgres system|embedded] [--no-harness] [--no-update-check]
 #
 #   --yes         answer every question with yes (the download size is still printed first)
 #   --postgres    which Postgres new stores go on; default: the system one when it can provision, else embedded
 #   --no-harness  do not register the launcher in any coding harness (later: slopymem register <harness>)
+#   --no-update-check  do not check once a day whether a newer slopymemory is out (later: slopymem update --check on)
 #
 # Everything lands under $SLOPYMEM_HOME (default ~/.slopymemory): the venv, the stores, the embedded Postgres.
 set -euo pipefail
 cd "$(dirname "$0")"
 HOME_DIR="${SLOPYMEM_HOME:-$HOME/.slopymemory}"
 VENV="$HOME_DIR/venv"
-YES=0; PG=""; HARNESS=1
+YES=0; PG=""; HARNESS=1; CHECK=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --yes) YES=1;;
     --postgres=*) PG="${1#*=}";;
     --postgres) [ $# -ge 2 ] || { echo "--postgres needs a value: system or embedded"; exit 2; }; shift; PG="$1";;
     --no-harness) HARNESS=0;;
-    -h|--help) sed -n '2,11p' "$0"; exit 0;;
+    --no-update-check) CHECK=no;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0;;
     *) echo "unknown flag $1 (try --help)"; exit 2;;
   esac
   shift
@@ -67,6 +69,22 @@ UV_PROJECT_ENVIRONMENT="$VENV" uv sync --frozen --no-dev --no-editable --reinsta
   || { echo "uv sync failed (its message is above); re-run to resume — see SETUP.md#package"; exit 1; }
 "$VENV/bin/python" -c "import slopymemory, agent_memory; print('package ok')" \
   || { echo "the package does not import from $VENV — see SETUP.md#package"; exit 1; }
+# The daily update check: asked once, the answer kept across re-runs (slopymem update --check on|off changes it). The
+# only thing it ever sends is `git ls-remote` to this clone's own remote.
+if [ -z "$CHECK" ]; then
+  CHECK="$("$VENV/bin/python" -c "from slopymemory import updates; i = updates.read_install(); print('' if i is None or 'update_check' not in i else ('yes' if i['update_check'] else 'no'))" 2>/dev/null || true)"
+fi
+if [ -z "$CHECK" ]; then
+  if [ "$YES" = 1 ]; then CHECK=yes; else
+    printf "Check once a day whether a newer slopymemory is out? It runs git ls-remote against this clone's remote; nothing about you is sent. [Y/n] "
+    ans=""; read -r ans || true
+    case "$ans" in [nN]*) CHECK=no;; *) CHECK=yes;; esac
+    echo
+  fi
+fi
+FLAGS=""; [ "$HARNESS" = 0 ] && FLAGS="--no-harness"; [ -n "$PG" ] && FLAGS="${FLAGS:+$FLAGS }--postgres=$PG"
+"$VENV/bin/slopymem" record-install --source "$PWD" --flags="$FLAGS" --update-check "$CHECK" \
+  || { echo "could not write the install record — see SETUP.md#update"; exit 1; }
 
 say "3/6 Postgres"
 # probes the system Postgres and offers it; else the embedded one; verifies either with a scratch database

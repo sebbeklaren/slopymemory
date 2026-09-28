@@ -140,3 +140,27 @@ def test_ss_missing_refuses_before_step_1_fetches_nothing_and_names_iproute2(tmp
     assert "ss not found" in out and "iproute2" in out and "SETUP.md#servers" in out
     assert "1/6" not in out                                # step 1 never announced
     assert log.read_text() == ""                            # neither the fake uv nor the fake curl was ever invoked
+
+
+def test_the_install_is_recorded_with_the_daily_check_on_by_default(fakes):
+    rc, out, calls = fakes("--yes")
+    assert rc == 0, out
+    assert f"record-install --source {ROOT} --flags= --update-check yes" in calls
+
+
+def test_no_update_check_and_the_install_flags_are_recorded(fakes):
+    rc, out, calls = fakes("--yes", "--postgres=embedded", "--no-harness", "--no-update-check", doctor_text=HARNESS_FAIL)
+    assert rc == 0, out
+    assert "record-install --source" in calls and "--update-check no" in calls
+    assert "--flags=--no-harness --postgres=embedded" in calls
+
+
+def test_the_question_is_asked_without_yes_and_a_closed_stdin_answers_the_default(fakes):
+    rc, out, calls = fakes()
+    assert "Check once a day whether a newer slopymemory is out?" in out
+    assert "--update-check yes" in calls
+
+
+def test_help_lists_the_update_check_flag():
+    out = subprocess.run(["bash", str(SCRIPT), "--help"], capture_output=True, text=True).stdout
+    assert "--no-update-check" in out
