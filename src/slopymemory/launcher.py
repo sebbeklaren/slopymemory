@@ -37,6 +37,16 @@ INIT_DESCRIPTION = (
     "postgres: 'system' or 'embedded' (default: the one named below).")
 
 
+DESCRIPTION_CAP = 2048                  # Claude Code cuts a longer tool description from the end, silently
+_CUT_MARK = "… (cut to fit the 2,048-character limit — run `slopymem doctor`)"
+
+
+def fit_description(text: str) -> str:
+    """memory_init's description carries a machine-specific sentence (which Postgres, or why none can be used) whose
+    length we do not control; cut it ourselves, with a mark, rather than let a harness cut it without one."""
+    return text if len(text) <= DESCRIPTION_CAP else text[:DESCRIPTION_CAP - len(_CUT_MARK)] + _CUT_MARK
+
+
 TEST_HOOKS = ("SLOPYMEM_FAKE_PG", "SLOPYMEM_CWD", "SLOPYMEM_SERVER_CMD")   # env-driven fakes the tests inject
 
 
@@ -307,7 +317,7 @@ class Launcher:
                     description += f" NOTE: this machine cannot provision a store yet — {e}"
                 except Exception as e:                    # a check that crashed rather than refused
                     description += f" NOTE: this machine cannot provision a store yet — {TEMPLATE_HINT} (check failed: {e})"
-                return [types.Tool(name="memory_init", description=description, inputSchema={
+                return [types.Tool(name="memory_init", description=fit_description(description), inputSchema={
                     "type": "object",
                     "properties": {"name": {"type": ["string", "null"]},
                                    "dialect": {"type": "string", "enum": ["coding", "design"], "default": "coding"},

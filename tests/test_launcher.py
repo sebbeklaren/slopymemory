@@ -475,3 +475,31 @@ async def test_no_notice_when_the_check_is_off(tmp_home, tmp_path, free_port):
                 assert [c.text for c in (await s.call_tool("memory_ping", {"text": "a"})).content] == ["pong:a"]
     finally:
         server.stop(Store.load("repo"))
+
+
+async def test_memory_inits_reply_never_carries_the_notice_and_the_next_store_call_does(tmp_home, tmp_path):
+    import json, time
+    from slopymemory import updates
+    repo = tmp_path / "fresh"; repo.mkdir()
+    updates.write_install(tmp_path, [], True, None)
+    updates.cache_file().write_text(json.dumps({"checked": time.time(), "latest": "999.0.0", "error": None}))
+    try:
+        async with stdio_client(launcher_params(repo, tmp_home, SLOPYMEM_FAKE_PG="1")) as (rd, wr):
+            async with ClientSession(rd, wr) as s:
+                await s.initialize()
+                init = await s.call_tool("memory_init", {"name": "fresh", "dialect": "coding"})
+                assert all("is available" not in c.text for c in init.content)
+                first = await s.call_tool("memory_ping", {"text": "a"})
+                assert "999.0.0 is available" in first.content[-1].text
+    finally:
+        if Store.exists("fresh"):
+            server.stop(Store.load("fresh"))
+
+
+def test_a_long_init_description_is_cut_to_the_cap_with_a_mark_not_silently():
+    from slopymemory.launcher import fit_description
+    short = "x" * 100
+    assert fit_description(short) == short
+    long = "y" * 5000
+    out = fit_description(long)
+    assert len(out) <= 2048 and out.endswith("… (cut to fit the 2,048-character limit — run `slopymem doctor`)")
