@@ -69,26 +69,35 @@ class SessionLost(Exception):
     """The upstream MCP session is gone: the store's server restarted or crashed under it."""
 
 
-# The transport's own error for a POST the server answered with 404: the server no longer knows the
-# session id, i.e. it is a new process on the same port. Observed with the fake server killed and started
-# again under an open session — every call raised MCPError('Session terminated') with this code.
-_SESSION_TERMINATED = 32600
-# The same state as the v2 SDK names it: the server answers 404 with a JSON-RPC error (INVALID_REQUEST, -32600).
+# The v2 SDK's error for a POST the server answered with 404: the server no longer knows the session id, i.e. it
+# is a new process on the same port — a JSON-RPC INVALID_REQUEST with "Session not found" from the server's body,
+# or "Session terminated" when the 404 carries none.
 _SESSION_NOT_FOUND = -32600
+# The SDK's answer to a call whose server went away while the call waited on it (the response stream ended, or
+# resuming it failed). The server may have acted on the call before it went, so it is never retried.
+_DROPPED = ("SSE stream ended without a response", "SSE stream ended and reconnection attempts were exhausted")
+
+
+class CallDropped(Exception):
+    """The server went away with this call in flight: the call may or may not have taken effect."""
 
 
 def _lost(e: BaseException) -> bool:
     """Does this exception mean the upstream session is gone? Observed with the fake server killed
-    mid-session: a new server on the same port → MCPError 'Session terminated'; no server on the port →
+    mid-session: a new server on the same port → MCPError 'Session not found'; no server on the port →
     the transport's task group dies on the failed POST and every LATER call raises anyio's
     ClosedResourceError (the first one hangs instead — `_on` handles that). BrokenResourceError and
     CONNECTION_CLOSED are the SDK's other two names for the same state: the reader side gone, and the
     read stream closed under a pending request."""
     if isinstance(e, MCPError):        # both are the SDK's own synthetic errors: matched by code AND text, so an
         return (e.code, e.message) in (                  # upstream's genuine error with a shared code never reconnects
-            (_SESSION_TERMINATED, "Session terminated"), (_SESSION_NOT_FOUND, "Session terminated"),
-            (_SESSION_NOT_FOUND, "Session not found"), (types.CONNECTION_CLOSED, "Connection closed"))
+            (_SESSION_NOT_FOUND, "Session terminated"), (_SESSION_NOT_FOUND, "Session not found"),
+            (types.CONNECTION_CLOSED, "Connection closed"))
     return isinstance(e, (anyio.ClosedResourceError, anyio.BrokenResourceError))
+
+
+def _dropped(e: BaseException) -> bool:
+    return isinstance(e, MCPError) and e.code == types.CONNECTION_CLOSED and e.message in _DROPPED
 
 
 def _text(e: BaseException) -> str:
@@ -273,6 +282,9 @@ class Launcher:
                 return await self._on(self.upstream, fn)
             except SessionLost as again:
                 raise RuntimeError(self._unreachable(f"server session lost again right after reconnecting ({again})")) from again
+        except CallDropped as e:            # not retried: the next call finds the loss and reconnects
+            raise RuntimeError(self._unreachable(f"the server went away during this call, which was not retried "
+                                                 f"and may or may not have taken effect ({e})")) from e
 
     async def _on(self, session: ClientSession, fn: Callable[[ClientSession], Awaitable[T]]) -> T:
         """Run one call on the session while watching the connect task that holds its connection. When the
@@ -297,6 +309,8 @@ class Launcher:
         except Exception as e:
             if _lost(e):
                 raise SessionLost(_text(e)) from e
+            if _dropped(e):
+                raise CallDropped(_text(e)) from e
             raise
 
     async def _on_list_tools(self, ctx, params) -> types.ListToolsResult:

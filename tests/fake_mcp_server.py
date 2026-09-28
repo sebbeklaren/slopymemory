@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from pathlib import Path
 from mcp.server.mcpserver import Context, MCPServer
 
@@ -18,6 +19,13 @@ mcp = MCPServer("fake-memory")
 def memory_ping(text: str) -> str:
     """Echo, prefixed — proves a call went through the bridge."""
     return f"pong:{text}"
+
+
+@mcp.tool()
+def memory_slow(seconds: float) -> str:
+    """Answers after `seconds` — a call still in flight when the server goes away."""
+    time.sleep(seconds)
+    return "slow:done"
 
 
 @mcp.tool()

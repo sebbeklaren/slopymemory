@@ -115,7 +115,7 @@ def test_session_key_from_context_falls_back_to_session_identity():
     sess = object()
 
     class _RC:
-        request = None        # no usable header -> fall back to the per-connection ServerSession identity
+        request = None        # no usable header -> fall back to the request's ServerSession identity
 
     class _Ctx:
         request_context = _RC()
@@ -148,3 +148,19 @@ def test_server_ensure_schema_creates_m3_tables_and_spaces(conn):
         assert cur.fetchone()[0] is not None    # the fix: boot-ensure recreated the m3 schema
         cur.execute("SELECT count(*) FROM m3_space")
         assert cur.fetchone()[0] > 0            # and re-seeded the spaces that m3_node.space_id references
+
+
+def test_the_server_never_closes_an_idle_session(monkeypatch):
+    """The v2 SDK ends a session after 30 idle minutes by default; the launcher's session then reconnects with a
+    new id, and one harness conversation would be split across co-occurrence session keys. Off, as in v1."""
+    import psycopg
+    from agent_memory.mcp import server as s
+    seen = {}
+    monkeypatch.setattr(s, "NomicEmbedder", lambda: None)
+    monkeypatch.setattr(s, "LiveStore", lambda e: type("L", (), {"warmup": lambda self: None})())
+    monkeypatch.setattr(s, "_connect", lambda: (_ for _ in ()).throw(psycopg.OperationalError("down")))
+    monkeypatch.setattr(s, "_mark", lambda *a: None)
+    monkeypatch.setattr(s.mcp, "run", lambda **kw: seen.update(kw))
+    s.main()
+    assert seen["transport"] == "streamable-http"
+    assert "session_idle_timeout" in seen and seen["session_idle_timeout"] is None

@@ -8,8 +8,10 @@ restart each running store with `slopymem stop <name>` and `slopymem start <name
 Update with `slopymem update` (the MCP library changes underneath), then restart your stores:
 `slopymem stop <name>` then `slopymem start <name>`.
 
-- Built on version 2 of the MCP Python SDK and its newest protocol. Harnesses that speak the earlier protocol versions
-  still connect; Claude Code was checked end to end.
+- Built on version 2 of the MCP Python SDK. Harnesses that speak the earlier protocol versions still connect;
+  Claude Code was checked end to end.
+- A call in flight when its store's server goes away now fails at once, naming the store and its log, and is not
+  retried (a save may already have landed); the next call reconnects.
 - The store server now answers calls from worker threads; one lock keeps saves, the held-save drain and session
   wiring in order, as before.
 

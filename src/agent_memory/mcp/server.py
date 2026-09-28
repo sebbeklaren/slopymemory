@@ -162,12 +162,16 @@ def _held_reply(memory_id: str, err: str, down: bool = True) -> dict:
             "message": HELD_MESSAGE if down else REJECTED_MESSAGE}
 
 
+_log_lock = threading.Lock()     # tools run in worker threads: one record is one whole line, however long
+
+
 def _log(record: dict) -> None:
     record["t"] = time.time()
+    line = json.dumps(record) + "\n"
     path = Path(settings.mcp_invocation_log)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as f:
-        f.write(json.dumps(record) + "\n")
+    with _log_lock, path.open("a") as f:
+        f.write(line)
 
 
 def _session_key_from_context(ctx: "Context | None") -> str:
@@ -175,8 +179,8 @@ def _session_key_from_context(ctx: "Context | None") -> str:
     infrastructure, never agent-supplied). A coding harness typically opens one MCP session per
     run (connected once at startup, reused), so the Mcp-Session-Id is stable per conversation/run and
     fresh per run. Primary: the `mcp-session-id` request header (the client sends it on every
-    post-initialize call). Fallback: the per-connection ServerSession identity (stable within one
-    MCP session). NOTE (production follow-up): the LiveStore's in-memory {session_key: [nodes]} map
+    post-initialize call). Fallback, for a client that sends no session id: the request's ServerSession
+    identity — in the v2 SDK a new object per request, so such a client's saves get no co-occurrence. NOTE (production follow-up): the LiveStore's in-memory {session_key: [nodes]} map
     grows one entry per run with no cleanup — fine at this scale; a long-lived deployment should evict on
     MCP-session-close. The co-occurrence EDGE lives in the DB (spawned at save-time), so retrieval
     needs no session key and cross-session reach is unaffected by eviction."""
@@ -383,7 +387,8 @@ def main() -> None:
         _mark(False, err)
         print(f"memory server: the database is not reachable at start ({err}); saves are held until it answers "
               "— see SETUP.md#postgres", flush=True)
-    mcp.run(transport="streamable-http", host=settings.mcp_host, port=settings.mcp_port)
+    # session_idle_timeout=None: v1 never closed an idle session, and the Mcp-Session-Id is the co-occurrence key.
+    mcp.run(transport="streamable-http", host=settings.mcp_host, port=settings.mcp_port, session_idle_timeout=None)
 
 
 if __name__ == "__main__":

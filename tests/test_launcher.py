@@ -31,7 +31,7 @@ async def test_bridges_to_the_stores_server_starting_it_on_demand(tmp_home, tmp_
                     from slopymemory.usage_rules import USAGE_RULES
                     assert init.instructions == USAGE_RULES    # store mode sends the same rules
                     names = [t.name for t in (await s.list_tools()).tools]
-                    assert names == ["memory_ping", "memory_session"]
+                    assert names == ["memory_ping", "memory_slow", "memory_session"]
                     res = await s.call_tool("memory_ping", {"text": "hi"})
                     assert res.content[0].text == "pong:hi"
         assert server.probe(free_port), "the server outlives the session"
@@ -66,7 +66,7 @@ async def test_init_mode_offers_memory_init_then_switches_to_the_store(tmp_home,
                 res = await s.call_tool("memory_init", {"name": "fresh", "dialect": "coding"})
                 assert "created store fresh" in res.content[0].text
                 names = [t.name for t in (await s.list_tools()).tools]
-                assert names == ["memory_ping", "memory_session"]
+                assert names == ["memory_ping", "memory_slow", "memory_session"]
         assert Registry.load().resolve(repo) == "fresh"
         # The launcher must advertise tools.listChanged=True at initialize: memory_init sends exactly this
         # notification, and a harness told the list is static may ignore it.
@@ -157,7 +157,7 @@ async def test_memory_init_on_the_embedded_postgres_starts_it_and_creates_the_da
                 assert not res.is_error, res.content[0].text
                 assert "created store emb" in res.content[0].text and "embedded Postgres" in res.content[0].text
                 names = [t.name for t in (await s.list_tools()).tools]
-                assert names == ["memory_ping", "memory_session"]
+                assert names == ["memory_ping", "memory_slow", "memory_session"]
         st = Store.load("emb")
         assert st.postgres == "embedded" and st.server_env()["DATABASE_URL"].startswith(f"host='{tmp_home / 'pg'}' ")
         assert epg.is_running() and epg.database_exists("emb_memory")
@@ -303,7 +303,7 @@ async def test_a_server_restarted_under_the_session_is_reconnected_on_the_next_c
                     assert not res.is_error, res.content[0].text
                     assert res.content[0].text == "pong:again"
                     assert await _session_seen_by_the_server(s) != first
-                    assert [t.name for t in (await s.list_tools()).tools] == ["memory_ping", "memory_session"]
+                    assert [t.name for t in (await s.list_tools()).tools] == ["memory_ping", "memory_slow", "memory_session"]
         assert len(_reconnect_lines(errlog)) == 1, errlog.read_text()
         assert "store repo" in _reconnect_lines(errlog)[0]
     finally:
@@ -329,6 +329,32 @@ async def test_a_server_crashed_under_the_session_is_restarted_and_reconnected_o
                     assert res.content[0].text == "pong:two"
         assert server.probe(store.port), "the reconnect started the server again"
         assert len(_reconnect_lines(errlog)) == 1, errlog.read_text()
+    finally:
+        server.stop(store)
+
+
+async def test_a_server_gone_under_a_call_in_flight_fails_that_call_by_name_unretried_and_the_next_is_served(
+        tmp_home, tmp_path, free_port, monkeypatch):
+    """The server stops while a call waits on it: the SDK answers that call with 'SSE stream ended without a
+    response'. The harness is told which store, where its log is and that the call was not retried (a save may
+    already have landed, so a retry could store it twice); the next call reconnects and is served."""
+    repo, store = _linked_store(tmp_path, free_port)
+    monkeypatch.setattr(server, "server_command", lambda s: [sys.executable, FAKE])
+    try:
+        async with stdio_client(launcher_params(repo, tmp_home), errlog=open(os.devnull, "w")) as (rd, wr):
+            async with ClientSession(rd, wr) as s:
+                await s.initialize()
+                await _session_seen_by_the_server(s)
+                slow = asyncio.ensure_future(s.call_tool("memory_slow", {"seconds": 5}))
+                await asyncio.sleep(1)
+                assert server.stop(store)
+                server.ensure_up(store)
+                res = await asyncio.wait_for(slow, 30)
+                assert res.is_error
+                msg = res.content[0].text
+                assert "store repo" in msg and "SETUP.md#servers" in msg and "not retried" in msg, msg
+                res = await asyncio.wait_for(s.call_tool("memory_ping", {"text": "next"}), 30)
+                assert not res.is_error and res.content[0].text == "pong:next", res.content[0].text
     finally:
         server.stop(store)
 
@@ -378,7 +404,7 @@ async def test_a_healthy_session_makes_no_reconnect_attempt(tmp_home, tmp_path, 
                     await s.initialize()
                     first = await _session_seen_by_the_server(s)
                     assert (await s.call_tool("memory_ping", {"text": "one"})).content[0].text == "pong:one"
-                    assert [t.name for t in (await s.list_tools()).tools] == ["memory_ping", "memory_session"]
+                    assert [t.name for t in (await s.list_tools()).tools] == ["memory_ping", "memory_slow", "memory_session"]
                     assert await _session_seen_by_the_server(s) == first
         assert _reconnect_lines(errlog) == [], errlog.read_text()
     finally:
