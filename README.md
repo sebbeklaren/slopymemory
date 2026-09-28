@@ -144,6 +144,22 @@ instructions also tell the agent never to save passwords, keys or tokens and to 
 instead. `slopymem scan-store <name>` reports look-alikes already sitting in a store, without deleting
 them.
 
+## Updating
+
+```bash
+slopymem update
+```
+
+It pulls the clone you installed from, shows what changed (from `CHANGELOG.md`), re-runs `./install.sh` with the
+options you installed with, and offers to restart each running store — a store you do not restart keeps the old code
+until `slopymem stop <name>` and `slopymem start <name>`. It refuses when the clone has local changes, and nothing ever
+updates on its own.
+
+At install you were asked whether to check once a day for a newer version. The check is `git ls-remote` against your
+clone's remote and sends nothing else; when a newer version is out, `slopymem doctor` says so and your agent is told
+once per session. Turn it off or on with `slopymem update --check off` / `--check on`. An install from before 0.4 has
+no install record: update it by `git pull` in your clone and `./install.sh`.
+
 ## Troubleshooting
 
 Something not working? Ask your agent to read `SETUP.md` — every failure message names the section
