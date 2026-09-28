@@ -77,3 +77,35 @@ def test_the_compatibility_page_names_every_harness_the_contracts_cover():
     page = (Path(__file__).parent.parent / "docs" / "COMPATIBILITY.md").read_text()
     for name in ("Claude Code", "Codex", "Harnesses configured by hand", "MCP Python SDK", "SLOPYMEM_CONTRACT=1", "compat_check.py"):
         assert name in page
+
+
+def test_contracts_that_could_not_run_are_a_failure_not_a_pass():
+    res = cc.run_contracts(installed=["claude-code"], run=lambda cmd, env: (2, "", "No module named pytest\n"))
+    assert res == {"claude-code": "could not run: No module named pytest"}
+
+
+def test_an_installed_harness_with_no_result_is_a_failure():
+    out = "PASSED tests/contract/x.py::test_y[codex]\n"
+    res = cc.run_contracts(installed=["claude-code", "codex"], run=lambda cmd, env: (0, out, ""))
+    assert res == {"codex": "passed", "claude-code": "no result"}
+
+
+def test_a_hung_contract_run_is_a_failure_and_raises_nothing():
+    def hang(cmd, env):
+        raise subprocess.TimeoutExpired(cmd, 900)
+    assert cc.run_contracts(installed=["codex"], run=hang) == {"codex": "timed out after 900 s"}
+
+
+def test_the_contract_run_has_no_terminal_and_its_own_process_group(monkeypatch):
+    seen = {}
+
+    class P:
+        returncode = 0
+        def communicate(self, timeout=None):
+            return "", ""
+    def popen(cmd, **k):
+        seen.update(k)
+        return P()
+    monkeypatch.setattr(cc.subprocess, "Popen", popen)
+    cc._run_pytest(["x"], {})
+    assert seen["stdin"] == subprocess.DEVNULL and seen["start_new_session"] is True

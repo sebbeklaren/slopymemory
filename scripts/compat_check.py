@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -52,10 +53,44 @@ def parse_contracts(pytest_output: str) -> dict:
     return res
 
 
-def run_contracts(run=subprocess.run) -> dict:
-    p = run([sys.executable, "-m", "pytest", "-q", "-rA", str(CONTRACTS)], capture_output=True, text=True,
-            cwd=ROOT, env={**os.environ, "SLOPYMEM_CONTRACT": "1", "PYTHONPATH": str(ROOT / "src")}, timeout=900)
-    return parse_contracts(p.stdout)
+def _run_pytest(cmd: list, env: dict, timeout: int = 900) -> tuple[int, str, str]:
+    """The contract run with no terminal (a harness asking a question fails instead of waiting) and in its own
+    process group, so a timeout kills the harness CLIs it started too."""
+    p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         cwd=ROOT, env=env, start_new_session=True)
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, 9)
+        except OSError:
+            pass
+        p.communicate()
+        raise
+    return p.returncode, out, err
+
+
+def installed_harnesses() -> list:
+    return [name for name, cmd in CLIS.items() if shutil.which(cmd[0])]
+
+
+def run_contracts(installed: list | None = None, run=_run_pytest) -> dict:
+    """A result for every installed harness: passed, failed, or why there is none — a contract that did not run is
+    never read as one that passed."""
+    installed = installed_harnesses() if installed is None else installed
+    cmd = [sys.executable, "-m", "pytest", "-q", "-rA", str(CONTRACTS)]
+    env = {**os.environ, "SLOPYMEM_CONTRACT": "1", "PYTHONPATH": str(ROOT / "src")}
+    try:
+        rc, out, err = run(cmd, env)
+    except subprocess.TimeoutExpired as e:
+        return {name: f"timed out after {int(e.timeout)} s" for name in installed}
+    res = parse_contracts(out)
+    if not res and rc != 0:
+        why = (err or out).strip().splitlines()[-1:] or [f"pytest exited {rc}"]
+        return {name: f"could not run: {why[0]}" for name in installed}
+    for name in installed:
+        res.setdefault(name, "no result")
+    return res
 
 
 def latest_record(d: Path) -> dict | None:

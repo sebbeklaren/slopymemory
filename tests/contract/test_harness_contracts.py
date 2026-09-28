@@ -20,26 +20,7 @@ CASES = [(claude_code.HARNESS, "claude", ["claude", "mcp", "get", "slopymemory"]
          (codex.HARNESS, "codex", ["codex", "mcp", "get", "slopymemory"])]
 
 
-def _real_home() -> Path:
-    return Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
-
-
-def guard(throwaway: Path) -> None:
-    """Refuse before any harness command unless HOME is the throwaway directory: these tests register and remove
-    MCP servers, and must never do it to the user's own harness configuration."""
-    home = Path.home().resolve()
-    if home == _real_home() or home != throwaway.resolve():
-        raise RuntimeError(f"refusing: HOME is {home}, not the throwaway home {throwaway}")
-
-
-@pytest.fixture
-def throwaway(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    (home / ".codex").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
-    guard(home)
-    return home
+from conftest import guard, _real_home  # noqa: E402  (the directory's own fixture module)
 
 
 @opt_in
@@ -64,3 +45,20 @@ def test_the_guard_refuses_the_real_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(_real_home()))
     with pytest.raises(RuntimeError, match="refusing"):
         guard(tmp_path)
+
+
+def test_the_guard_refuses_a_claude_config_dir(throwaway, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(_real_home() / ".claude"))
+    with pytest.raises(RuntimeError, match="CLAUDE_CONFIG_DIR"):
+        guard(throwaway)
+
+
+def test_the_guard_refuses_a_codex_or_slopymemory_home_outside(throwaway, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(_real_home() / ".codex"))
+    with pytest.raises(RuntimeError, match="CODEX_HOME"):
+        guard(throwaway)
+
+
+def test_the_launcher_a_health_check_starts_uses_the_throwaway_slopymemory_home(throwaway):
+    from slopymemory import paths
+    assert paths.home().resolve().is_relative_to(throwaway.resolve())
