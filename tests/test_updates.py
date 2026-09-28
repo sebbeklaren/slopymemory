@@ -179,3 +179,16 @@ def test_the_cache_is_written_through_a_temporary_file_of_its_own(home, tmp_path
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
     updates.refresh(run=fake)
     assert names and names[0] != "update-check.json.tmp" and names[0].startswith("update-check.json.")
+
+
+def test_temp_files_left_by_a_killed_check_are_swept(home, tmp_path):
+    updates.write_install(tmp_path, [], True, "https://example.invalid/x.git")
+    stale = updates.cache_file().parent / "update-check.json.abcd1234"
+    stale.write_text("partial")
+    import os as _os
+    _os.utime(stale, (time.time() - 3 * 86400, time.time() - 3 * 86400))
+
+    def fake(cmd, **k):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    updates.refresh(run=fake)
+    assert not stale.exists()

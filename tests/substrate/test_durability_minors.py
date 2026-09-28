@@ -103,3 +103,14 @@ def test_a_held_save_after_a_partial_drain_carries_what_was_written(srv, conn, m
     monkeypatch.setattr(server.handlers, "memory_save", second_fails)
     out = server.memory_save(tenant="t", text="three")                 # drains "one", loses the connection on "two"
     assert out["status"] == "held" and out["recovered"]["written"] == 1
+
+
+def test_a_held_correction_of_an_unreadable_held_record_goes_to_failed_not_silently_saved(srv, conn, monkeypatch):
+    held = du.state_dir() / "held"
+    held.mkdir(parents=True, exist_ok=True)
+    (held / "00000000000000000001-badtarget.json").write_text("{torn")
+    down(monkeypatch)
+    server.memory_save(tenant="t", text="the fix", supersedes="badtarget")
+    up(monkeypatch)
+    out = server.memory_retrieve(tenant="t", query="q")
+    assert out["recovered"]["failed"] == 2 and du.counts() == (0, 2)

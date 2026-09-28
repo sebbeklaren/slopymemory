@@ -140,6 +140,12 @@ def _write_cache(cache: dict) -> None:
     import tempfile
     f = cache_file()
     f.parent.mkdir(parents=True, exist_ok=True)
+    for old in f.parent.glob(f.name + ".*"):          # left by a check that was killed mid-write, a day or more ago
+        try:
+            if time.time() - old.stat().st_mtime > DAY:
+                old.unlink()
+        except OSError:
+            pass
     fd, tmp = tempfile.mkstemp(dir=f.parent, prefix=f.name + ".")
     try:
         with os.fdopen(fd, "w") as out:

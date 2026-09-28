@@ -409,7 +409,7 @@ def _report_lines() -> list[str]:
     for st in all_stores():
         held, failed, status = _held_state(Path(st.server_env()["AM_M3_BUFFER_PATH"]).parent)
         pg = _postgres_version(st)
-        row = (f"store {st.name} ({st.dialect}, {st.postgres} Postgres {pg or 'unreachable'}): "
+        row = (f"store {st.name} ({st.dialect}, {st.postgres} Postgres {pg or 'not running or unreachable'}): "
                f"state {status.get('state', 'unknown')}, "
                f"held {len(held)}, failed {len(failed)}")
         if status.get("error"):

@@ -770,3 +770,11 @@ def test_claude_codes_legacy_config_file_wins_when_it_exists(tmp_path, monkeypat
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     (tmp_path / ".config.json").write_text("{}")
     assert claude_code._cfg() == tmp_path / ".config.json"
+
+
+def test_a_relative_config_variable_is_flagged(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/cc")
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    assert any("CLAUDE_CONFIG_DIR" in w and "not an absolute path" in w for w in harnesses.config_warnings())
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    assert harnesses.config_warnings() == []

@@ -82,3 +82,20 @@ def test_a_clock_stepping_backwards_never_puts_a_later_save_before_an_earlier_on
     monkeypatch.setattr(du.time, "time_ns", lambda: next(times))
     du.hold(_rec("first")); du.hold(_rec("second"))
     assert [du.load(p)["memory_id"] for p in du.held_paths()] == ["first", "second"]
+
+
+def test_a_stray_file_in_held_does_not_switch_off_the_clock_guard(state, monkeypatch):
+    (state / "held").mkdir(parents=True, exist_ok=True)
+    (state / "held" / "notes.json").write_text("{}")
+    times = iter([2_000_000_000_000_000_000, 1_000_000_000_000_000_000])
+    monkeypatch.setattr(du.time, "time_ns", lambda: next(times))
+    du.hold(_rec("first")); du.hold(_rec("second"))
+    ids = [p.name.split("-", 1)[1] for p in du.held_paths() if p.name[0].isdigit()]
+    assert ids == ["first.json", "second.json"]
+
+
+def test_a_held_name_without_a_dash_is_not_a_crash(state):
+    (state / "held").mkdir(parents=True, exist_ok=True)
+    (state / "held" / "nodash.json").write_text("{}")
+    du.hold(_rec("x"))
+    assert "x" in du.held_ids()

@@ -151,6 +151,19 @@ from . import claude_code, codex, pi  # noqa: E402
 KNOWN: list[Harness] = [claude_code.HARNESS, codex.HARNESS, pi.HARNESS]
 
 
+def config_warnings() -> list[str]:
+    """A config-location variable that is not an absolute path: the harness resolves it against its own working
+    directory (Claude Code does not expand ~), so slopymemory and the harness can end up in different places."""
+    import os
+    out = []
+    for var in ("CLAUDE_CONFIG_DIR", "CODEX_HOME"):
+        v = os.environ.get(var)
+        if v and not Path(v).is_absolute():
+            out.append(f"{var}={v} is not an absolute path — the harness resolves it against its own working "
+                       "directory and does not expand ~; set it to an absolute path — see SETUP.md#harnesses")
+    return out
+
+
 def detected() -> list[Harness]:
     return [h for h in KNOWN if h.detect()]
 
@@ -159,7 +172,7 @@ def status() -> "Finding":
     from ..checks import Finding     # lazy: checks imports this module's status() at its top; this breaks the cycle
     from .. import harness_memory as hm
     from ..cli import _hm_reason     # strips a HarnessMemoryError's own trailing anchor so it is never doubled
-    rows, bad = [], False
+    rows, bad = list(config_warnings()), False
     lp = launcher_path()
     for h in detected():
         ok = h.registered(lp)

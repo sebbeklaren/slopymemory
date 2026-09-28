@@ -119,7 +119,9 @@ def _drain(conn, skip: Path | None = None) -> None:
                 if not isinstance(mid, str) or not isinstance(text, str):
                     raise TypeError("memory_id and text must be strings")
             except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
-                keep(path, du.clean_error(e)); continue
+                keep(path, du.clean_error(e))
+                ids.discard(path.stem.split("-", 1)[-1])   # gone from held/: a later record may not count on it
+                continue
             if mid in {b[0] for b in getattr(_store, "_buffer", ())} or LiveStore._has_row(conn, mid):
                 du.release(path); ids.discard(mid); continue   # already buffered or committed: never placed twice
             try:

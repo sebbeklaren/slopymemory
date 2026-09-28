@@ -656,7 +656,7 @@ def build() -> argparse.ArgumentParser:
     s = sub.add_parser("stop"); s.add_argument("store", nargs="?"); s.add_argument("--all", action="store_true"); s.set_defaults(fn=cmd_stop)
     s = sub.add_parser("remove"); s.add_argument("store"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_remove)
     s = sub.add_parser("doctor"); s.set_defaults(fn=cmd_doctor)
-    s.add_argument("--report", action="store_true", help="print a block to paste into an issue (nothing is sent)")
+    s.add_argument("--report", action="store_true", help="print a block to paste into an issue (nothing is sent; it connects to each store's Postgres for its version)")
     s = sub.add_parser("update", help="update slopymemory from the clone it was installed from (asked, never automatic)")
     s.add_argument("--yes", action="store_true"); s.add_argument("--check", choices=["on", "off"])
     s.set_defaults(fn=cmd_update)

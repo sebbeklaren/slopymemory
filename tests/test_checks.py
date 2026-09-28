@@ -540,4 +540,10 @@ def test_report_names_each_stores_postgres_version_or_why_not(tmp_home, monkeypa
     out = checks.report()
     assert "Postgres 17.6" in out and "substrate agent_memory" in out
     monkeypatch.setattr(checks, "_postgres_version", lambda s: None)
-    assert "Postgres unreachable" in checks.report()
+    assert "Postgres not running or unreachable" in checks.report()
+
+
+def test_report_says_not_running_or_unreachable(tmp_home, monkeypatch):
+    Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system").save()
+    monkeypatch.setattr(checks, "_postgres_version", lambda s: None)
+    assert "Postgres not running or unreachable" in checks.report()

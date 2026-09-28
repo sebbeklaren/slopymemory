@@ -34,6 +34,6 @@ HARNESS = Harness(
     register_cmd=lambda launcher: ["claude", "mcp", "add", "--scope", "user", "--transport", "stdio", SERVER_NAME, "--", launcher],
     registered_as=_registered_as,
     unregister_cmd=lambda name: ["claude", "mcp", "remove", "--scope", "user", name],
-    config_hint="~/.claude.json ($CLAUDE_CONFIG_DIR/.claude.json when set) → top-level mcpServers.slopymemory = {\"type\":\"stdio\",\"command\":\"<launcher>\"}",
+    config_hint="~/.claude.json ($CLAUDE_CONFIG_DIR/.claude.json when set; a legacy .config.json in the config directory wins when it exists) → top-level mcpServers.slopymemory = {\"type\":\"stdio\",\"command\":\"<launcher>\"}",
     instructions_file=lambda: config_dir() / "CLAUDE.md",
 )

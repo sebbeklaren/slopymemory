@@ -11,11 +11,11 @@ def test_the_lock_pins_the_known_good_lines_and_the_cpu_torch():
     lock = (ROOT / "uv.lock").read_text()
     def version_of(name):
         m = re.search(rf'name = "{name}"\nversion = "([^"]+)"', lock); assert m, name; return m.group(1)
-    # The embedding stack's lines proven to give the stores' vectors bit for bit (tests/substrate/test_embedder_vectors.py);
-    # transformers 5.12 removes a function the model's pinned code calls.
-    assert version_of("transformers").startswith(("5.9.", "5.10.", "5.11."))
-    assert version_of("sentence-transformers").startswith(("5.5.", "6.0.", "6.1."))
-    assert version_of("torch").startswith(("2.12.", "2.13.", "2.14."))
+    # Only the lines tested against the reference vectors (tests/substrate/test_embedder_vectors.py): the base stack and
+    # the one it moved to. A different line fails here until it has passed a local `pytest -m embed`.
+    assert version_of("transformers").startswith(("5.9.", "5.16."))
+    assert version_of("sentence-transformers").startswith(("5.5.", "6.1."))
+    assert version_of("torch").startswith(("2.12.", "2.14."))
     assert version_of("umap-learn").startswith("0.5.")
     assert version_of("embedded-postgres").startswith("18.")
     assert version_of("mcp").startswith("1.27.")

@@ -3,6 +3,18 @@
 What a user of slopymemory notices, newest first. A release that changes the code the store servers run says so:
 restart each running store with `slopymem stop <name>` and `slopymem start <name>`.
 
+## 0.4.1
+
+Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
+
+- Claude Code's and Codex's configuration is found where they keep it: `CLAUDE_CONFIG_DIR` (and Claude Code's legacy
+  `.config.json`) and `CODEX_HOME`; `slopymem doctor` warns when either is not an absolute path.
+- A save the database is up for but rejects is told apart from a database that is down; a partial drain is always
+  reported; the order of held saves survives a clock stepping back.
+- `slopymem doctor --report` names each store's Postgres version; `slopymem update` handles a damaged install record.
+- The embedding stack moves to torch 2.14, transformers 5.16 and sentence-transformers 6.1 — proven to give the same
+  vectors as before, so stored memories need nothing.
+
 ## 0.4.0
 
 Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
