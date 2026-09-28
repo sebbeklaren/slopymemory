@@ -10,6 +10,7 @@ import base64
 import os
 import shlex
 import sys
+import threading
 from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
@@ -21,7 +22,7 @@ from mcp.server.lowlevel import NotificationOptions, Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 from mcp.shared.exceptions import McpError
-from . import SERVER_NAME, embedded_pg, paths, server as srv
+from . import SERVER_NAME, embedded_pg, paths, server as srv, updates
 from .embedded_pg import EmbeddedPostgres
 from .provision import TEMPLATE_HINT, InitRefused, SystemPostgres, apply_init, choose_backend, plan_init
 from .paths import ConfigError
@@ -105,6 +106,7 @@ class Launcher:
         self._attempts = 0                     # connect attempts started; a call compares to see if one ran since it looked
         self._connected = False                # did the current attempt ever establish a session? (words the announcement)
         self._reconnecting = asyncio.Lock()    # concurrent callers that found the same loss share one attempt
+        self._noticed = False                  # the update notice rides on this session's first tool reply only
         self.server = Server(SERVER_NAME, instructions=USAGE_RULES)
         self._register_handlers()
         if active := [h for h in TEST_HOOKS if os.environ.get(h)]:
@@ -323,7 +325,16 @@ class Launcher:
             # which special-cases `isinstance(results, types.CallToolResult)` ahead of its own
             # content-list/dict normalization. So the upstream result is passed straight through
             # rather than unpacked into `.content` and re-raised on `.isError`.
-            return await self._forward(lambda u: u.call_tool(name, arguments or {}))
+            result = await self._forward(lambda u: u.call_tool(name, arguments or {}))
+            if not self._noticed:
+                self._noticed = True
+                try:
+                    line = updates.notice()        # the cache only: never the network
+                except Exception:                  # an optional notice must never break a tool call
+                    line = None
+                if line:
+                    result.content = [*result.content, types.TextContent(type="text", text=line)]
+            return result
 
         @s.list_prompts()
         async def list_prompts() -> list[types.Prompt]:
@@ -381,6 +392,9 @@ class Launcher:
                                   f"the memory tools are now available")]
 
     async def run(self) -> None:
+        # The daily update check (only if the user said yes at install): a daemon thread, never waited on — a tool
+        # call reads whatever the cache says, so a slow network can never delay a reply.
+        threading.Thread(target=updates.refresh, daemon=True).start()
         try:
             store = self.resolve()
         except ConfigError as e:                   # a hand-edited registry/store.toml with a typo: the

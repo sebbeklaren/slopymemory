@@ -437,3 +437,41 @@ async def test_a_failure_without_text_is_named_by_its_type_on_stderr(tmp_home, t
     err = capsys.readouterr().err
     line = [l for l in err.splitlines() if "store blank" in l][-1]
     assert "did not close cleanly (BrokenResourceError)" in line, err
+
+
+async def test_the_first_tool_reply_of_a_session_carries_the_update_notice_once(tmp_home, tmp_path, free_port):
+    import json, time
+    from slopymemory import updates
+    repo = tmp_path / "repo"; repo.mkdir()
+    Store(name="repo", dialect="coding", port=free_port, database="x", postgres="system").save()
+    r = Registry.load(); r.link(repo, "repo"); r.save()
+    updates.write_install(tmp_path, [], True, None)                     # no remote: the background check does nothing
+    updates.cache_file().write_text(json.dumps({"checked": time.time(), "latest": "999.0.0", "error": None}))
+    try:
+        async with stdio_client(launcher_params(repo, tmp_home)) as (rd, wr):
+            async with ClientSession(rd, wr) as s:
+                await s.initialize()
+                first = await s.call_tool("memory_ping", {"text": "a"})
+                second = await s.call_tool("memory_ping", {"text": "b"})
+        texts = [c.text for c in first.content]
+        assert texts[0] == "pong:a" and "999.0.0 is available" in texts[-1] and "slopymem update" in texts[-1]
+        assert [c.text for c in second.content] == ["pong:b"]
+    finally:
+        server.stop(Store.load("repo"))
+
+
+async def test_no_notice_when_the_check_is_off(tmp_home, tmp_path, free_port):
+    import json, time
+    from slopymemory import updates
+    repo = tmp_path / "repo"; repo.mkdir()
+    Store(name="repo", dialect="coding", port=free_port, database="x", postgres="system").save()
+    r = Registry.load(); r.link(repo, "repo"); r.save()
+    updates.write_install(tmp_path, [], False, None)
+    updates.cache_file().write_text(json.dumps({"checked": time.time(), "latest": "999.0.0", "error": None}))
+    try:
+        async with stdio_client(launcher_params(repo, tmp_home)) as (rd, wr):
+            async with ClientSession(rd, wr) as s:
+                await s.initialize()
+                assert [c.text for c in (await s.call_tool("memory_ping", {"text": "a"})).content] == ["pong:a"]
+    finally:
+        server.stop(Store.load("repo"))
