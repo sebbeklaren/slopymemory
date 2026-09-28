@@ -51,13 +51,13 @@ async def test_init_mode_offers_memory_init_then_switches_to_the_store(tmp_home,
 
     async def on_message(message):
         if isinstance(message, types.ServerNotification):
-            notifications.append(message.root)
+            notifications.append(getattr(message, "root", message))
 
     try:
         async with stdio_client(params) as (rd, wr):
             async with ClientSession(rd, wr, message_handler=on_message) as s:
                 init = await s.initialize()
-                assert init.serverInfo.name == "slopymemory"        # the distinct name, as registered
+                assert init.server_info.name == "slopymemory"        # the distinct name, as registered
                 from slopymemory.usage_rules import USAGE_RULES
                 assert init.instructions == USAGE_RULES              # the rules ride the initialize result
                 tools = (await s.list_tools()).tools
@@ -89,7 +89,7 @@ async def test_when_the_machine_cannot_provision_list_tools_notes_it_and_init_fa
                 assert [t.name for t in tools] == ["memory_init"]
                 assert "slopymem_template" in tools[0].description
                 res = await s.call_tool("memory_init", {"name": "cannot", "dialect": "coding"})
-                assert res.isError
+                assert res.is_error
                 assert "SETUP.md#postgres" in res.content[0].text
     finally:
         if Store.exists("cannot"):
@@ -123,9 +123,9 @@ async def test_memory_init_reports_psqls_own_reason(tmp_home, tmp_path, broken_p
             tools = (await s.list_tools()).tools
             assert [t.name for t in tools] == ["memory_init"]
             assert "FATAL: boom" in tools[0].description and "SETUP.md#postgres" in tools[0].description
-            assert "postgres" in tools[0].inputSchema["properties"]
+            assert "postgres" in tools[0].input_schema["properties"]
             res = await s.call_tool("memory_init", {"name": "psqldown", "dialect": "coding", "postgres": "system"})
-            assert res.isError
+            assert res.is_error
             assert "FATAL: boom" in res.content[0].text and "SETUP.md#postgres" in res.content[0].text
     assert not Store.exists("psqldown") and not (tmp_home / "pg").exists()
 
@@ -154,7 +154,7 @@ async def test_memory_init_on_the_embedded_postgres_starts_it_and_creates_the_da
             async with ClientSession(rd, wr) as s:
                 await s.initialize()
                 res = await s.call_tool("memory_init", {"name": "emb", "dialect": "coding", "postgres": "embedded"})
-                assert not res.isError, res.content[0].text
+                assert not res.is_error, res.content[0].text
                 assert "created store emb" in res.content[0].text and "embedded Postgres" in res.content[0].text
                 names = [t.name for t in (await s.list_tools()).tools]
                 assert names == ["memory_ping", "memory_session"]
@@ -178,7 +178,7 @@ async def test_memory_init_on_the_embedded_postgres_starts_it_and_creates_the_da
 async def test_a_malformed_store_or_registry_file_still_answers_the_handshake_and_names_the_anchor(tmp_home, tmp_path):
     """SETUP.md tells users to hand-edit these files; a typo must not turn every launcher on the machine into a
     traceback before the handshake — the harness connects, list_tools raises the message with the anchor."""
-    from mcp.shared.exceptions import McpError
+    from mcp.shared.exceptions import MCPError
     repo = tmp_path / "repo"; repo.mkdir()
     Store(name="repo", dialect="coding", port=8781, database="x", postgres="system").save()
     r = Registry.load(); r.link(repo, "repo"); r.save()
@@ -187,18 +187,18 @@ async def test_a_malformed_store_or_registry_file_still_answers_the_handshake_an
     async with stdio_client(launcher_params(repo, tmp_home)) as (rd, wr):
         async with ClientSession(rd, wr) as s:
             await s.initialize()
-            with pytest.raises(McpError) as e:
+            with pytest.raises(MCPError) as e:
                 await s.list_tools()
             assert "SETUP.md#registry" in str(e.value) and "database" in str(e.value)
-            with pytest.raises(McpError, match="SETUP.md#registry"):     # every surface raises the same message
+            with pytest.raises(MCPError, match="SETUP.md#registry"):     # every surface raises the same message
                 await s.list_prompts()
-            with pytest.raises(McpError, match="SETUP.md#registry"):
+            with pytest.raises(MCPError, match="SETUP.md#registry"):
                 await s.list_resources()
     (tmp_home / "registry.toml").write_text("link = [ { path = ")
     async with stdio_client(launcher_params(repo, tmp_home)) as (rd, wr):
         async with ClientSession(rd, wr) as s:
             await s.initialize()
-            with pytest.raises(McpError) as e:
+            with pytest.raises(MCPError) as e:
                 await s.list_tools()
             assert "SETUP.md#registry" in str(e.value) and "registry.toml" in str(e.value)
 
@@ -236,16 +236,15 @@ async def test_a_server_that_never_completes_the_handshake_is_a_failure_within_t
     assert time.monotonic() - t0 < 5
     assert launcher.ready.is_set() and launcher.upstream is None
     assert "hang" in launcher.failure and "SETUP.md#servers" in launcher.failure and "handshake" in launcher.failure
-    handler = launcher.server.request_handlers[types.ListToolsRequest]
     with pytest.raises(RuntimeError, match="SETUP.md#servers"):
-        await handler(types.ListToolsRequest(method="tools/list"))
+        await launcher._on_list_tools(None, None)
 
 
 async def test_a_server_that_exits_at_once_is_reported_through_the_tools_at_once(tmp_home, tmp_path, free_port):
     """Through the bridge: the store's server command exits 3 immediately; list_tools must raise the exit
     code, the log tail and the anchor well before DEADLINE_S, not hang for a minute."""
     import time
-    from mcp.shared.exceptions import McpError
+    from mcp.shared.exceptions import MCPError
     repo = tmp_path / "repo"; repo.mkdir()
     Store(name="repo", dialect="coding", port=free_port, database="x", postgres="system").save()
     r = Registry.load(); r.link(repo, "repo"); r.save()
@@ -254,7 +253,7 @@ async def test_a_server_that_exits_at_once_is_reported_through_the_tools_at_once
     async with stdio_client(params) as (rd, wr):
         async with ClientSession(rd, wr) as s:
             await s.initialize()
-            with pytest.raises(McpError) as e:
+            with pytest.raises(MCPError) as e:
                 await s.list_tools()
     assert time.monotonic() - t0 < 15
     msg = str(e.value)
@@ -263,7 +262,7 @@ async def test_a_server_that_exits_at_once_is_reported_through_the_tools_at_once
 
 # --- the store's server restarted or crashed under an open session -------------------------------------
 # Observed against the SDK with the fake server killed mid-session: a new server on the same port answers
-# the stale session id with 404, which the transport turns into McpError('Session terminated') on every call
+# the stale session id with 404, which the transport turns into MCPError('Session terminated') on every call
 # (the harness shows "connected" while nothing works); with no server on the port the first call's POST fails
 # inside the transport, its task group crashes, and that call HANGS (the SDK's pending-request cleanup is
 # itself cancelled) while later calls raise anyio.ClosedResourceError. The launcher must serve the next
@@ -282,7 +281,7 @@ def _reconnect_lines(errlog: Path) -> list[str]:
 
 async def _session_seen_by_the_server(s: ClientSession) -> str:
     res = await s.call_tool("memory_session", {})
-    assert not res.isError, res.content[0].text
+    assert not res.is_error, res.content[0].text
     return res.content[0].text
 
 
@@ -301,7 +300,7 @@ async def test_a_server_restarted_under_the_session_is_reconnected_on_the_next_c
                     assert server.stop(store)                       # killed under the open session...
                     server.ensure_up(store)                         # ...and a NEW server on the same port
                     res = await s.call_tool("memory_ping", {"text": "again"})
-                    assert not res.isError, res.content[0].text
+                    assert not res.is_error, res.content[0].text
                     assert res.content[0].text == "pong:again"
                     assert await _session_seen_by_the_server(s) != first
                     assert [t.name for t in (await s.list_tools()).tools] == ["memory_ping", "memory_session"]
@@ -326,7 +325,7 @@ async def test_a_server_crashed_under_the_session_is_restarted_and_reconnected_o
                     assert server.stop(store)
                     assert not server.probe(store.port)
                     res = await asyncio.wait_for(s.call_tool("memory_ping", {"text": "two"}), 30)
-                    assert not res.isError, res.content[0].text
+                    assert not res.is_error, res.content[0].text
                     assert res.content[0].text == "pong:two"
         assert server.probe(store.port), "the reconnect started the server again"
         assert len(_reconnect_lines(errlog)) == 1, errlog.read_text()
@@ -339,7 +338,7 @@ async def test_a_failed_reconnect_raises_the_failure_shape_and_the_launcher_stay
     store, the log and the anchor — no hang, no loop — and the launcher is still there for the next call,
     which gets its own single attempt."""
     import time
-    from mcp.shared.exceptions import McpError
+    from mcp.shared.exceptions import MCPError
     repo, store = _linked_store(tmp_path, free_port)
     errlog = tmp_path / "launcher.stderr"
     marker = tmp_path / "started-once"
@@ -353,10 +352,10 @@ async def test_a_failed_reconnect_raises_the_failure_shape_and_the_launcher_stay
                     t0 = time.monotonic()
                     res = await asyncio.wait_for(s.call_tool("memory_ping", {"text": "two"}), 30)
                     assert time.monotonic() - t0 < 15
-                    assert res.isError
+                    assert res.is_error
                     msg = res.content[0].text
                     assert "store repo" in msg and "exited with code 3" in msg and "SETUP.md#servers" in msg
-                    with pytest.raises(McpError) as e:                 # still alive; the next call gets one attempt too
+                    with pytest.raises(MCPError) as e:                 # still alive; the next call gets one attempt too
                         await asyncio.wait_for(s.list_tools(), 30)
                     assert "store repo" in str(e.value) and "SETUP.md#servers" in str(e.value)
         # one attempt per call, no loop — the first announced as a lost session, the second (no session ever

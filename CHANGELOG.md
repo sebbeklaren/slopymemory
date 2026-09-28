@@ -3,6 +3,16 @@
 What a user of slopymemory notices, newest first. A release that changes the code the store servers run says so:
 restart each running store with `slopymem stop <name>` and `slopymem start <name>`.
 
+## 0.5.0
+
+Update with `slopymem update` (the MCP library changes underneath), then restart your stores:
+`slopymem stop <name>` then `slopymem start <name>`.
+
+- Built on version 2 of the MCP Python SDK and its newest protocol. Harnesses that speak the earlier protocol versions
+  still connect; Claude Code was checked end to end.
+- The store server now answers calls from worker threads; one lock keeps saves, the held-save drain and session
+  wiring in order, as before.
+
 ## 0.4.1
 
 Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.

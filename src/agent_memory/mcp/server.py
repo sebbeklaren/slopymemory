@@ -16,7 +16,7 @@ from pathlib import Path
 import psycopg
 from pgvector.psycopg import register_vector
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 
 from agent_memory import durability as du
 from agent_memory.config import settings
@@ -27,7 +27,7 @@ from agent_memory.spaces import store as m3
 from agent_memory.spaces.live_store_state import LiveStore
 from agent_memory.store import db
 
-mcp = FastMCP("memory", host=settings.mcp_host, port=settings.mcp_port)
+mcp = MCPServer("memory")
 
 _embedder: NomicEmbedder | None = None
 _store: "LiveStore | None" = None
@@ -37,8 +37,8 @@ REJECTED_MESSAGE = ("The database is up but rejected this save; it is kept on di
                     "if it is rejected again it moves to held-failed/ with the error. Tell the user. See SETUP.md#held")
 HELD_MESSAGE = ("Saved to disk, not yet to the database; it will be written when the database is back. Tell the "
                 "user. Fix: SETUP.md#postgres. To report it: slopymem doctor --report")
-# One lock over hold -> save -> release, the drain and the session map: the design does not rely on FastMCP running
-# sync tools one at a time on its event loop, which is true today and not a promise.
+# One lock over hold -> save -> release, the drain and the session map. It is load-bearing: the MCP server runs
+# synchronous tools in worker threads, so two calls can arrive together
 _lock = threading.Lock()
 # schema_ready: the schema-ensure ran on a successful connection (once per process — the server may start while
 # the database is down). failing: the last database call failed; db-status.json follows every change.
@@ -383,7 +383,7 @@ def main() -> None:
         _mark(False, err)
         print(f"memory server: the database is not reachable at start ({err}); saves are held until it answers "
               "— see SETUP.md#postgres", flush=True)
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="streamable-http", host=settings.mcp_host, port=settings.mcp_port)
 
 
 if __name__ == "__main__":

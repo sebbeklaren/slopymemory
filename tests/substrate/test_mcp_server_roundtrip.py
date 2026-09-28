@@ -32,7 +32,7 @@ def _wait_port(host: str, port: int, timeout: float = 120.0) -> None:
 
 
 def _payload(call_result) -> dict:
-    # FastMCP always includes a text content block with the JSON-serialized return.
+    # The server always includes a text content block with the JSON-serialized return.
     return json.loads(call_result.content[0].text)
 
 
@@ -40,7 +40,7 @@ async def _roundtrip(url: str) -> tuple[dict, dict]:
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
-    async with streamable_http_client(url) as (read, write, _):
+    async with streamable_http_client(url) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             saved = await session.call_tool(

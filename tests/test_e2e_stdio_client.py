@@ -61,12 +61,12 @@ def test_text_back_is_the_text_not_an_id_or_a_rank():
 
 def test_payload_prefers_structured_content_then_json_text_and_refuses_errors():
     text = SimpleNamespace(type="text", text='{"status": "ok", "results": []}')
-    assert e2e.payload_of(SimpleNamespace(isError=False, structuredContent={"status": "saved"}, content=[text])) == {"status": "saved"}
-    assert e2e.payload_of(SimpleNamespace(isError=False, structuredContent=None, content=[text])) == {"status": "ok", "results": []}
+    assert e2e.payload_of(SimpleNamespace(is_error=False, structured_content={"status": "saved"}, content=[text])) == {"status": "saved"}
+    assert e2e.payload_of(SimpleNamespace(is_error=False, structured_content=None, content=[text])) == {"status": "ok", "results": []}
     with pytest.raises(e2e.Deviation, match="not JSON"):
-        e2e.payload_of(SimpleNamespace(isError=False, structuredContent=None, content=[SimpleNamespace(type="text", text="pong:hi")]))
+        e2e.payload_of(SimpleNamespace(is_error=False, structured_content=None, content=[SimpleNamespace(type="text", text="pong:hi")]))
     with pytest.raises(e2e.Deviation, match="error") as ei:
-        e2e.payload_of(SimpleNamespace(isError=True, structuredContent=None, content=[SimpleNamespace(type="text", text="no such store")]))
+        e2e.payload_of(SimpleNamespace(is_error=True, structured_content=None, content=[SimpleNamespace(type="text", text="no such store")]))
     assert ei.value.payload == ["no such store"]
 
 

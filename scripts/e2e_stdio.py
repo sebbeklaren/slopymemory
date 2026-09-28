@@ -19,7 +19,6 @@ import shlex
 import shutil
 import sys
 import time
-from datetime import timedelta
 from pathlib import Path
 
 WARM_AT = 12          # the coding dialect's warm-up count: the store fits its projector on the twelfth save
@@ -109,9 +108,9 @@ def assert_text_back(payload: dict, prefix: str) -> dict:
 def payload_of(result) -> dict:
     """The tool's return value: the structured content when the server sent one, else the first text content parsed
     as JSON. An error result is a deviation carrying its text."""
-    if getattr(result, "isError", False):
+    if result.is_error:
         raise Deviation("the tool call came back as an error", [getattr(c, "text", str(c)) for c in result.content])
-    sc = getattr(result, "structuredContent", None)
+    sc = result.structured_content
     if isinstance(sc, dict):
         return sc
     for c in result.content:
@@ -125,7 +124,7 @@ def payload_of(result) -> dict:
 
 
 def text_of(result) -> str:
-    if getattr(result, "isError", False):
+    if result.is_error:
         raise Deviation("the tool call came back as an error", [getattr(c, "text", str(c)) for c in result.content])
     return "".join(getattr(c, "text", "") for c in result.content)
 
@@ -163,7 +162,7 @@ async def _run(project: Path, launcher: str) -> int:
             _say("tools", t0, "memory_init only, as for a project with no store")
 
             t0 = time.monotonic()
-            res = await s.call_tool("memory_init", {"name": None, "dialect": "coding"}, read_timeout_seconds=timedelta(seconds=INIT_TIMEOUT_S))
+            res = await s.call_tool("memory_init", {"name": None, "dialect": "coding"}, read_timeout_seconds=INIT_TIMEOUT_S)
             created = text_of(res)
             if "created store" not in created:
                 raise Deviation("memory_init did not report a created store", created)
@@ -175,7 +174,7 @@ async def _run(project: Path, launcher: str) -> int:
             for n, (text, concepts) in enumerate(MEMORIES, start=1):
                 t0 = time.monotonic()
                 res = await s.call_tool("memory_save", {"tenant": TENANT, "text": text, "thread": "e2e", "save_concepts": concepts},
-                                        read_timeout_seconds=timedelta(seconds=CALL_TIMEOUT_S))
+                                        read_timeout_seconds=CALL_TIMEOUT_S)
                 payload = payload_of(res)
                 if n < WARM_AT:
                     assert_buffered(payload, n)
@@ -186,7 +185,7 @@ async def _run(project: Path, launcher: str) -> int:
 
             t0 = time.monotonic()
             res = await s.call_tool("memory_retrieve", {"tenant": TENANT, "query": QUESTION, "k": 5, "query_concepts": QUERY_CONCEPTS},
-                                    read_timeout_seconds=timedelta(seconds=CALL_TIMEOUT_S))
+                                    read_timeout_seconds=CALL_TIMEOUT_S)
             payload = payload_of(res)
             hit = assert_text_back(payload, EXPECTED_PREFIX)
             _say("retrieve", t0, f"ok, {len(payload['results'])} result(s); the text is back: {hit['text']!r} (score {hit.get('score')})")

@@ -6,7 +6,6 @@ A store server restarted or crashed under an open session is reconnected on the 
 harness keeps this process alive across that, so this process has to do it."""
 from __future__ import annotations
 import asyncio
-import base64
 import os
 import shlex
 import sys
@@ -17,11 +16,10 @@ from typing import TypeVar
 import anyio
 import mcp.types as types
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.server.lowlevel import NotificationOptions, Server
-from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 from . import SERVER_NAME, embedded_pg, paths, server as srv, updates
 from .embedded_pg import EmbeddedPostgres
 from .provision import TEMPLATE_HINT, InitRefused, SystemPostgres, apply_init, choose_backend, plan_init
@@ -73,20 +71,23 @@ class SessionLost(Exception):
 
 # The transport's own error for a POST the server answered with 404: the server no longer knows the
 # session id, i.e. it is a new process on the same port. Observed with the fake server killed and started
-# again under an open session — every call raised McpError('Session terminated') with this code.
+# again under an open session — every call raised MCPError('Session terminated') with this code.
 _SESSION_TERMINATED = 32600
+# The same state as the v2 SDK names it: the server answers 404 with a JSON-RPC error (INVALID_REQUEST, -32600).
+_SESSION_NOT_FOUND = -32600
 
 
 def _lost(e: BaseException) -> bool:
     """Does this exception mean the upstream session is gone? Observed with the fake server killed
-    mid-session: a new server on the same port → McpError 'Session terminated'; no server on the port →
+    mid-session: a new server on the same port → MCPError 'Session terminated'; no server on the port →
     the transport's task group dies on the failed POST and every LATER call raises anyio's
     ClosedResourceError (the first one hangs instead — `_on` handles that). BrokenResourceError and
     CONNECTION_CLOSED are the SDK's other two names for the same state: the reader side gone, and the
     read stream closed under a pending request."""
-    if isinstance(e, McpError):        # both are the SDK's own synthetic errors: matched by code AND text, so an
-        return (e.error.code, e.error.message) in (     # upstream's genuine error with a shared code never reconnects
-            (_SESSION_TERMINATED, "Session terminated"), (types.CONNECTION_CLOSED, "Connection closed"))
+    if isinstance(e, MCPError):        # both are the SDK's own synthetic errors: matched by code AND text, so an
+        return (e.code, e.message) in (                  # upstream's genuine error with a shared code never reconnects
+            (_SESSION_TERMINATED, "Session terminated"), (_SESSION_NOT_FOUND, "Session terminated"),
+            (_SESSION_NOT_FOUND, "Session not found"), (types.CONNECTION_CLOSED, "Connection closed"))
     return isinstance(e, (anyio.ClosedResourceError, anyio.BrokenResourceError))
 
 
@@ -117,8 +118,10 @@ class Launcher:
         self._connected = False                # did the current attempt ever establish a session? (words the announcement)
         self._reconnecting = asyncio.Lock()    # concurrent callers that found the same loss share one attempt
         self._noticed = False                  # the update notice rides on this session's first tool reply only
-        self.server = Server(SERVER_NAME, instructions=USAGE_RULES)
-        self._register_handlers()
+        self.server = Server(SERVER_NAME, instructions=USAGE_RULES,
+                             on_list_tools=self._on_list_tools, on_call_tool=self._on_call_tool,
+                             on_list_prompts=self._on_list_prompts, on_list_resources=self._on_list_resources,
+                             on_read_resource=self._on_read_resource)
         if active := [h for h in TEST_HOOKS if os.environ.get(h)]:
             # Never silent: with SLOPYMEM_FAKE_PG set, memory_init reports a store "created" with no
             # database behind it. A stray variable in a user's shell must announce itself.
@@ -153,7 +156,7 @@ class Launcher:
         connection must outlive the single request (or the startup handshake) that triggers it, so it
         cannot be opened from within that request's own task and closed later from a different one
         (that raised "Attempted to exit a cancel scope in a different task than it was entered in" —
-        found running this against the SDK's real streamablehttp_client/ClientSession task groups).
+        found running this against the SDK's real streamable_http_client/ClientSession task groups).
         This task instead holds the connection open itself until its `closing` event is set — at
         shutdown, or by `_reconnect` when the connection has to be replaced."""
         self.store = store                     # known from here; `self.upstream` is the readiness signal
@@ -179,7 +182,7 @@ class Launcher:
         session = None
         try:
             await asyncio.to_thread(srv.ensure_up, store)
-            async with streamablehttp_client(f"http://127.0.0.1:{store.port}/mcp") as (read, write, _):
+            async with streamable_http_client(f"http://127.0.0.1:{store.port}/mcp") as (read, write):
                 async with ClientSession(read, write) as session:
                     try:                        # the port answering HTTP is not the handshake completing
                         await asyncio.wait_for(session.initialize(), srv.DEADLINE_S)
@@ -296,88 +299,70 @@ class Launcher:
                 raise SessionLost(_text(e)) from e
             raise
 
-    def _register_handlers(self) -> None:
-        s = self.server
+    async def _on_list_tools(self, ctx, params) -> types.ListToolsResult:
+        if await self._session() is None:
+            if self.failure:
+                raise RuntimeError(self.failure)
+            description = INIT_DESCRIPTION
+            # The choice shells out to psql; with Postgres down or psql missing the check can raise
+            # instead of returning False. That must not take memory_init off the list — the whole
+            # point of the tool is to be there to explain the blocker — so it is guarded, and run off
+            # the event loop. The description says which backend init will use, and why the system one
+            # was passed over when it was.
+            try:
+                backend, note = await asyncio.to_thread(self._choose)
+                description += self._backend_sentence(backend, note)
+            except InitRefused as e:                  # neither backend: the message names both and the anchor
+                description += f" NOTE: this machine cannot provision a store yet — {e}"
+            except Exception as e:                    # a check that crashed rather than refused
+                description += f" NOTE: this machine cannot provision a store yet — {TEMPLATE_HINT} (check failed: {e})"
+            return types.ListToolsResult(tools=[types.Tool(name="memory_init", description=fit_description(description), inputSchema={
+                "type": "object",
+                "properties": {"name": {"type": ["string", "null"]},
+                               "dialect": {"type": "string", "enum": ["coding", "design"], "default": "coding"},
+                               "postgres": {"type": ["string", "null"], "enum": ["system", "embedded", None]}}})])
+        return types.ListToolsResult(tools=(await self._forward(lambda u: u.list_tools())).tools)
 
-        @s.list_tools()
-        async def list_tools() -> list[types.Tool]:
-            if await self._session() is None:
-                if self.failure:
-                    raise RuntimeError(self.failure)
-                description = INIT_DESCRIPTION
-                # The choice shells out to psql; with Postgres down or psql missing the check can raise
-                # instead of returning False. That must not take memory_init off the list — the whole
-                # point of the tool is to be there to explain the blocker — so it is guarded, and run off
-                # the event loop. The description says which backend init will use, and why the system one
-                # was passed over when it was.
-                try:
-                    backend, note = await asyncio.to_thread(self._choose)
-                    description += self._backend_sentence(backend, note)
-                except InitRefused as e:                  # neither backend: the message names both and the anchor
-                    description += f" NOTE: this machine cannot provision a store yet — {e}"
-                except Exception as e:                    # a check that crashed rather than refused
-                    description += f" NOTE: this machine cannot provision a store yet — {TEMPLATE_HINT} (check failed: {e})"
-                return [types.Tool(name="memory_init", description=fit_description(description), inputSchema={
-                    "type": "object",
-                    "properties": {"name": {"type": ["string", "null"]},
-                                   "dialect": {"type": "string", "enum": ["coding", "design"], "default": "coding"},
-                                   "postgres": {"type": ["string", "null"], "enum": ["system", "embedded", None]}}})]
-            return (await self._forward(lambda u: u.list_tools())).tools
-
-        @s.call_tool()
-        async def call_tool(name: str, arguments: dict | None):
+    async def _on_call_tool(self, ctx, params) -> types.CallToolResult:
+        """A failure is the tool's answer (isError with the message), as an MCP client expects from a tool — the
+        upstream's own CallToolResult is passed through whole (isError and structuredContent preserved)."""
+        name, arguments = params.name, params.arguments or {}
+        try:
             if await self._session() is None:
                 if name != "memory_init":
                     raise RuntimeError(self.failure or f"no memory store for {self.cwd} — call memory_init first — see SETUP.md#registry")
-                return await self._init(arguments or {})
-            # The lowlevel Server.call_tool() decorator forwards a returned types.CallToolResult
-            # whole (isError + structuredContent preserved) — verified against mcp 1.27.1's source,
-            # which special-cases `isinstance(results, types.CallToolResult)` ahead of its own
-            # content-list/dict normalization. So the upstream result is passed straight through
-            # rather than unpacked into `.content` and re-raised on `.isError`.
-            result = await self._forward(lambda u: u.call_tool(name, arguments or {}))
-            if not self._noticed:
-                self._noticed = True
-                try:
-                    line = updates.notice()        # the cache only: never the network
-                except Exception:                  # an optional notice must never break a tool call
-                    line = None
-                if line:
-                    result.content = [*result.content, types.TextContent(type="text", text=line)]
-            return result
+                return types.CallToolResult(content=await self._init(arguments, ctx))
+            result = await self._forward(lambda u: u.call_tool(name, arguments))
+        except Exception as e:
+            return types.CallToolResult(content=[types.TextContent(type="text", text=_text(e))], isError=True)
+        if not self._noticed:
+            self._noticed = True
+            try:
+                line = updates.notice()        # the cache only: never the network
+            except Exception:                  # an optional notice must never break a tool call
+                line = None
+            if line:
+                result.content = [*result.content, types.TextContent(type="text", text=line)]
+        return result
 
-        @s.list_prompts()
-        async def list_prompts() -> list[types.Prompt]:
-            if await self._session() is None:
-                if self.failure:                # the same message on every surface the harness may read first
-                    raise RuntimeError(self.failure)
-                return []
-            return (await self._forward(lambda u: u.list_prompts())).prompts
+    async def _on_list_prompts(self, ctx, params) -> types.ListPromptsResult:
+        if await self._session() is None:
+            if self.failure:                # the same message on every surface the harness may read first
+                raise RuntimeError(self.failure)
+            return types.ListPromptsResult(prompts=[])
+        return types.ListPromptsResult(prompts=(await self._forward(lambda u: u.list_prompts())).prompts)
 
-        @s.list_resources()
-        async def list_resources() -> list[types.Resource]:
-            if await self._session() is None:
-                if self.failure:
-                    raise RuntimeError(self.failure)
-                return []
-            return (await self._forward(lambda u: u.list_resources())).resources
+    async def _on_list_resources(self, ctx, params) -> types.ListResourcesResult:
+        if await self._session() is None:
+            if self.failure:
+                raise RuntimeError(self.failure)
+            return types.ListResourcesResult(resources=[])
+        return types.ListResourcesResult(resources=(await self._forward(lambda u: u.list_resources())).resources)
 
-        @s.read_resource()
-        async def read_resource(uri):
-            if await self._session() is None:
-                raise RuntimeError(self.failure or f"no memory store for {self.cwd} — call memory_init first — see SETUP.md#registry")
-            # mcp 1.27.1's read_resource decorator (read from lowlevel/server.py) does not accept a
-            # ReadResourceResult or a plain list of TextResourceContents/BlobResourceContents back —
-            # only str, bytes, or Iterable[ReadResourceContents] (mcp.server.lowlevel.helper_types).
-            # So the upstream's ReadResourceResult.contents is unpacked into that shape; a blob's
-            # base64 text is decoded back to bytes so the decorator re-encodes it as a blob again
-            # rather than as text.
-            result = await self._forward(lambda u: u.read_resource(uri))
-            contents = []
-            for c in result.contents:
-                data = base64.b64decode(c.blob) if isinstance(c, types.BlobResourceContents) else c.text
-                contents.append(ReadResourceContents(content=data, mime_type=c.mimeType, meta=c.meta))
-            return contents
+    async def _on_read_resource(self, ctx, params) -> types.ReadResourceResult:
+        if await self._session() is None:
+            raise RuntimeError(self.failure or f"no memory store for {self.cwd} — call memory_init first — see SETUP.md#registry")
+        return await self._forward(lambda u: u.read_resource(params.uri))    # the upstream's result, passed through
 
     def _provision(self, args: dict) -> Store:
         """Choose the backend, plan, apply — psql and (for the embedded one) initdb + pg_ctl: off the event loop."""
@@ -386,7 +371,7 @@ class Launcher:
         plan = plan_init(self.cwd, args.get("name"), args.get("dialect", "coding"), pg, backend=backend)
         return apply_init(plan, pg)
 
-    async def _init(self, args: dict) -> list[types.TextContent]:
+    async def _init(self, args: dict, ctx) -> list[types.TextContent]:
         try:
             store = await asyncio.to_thread(self._provision, args)
         except InitRefused as e:
@@ -396,7 +381,7 @@ class Launcher:
         await self.ready.wait()
         if self.upstream is None:
             raise RuntimeError(self.failure or "the store's server did not come up — see SETUP.md#servers")
-        await self.server.request_context.session.send_tool_list_changed()
+        await ctx.session.send_tool_list_changed()
         return [types.TextContent(type="text", text=f"created store {store.name} for {self.cwd} "
                                   f"(database {store.database} on the {store.postgres} Postgres, port {store.port}); "
                                   f"the memory tools are now available")]
