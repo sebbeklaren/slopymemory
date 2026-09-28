@@ -1,6 +1,6 @@
-"""The durability review's smaller findings: a connection closed when the schema step fails, passwords hidden in
+"""Smaller durability guarantees: a connection closed when the schema step fails, passwords hidden in
 any letter case, a deferred fit that is not reported as a healthy database, a partial drain still reported, a
-rejected save told apart from a database that is down, and torn temporary files shown by the doctor."""
+rejected save told apart from a database that is down."""
 import dataclasses
 
 import psycopg
@@ -76,8 +76,13 @@ def test_a_deferred_fit_marks_the_database_failing(srv, conn, monkeypatch):
     assert du.read_status(du.state_dir())["state"] == "failing"
 
 
-def test_torn_temporary_files_are_counted(srv):
-    held = du.state_dir() / "held"
-    held.mkdir(parents=True, exist_ok=True)
-    (held / "00000000000000000001-x.tmp").write_text("partial")
-    assert du.torn_count() == 1
+
+def test_a_fault_before_the_save_itself_is_the_database_down_not_a_rejection(srv, monkeypatch):
+    """A missing vector extension, lost privileges or a read-only database fail in the connection or schema step,
+    before this record is written: that is the database, and it is said so and marked failing."""
+    def no_vector(conn):
+        raise psycopg.ProgrammingError("vector type not found in the database")
+    monkeypatch.setattr(server, "register_vector", no_vector)
+    out = server.memory_save(tenant="t", text="x")
+    assert out["status"] == "held" and "database is back" in out["message"]
+    assert du.read_status(du.state_dir())["state"] == "failing"

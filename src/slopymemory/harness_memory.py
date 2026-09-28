@@ -28,6 +28,12 @@ def claude_settings() -> Path:
     return claude_code.config_dir() / "settings.json"
 
 
+def _recorded_path(rec: dict | None) -> Path:
+    """The settings file a record was made for — the one to restore — whatever CLAUDE_CONFIG_DIR says now. A record
+    from before paths were recorded falls back to the current location."""
+    return Path(rec["path"]) if rec and isinstance(rec.get("path"), str) else claude_settings()
+
+
 def _records() -> dict:
     f = STATE_FILE()
     if not f.exists():
@@ -133,7 +139,7 @@ def _clear_record_after_restore(recs: dict, key: str, message: str) -> str:
 def _claude_off() -> str:
     recs = _records()
     existing = recs.get("claude-code")
-    f = claude_settings()
+    f = _recorded_path(existing)
     text, d = _read_settings(f)
     current = d.get(KEY, "absent")
 
@@ -141,7 +147,7 @@ def _claude_off() -> str:
         # already off, by the user's own choice or an earlier install: record it as slopymemory's own so
         # `on` restores it in meaning, but never rewrite the file for a value that is already what we want
         recs["claude-code"] = {"file_existed": True, "original_text": text,
-                               "prior": False, "wrote": False, "written_text": text}
+                               "prior": False, "wrote": False, "written_text": text, "path": str(f)}
         _save_records(recs)
         return "Claude Code file memory was already off; recorded, nothing changed"
 
@@ -156,7 +162,7 @@ def _claude_off() -> str:
     d[KEY] = False
     written = json.dumps(d, indent=2) + "\n"
     recs["claude-code"] = {"file_existed": file_existed, "original_text": original_text,
-                           "prior": prior, "wrote": False, "written_text": written}
+                           "prior": prior, "wrote": False, "written_text": written, "path": str(f)}
     _save_records(recs)                    # the record first, already complete: a crash after it still restores
     try:
         _write_settings(f, written)
@@ -179,7 +185,7 @@ def _claude_on(choose: Callable[[str, str], str]) -> str:
     if rec is None:
         raise HarnessMemoryError("no record of slopymemory switching Claude Code's file memory off, so there is "
                                  f"nothing to restore; {KEY} in {claude_settings()} is yours to set{ANCHOR}")
-    f = claude_settings()
+    f = _recorded_path(rec)
     text, d = _read_settings(f)
     current = d.get(KEY, "absent")
     if not _json_eq(current, rec["wrote"]):                # changed since we wrote it: never clobber a newer choice
@@ -306,8 +312,8 @@ def turn_on(harness_id: str, choose: Callable[[str, str], str]) -> str:
 
 def status() -> dict[str, str]:
     recs = _records()
-    _, d = _read_settings(claude_settings())
     rec = recs.get("claude-code")
+    _, d = _read_settings(_recorded_path(rec))
     if rec is not None:
         current = d.get(KEY, "absent")
         s = "off (slopymemory)" if _json_eq(current, rec["wrote"]) else "on (changed since slopymemory switched it off)"

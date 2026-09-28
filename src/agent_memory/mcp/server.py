@@ -238,22 +238,27 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
         # Write first: from here on the save survives whatever the database does. An unwritable held/ raises
         # (the save fails loudly with that error, nothing is claimed).
         path = du.hold(du.record(mid, text, session_key, scope, now, thread, facets, save_concepts, supersedes))
+        own = False                                # True only while this record's own save runs
         try:
             conn = _connect()
             try:
                 _prepare(conn, skip=path)          # earlier held saves first: the order they were made in
+                own = True
                 out = handlers.memory_save(conn, _store, tenant, session_key, text, scope, thread, facets,
                                            save_concepts, supersedes, memory_id=mid, now=now,
                                            known_ids=du.held_ids() - {mid})
             finally:
                 conn.close()
+            own = False
             du.release(path)
             # a pre-warm fit the database could not finish: the save is safe in the buffer, the database is not fine
             _mark_safely(not out.get("fit_deferred"), out.get("fit_deferred"))
             out = _with_recovered(out)
         except (psycopg.Error, OSError) as e:        # OSError: a drain or status write failed — the save is on disk
             err = du.clean_error(e)
-            down = not isinstance(e, psycopg.Error) or isinstance(e, psycopg.OperationalError)
+            # Rejected only when THIS record's save failed on its own (a bad value); anything in connecting, the schema,
+            # the drain or a deferred fit is the database — a missing extension, lost privileges, a read-only server.
+            down = not own or not isinstance(e, psycopg.Error) or isinstance(e, psycopg.OperationalError)
             _mark_safely(not down, None if not down else err)
             out = _held_reply(mid, err, down)
     _log({"tool": "memory_save", "tenant": tenant, "session_key": session_key,

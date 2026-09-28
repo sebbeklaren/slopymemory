@@ -53,8 +53,14 @@ def install_state() -> str:
 
 def install_flags() -> list[str]:
     """The installer options recorded at install — a list, or a string someone wrote by hand."""
+    import shlex
     flags = (read_install() or {}).get("flags", [])
-    return flags.split() if isinstance(flags, str) else [str(f) for f in flags]
+    if isinstance(flags, str):
+        try:
+            return shlex.split(flags)
+        except ValueError:
+            return []
+    return [str(f) for f in flags] if isinstance(flags, list) else []
 
 
 def write_install(source: Path, flags: list[str], update_check: bool, remote: str | None) -> None:

@@ -84,12 +84,6 @@ def fail(path: Path, error: str) -> None:
     path.unlink(missing_ok=True)
 
 
-def torn_count() -> int:
-    """Unfinished writes: a `.tmp` left in held/ by a crash before its rename — never a record, never claimed."""
-    d = _held()
-    return len(list(d.glob("*.tmp"))) if d.exists() else 0
-
-
 def counts() -> tuple[int, int]:
     f = _failed()
     return len(held_paths()), (len(list(f.glob("*.json"))) if f.exists() else 0)

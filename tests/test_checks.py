@@ -523,3 +523,12 @@ def test_held_check_mentions_torn_temporary_files(tmp_home):
     (d / "held" / "00000000000000000001-a.tmp").write_text("partial")
     f = checks.by_id("held").run()
     assert "1 unfinished write" in f.detail
+
+
+def test_held_check_never_calls_a_temporary_file_safe_to_delete_while_a_server_may_write_it(tmp_home):
+    st = Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system"); st.save()
+    d = _store_dir(st)
+    (d / "held").mkdir(parents=True)
+    (d / "held" / "00000000000000000001-a.tmp").write_text("partial")
+    detail = checks.by_id("held").run().detail
+    assert "when no server is running" in detail

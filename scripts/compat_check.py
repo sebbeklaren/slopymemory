@@ -134,7 +134,15 @@ def diff(prev: dict | None, cur: dict) -> list:
     return out
 
 
-def release_notes(since_iso: str, repos: dict = REPOS, run=subprocess.run) -> list:
+def read_releases(since_iso: str, repos: dict = REPOS, run=subprocess.run) -> tuple[list, bool]:
+    """release_notes, plus whether every repository's releases were read — decided from the reads themselves,
+    never by searching the output, which carries release-note text."""
+    state = {"ok": True}
+    lines = release_notes(since_iso, repos, run, state)
+    return lines, state["ok"]
+
+
+def release_notes(since_iso: str, repos: dict = REPOS, run=subprocess.run, state: dict | None = None) -> list:
     """New releases since `since_iso` whose notes mention what slopymemory relies on — one line each, the first
     matching line of the notes. Over-reporting is the safe side: a keyword in a URL still counts."""
     since = datetime.fromisoformat(since_iso.replace("Z", "+00:00"))
@@ -144,13 +152,19 @@ def release_notes(since_iso: str, repos: dict = REPOS, run=subprocess.run) -> li
             p = run(["gh", "api", "--paginate", f"repos/{repo}/releases?per_page=100",
                      "--jq", ".[] | {tag_name, published_at, body}"], capture_output=True, text=True, timeout=60)
         except FileNotFoundError:
+            if state is not None:
+                state["ok"] = False
             return ["release notes skipped: gh is not installed"]
         except (OSError, subprocess.TimeoutExpired) as e:
             out.append(f"{name}: release notes not read ({e})")
+            if state is not None:
+                state["ok"] = False
             continue
         if p.returncode != 0:
             first = (p.stderr or "").strip().splitlines()
             out.append(f"{name}: release notes not read ({first[0] if first else f'exit status {p.returncode}'})")
+            if state is not None:
+                state["ok"] = False
             continue
         try:
             releases = [json.loads(line) for line in (p.stdout or "").splitlines() if line.strip()]
@@ -158,6 +172,8 @@ def release_notes(since_iso: str, repos: dict = REPOS, run=subprocess.run) -> li
                 raise ValueError
         except ValueError:
             out.append(f"{name}: release notes not read (output was not a list of releases)")
+            if state is not None:
+                state["ok"] = False
             continue
         for r in releases:
             published = r.get("published_at")
@@ -175,9 +191,9 @@ def main() -> int:
     prev = latest_record(d)
     cur = {"when": now.isoformat(), "versions": harness_versions(), "contracts": run_contracts()}
     since = release_window(prev, (now - timedelta(days=30)).isoformat())   # a first run shows the last month
-    notes = release_notes(since)
+    notes, read_ok = read_releases(since)
     cur["since"] = since
-    cur["releases_read"] = not any("not read" in n or "skipped" in n for n in notes)
+    cur["releases_read"] = read_ok
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{now:%Y-%m-%dT%H%M%S}.json").write_text(json.dumps(cur, indent=1))
     print(f"compatibility check, {now:%Y-%m-%d %H:%M} UTC")

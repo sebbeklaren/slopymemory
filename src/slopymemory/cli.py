@@ -251,6 +251,9 @@ def cmd_update(a) -> int:
         print(f"the daily update check is {a.check}")
         return 0
     info = updates.read_install()
+    if updates.install_state() == "unreadable":
+        return fail(f"the install record {updates.install_file()} is unreadable — re-run ./install.sh in your clone "
+                    "to rewrite it — see SETUP.md#update")
     if not info:
         return fail("this install has no install record (installed before 0.4) — update by hand: `git pull` in your "
                     "clone, then `./install.sh` — see SETUP.md#update")

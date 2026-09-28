@@ -56,6 +56,9 @@ def test_a_config_kept_elsewhere_is_found_where_the_harness_keeps_it(throwaway, 
     assert harnesses.register(h.id, True, print_summary=False) == 0
     assert launcher in subprocess.run(show, capture_output=True, text=True, timeout=120).stdout
     assert h.registered(launcher), f"slopymemory does not see its own entry in {h.name}'s moved config"
+    f = h.instructions_file()
+    assert f.resolve().is_relative_to((throwaway / ("cc" if h.id == "claude-code" else "cx")).resolve())
+    assert harnesses.TRIGGER_PREFIX in f.read_text()
     assert harnesses.unregister(h, launcher) == 0
     assert launcher not in subprocess.run(show, capture_output=True, text=True, timeout=120).stdout
 

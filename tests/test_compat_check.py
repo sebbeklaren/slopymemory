@@ -156,3 +156,16 @@ def test_the_release_window_starts_at_the_last_record_whose_releases_were_read()
     assert cc.release_window(prev, "2026-10-01T00:00:00+00:00") == "2026-09-01T00:00:00+00:00"
     assert cc.release_window({"when": "2026-09-28T00:00:00+00:00", "releases_read": True}, "x") == "2026-09-28T00:00:00+00:00"
     assert cc.release_window({}, "2026-10-01T00:00:00+00:00") == "2026-10-01T00:00:00+00:00"
+
+
+def test_a_release_note_that_says_skipped_does_not_mark_the_read_as_failed():
+    releases = [{"tag_name": "v9", "published_at": "2026-10-02T00:00:00Z", "body": "Fixed MCP config being skipped on reload"}]
+
+    def fake(cmd, **k):
+        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(json.dumps(r) for r in releases), stderr="")
+    lines, ok = cc.read_releases("2026-09-28T00:00:00+00:00", repos={"x": "o/r"}, run=fake)
+    assert ok is True and lines == ["x v9: Fixed MCP config being skipped on reload"]
+
+    def down(cmd, **k):
+        raise FileNotFoundError("gh")
+    assert cc.read_releases("2026-09-28T00:00:00+00:00", repos={"x": "o/r"}, run=down)[1] is False

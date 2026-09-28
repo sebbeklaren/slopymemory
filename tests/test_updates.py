@@ -158,3 +158,10 @@ def test_a_failed_ls_remote_names_gits_message_without_brackets(home, tmp_path):
 def test_flags_written_by_hand_as_one_string_are_split(home, tmp_path):
     updates.install_file().write_text(f'source = "{tmp_path}"\nflags = "--no-harness --postgres=embedded"\nupdate_check = true\n')
     assert updates.install_flags() == ["--no-harness", "--postgres=embedded"]
+
+
+def test_hand_written_flags_of_any_shape_never_crash_and_keep_quotes(home, tmp_path):
+    updates.install_file().write_text(f'source = "{tmp_path}"\nflags = 5\nupdate_check = true\n')
+    assert updates.install_flags() == []
+    updates.install_file().write_text(f'source = "{tmp_path}"\nflags = "--postgres=\'a b\'"\nupdate_check = true\n')
+    assert updates.install_flags() == ["--postgres=a b"]

@@ -346,8 +346,8 @@ def _held() -> Finding:
         held, failed, status = _held_state(d)
         torn = len(list((d / "held").glob("*.tmp"))) if (d / "held").exists() else 0
         if torn:
-            rows.append(f"{st.name}: {torn} unfinished write(s) in held/ (*.tmp, left by a crash before anything "
-                        "was claimed; safe to delete)")
+            rows.append(f"{st.name}: {torn} unfinished write(s) in held/ (*.tmp: a write in progress, or left by a "
+                        "crash before anything was claimed — safe to delete when no server is running)")
         if not held and not failed:
             continue
         row = f"{st.name}: {len(held)} save(s) held"

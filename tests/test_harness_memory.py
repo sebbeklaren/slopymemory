@@ -601,3 +601,20 @@ def test_has_record_true_only_while_a_record_exists(home):
     assert hm.has_record("claude-code") is True
     hm.turn_on("claude-code", choose=lambda p, c: pytest.fail("no conflict expected"))
     assert hm.has_record("claude-code") is False
+
+
+def test_on_restores_the_settings_file_that_off_changed_whatever_claude_config_dir_says_now(tmp_path, monkeypatch):
+    """off in a shell with CLAUDE_CONFIG_DIR set, on in one without: the restore goes back to the file that was
+    changed, never to the default one."""
+    from slopymemory import harness_memory as hm
+    monkeypatch.setenv("SLOPYMEM_HOME", str(tmp_path / "slopy"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    work = tmp_path / "cc-work"; work.mkdir()
+    (work / "settings.json").write_text('{"theme": "dark"}\n')
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(work))
+    hm.turn_off("claude-code")
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    assert hm.status()["claude-code"] == "off (slopymemory)"
+    hm.turn_on("claude-code", lambda prior, current: "restore")
+    assert (work / "settings.json").read_text() == '{"theme": "dark"}\n'
+    assert not (tmp_path / "home" / ".claude" / "settings.json").exists()

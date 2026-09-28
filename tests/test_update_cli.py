@@ -147,3 +147,10 @@ def test_update_installs_what_the_pulled_clone_is_not_a_tag_it_does_not_contain(
     assert cli.main(["update", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "0.4.0 -> 0.5.0" in out and "9.0.0" not in out
+
+
+def test_update_names_an_unreadable_record_as_unreadable(tmp_home, capsys):
+    tmp_home.mkdir(parents=True, exist_ok=True)
+    updates.install_file().write_text("not = [toml")
+    assert cli.main(["update"]) == 1
+    assert "unreadable" in capsys.readouterr().err
