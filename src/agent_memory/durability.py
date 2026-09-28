@@ -13,7 +13,7 @@ from pathlib import Path
 from agent_memory.config import settings
 
 _URL = re.compile(r"postgres(?:ql)?://\S+")
-_PASSWORD = re.compile(r"password\s*=\s*(?:'(?:[^'\\]|\\.)*'|\S+)")
+_PASSWORD = re.compile(r"password\s*=\s*(?:'(?:[^'\\]|\\.)*'|\S+)", re.IGNORECASE)
 
 
 def state_dir() -> Path:
@@ -82,6 +82,12 @@ def fail(path: Path, error: str) -> None:
     _write_durably(_failed() / path.name, {"record": rec, "error": error,
                                            "failed_at": datetime.now(timezone.utc).isoformat()})
     path.unlink(missing_ok=True)
+
+
+def torn_count() -> int:
+    """Unfinished writes: a `.tmp` left in held/ by a crash before its rename — never a record, never claimed."""
+    d = _held()
+    return len(list(d.glob("*.tmp"))) if d.exists() else 0
 
 
 def counts() -> tuple[int, int]:

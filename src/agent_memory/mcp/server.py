@@ -33,6 +33,8 @@ _embedder: NomicEmbedder | None = None
 _store: "LiveStore | None" = None
 
 
+REJECTED_MESSAGE = ("The database is up but rejected this save; it is kept on disk and tried again on the next call, and "
+                    "if it is rejected again it moves to held-failed/ with the error. Tell the user. See SETUP.md#held")
 HELD_MESSAGE = ("Saved to disk, not yet to the database; it will be written when the database is back. Tell the "
                 "user. Fix: SETUP.md#postgres. To report it: slopymem doctor --report")
 # One lock over hold -> save -> release, the drain and the session map: the design does not rely on FastMCP running
@@ -50,10 +52,14 @@ def _connect() -> psycopg.Connection:
     conn = psycopg.connect(settings.database_url, autocommit=True, connect_timeout=3,
                            options="-c statement_timeout=15000", keepalives=1, keepalives_idle=5,
                            keepalives_interval=2, keepalives_count=3)
-    register_vector(conn)
-    if not _state["schema_ready"]:
-        _ensure_schema(conn)
-        _state["schema_ready"] = True
+    try:
+        register_vector(conn)
+        if not _state["schema_ready"]:
+            _ensure_schema(conn)
+            _state["schema_ready"] = True
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
@@ -100,34 +106,38 @@ def _drain(conn, skip: Path | None = None) -> None:
         nonlocal failed
         du.fail(path, err); failed += 1; errors.append(err)
 
-    for path in du.held_paths():
-        if path == skip:
-            continue
-        try:
-            rec = du.load(path)
-            if isinstance(rec, dict) and isinstance(rec.get("record"), dict) and "error" in rec:
-                rec = rec["record"]                 # a held-failed record moved back into held/ — the documented fix
-            mid, text, now = rec["memory_id"], rec["text"], datetime.fromisoformat(rec["now"])
-            if not isinstance(mid, str) or not isinstance(text, str):
-                raise TypeError("memory_id and text must be strings")
-        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
-            keep(path, du.clean_error(e)); continue
-        if mid in {b[0] for b in getattr(_store, "_buffer", ())} or LiveStore._has_row(conn, mid):
-            du.release(path); continue              # already in the warm-up buffer or committed: never placed twice
-        try:
-            out = handlers.memory_save(conn, _store, "default", rec.get("session_key") or "default", text,
-                                       rec.get("scope"), rec.get("thread"), rec.get("facets"),
-                                       rec.get("save_concepts"), rec.get("supersedes"),
-                                       memory_id=mid, now=now, known_ids=du.held_ids() - {mid})
-        except psycopg.OperationalError:
-            raise
-        except Exception as e:                      # noqa: BLE001 — every other failure is kept, never lost
-            keep(path, du.clean_error(e)); continue
-        if out.get("status") in ("error", "noop"):
-            keep(path, out.get("note", out.get("status"))); continue
-        du.release(path); written += 1
-    if written or failed:
-        _recovered = {"written": written, "failed": failed, "failed_errors": errors}
+    try:
+        for path in du.held_paths():
+            if path == skip:
+                continue
+            try:
+                rec = du.load(path)
+                if isinstance(rec, dict) and isinstance(rec.get("record"), dict) and "error" in rec:
+                    rec = rec["record"]                 # a held-failed record moved back into held/ — the documented fix
+                mid, text, now = rec["memory_id"], rec["text"], datetime.fromisoformat(rec["now"])
+                if not isinstance(mid, str) or not isinstance(text, str):
+                    raise TypeError("memory_id and text must be strings")
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+                keep(path, du.clean_error(e)); continue
+            if mid in {b[0] for b in getattr(_store, "_buffer", ())} or LiveStore._has_row(conn, mid):
+                du.release(path); continue              # already in the warm-up buffer or committed: never placed twice
+            try:
+                out = handlers.memory_save(conn, _store, "default", rec.get("session_key") or "default", text,
+                                           rec.get("scope"), rec.get("thread"), rec.get("facets"),
+                                           rec.get("save_concepts"), rec.get("supersedes"),
+                                           memory_id=mid, now=now, known_ids=du.held_ids() - {mid})
+            except psycopg.OperationalError:
+                raise
+            except Exception as e:                      # noqa: BLE001 — every other failure is kept, never lost
+                keep(path, du.clean_error(e)); continue
+            if out.get("status") in ("error", "noop"):
+                keep(path, out.get("note", out.get("status"))); continue
+            du.release(path); written += 1
+    finally:                                   # a connection lost mid-drain still reports what was written before it
+        if written or failed:
+            prev = _recovered or {"written": 0, "failed": 0, "failed_errors": []}
+            _recovered = {"written": prev["written"] + written, "failed": prev["failed"] + failed,
+                          "failed_errors": prev["failed_errors"] + errors}
 
 
 def _prepare(conn, skip: Path | None = None) -> None:
@@ -144,9 +154,9 @@ def _with_recovered(out: dict) -> dict:
     return out
 
 
-def _held_reply(memory_id: str, err: str) -> dict:
+def _held_reply(memory_id: str, err: str, down: bool = True) -> dict:
     return {"status": "held", "memory_id": memory_id, "held_count": du.counts()[0], "error": err,
-            "message": HELD_MESSAGE}
+            "message": HELD_MESSAGE if down else REJECTED_MESSAGE}
 
 
 def _log(record: dict) -> None:
@@ -238,12 +248,14 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
             finally:
                 conn.close()
             du.release(path)
-            _mark_safely(True)
+            # a pre-warm fit the database could not finish: the save is safe in the buffer, the database is not fine
+            _mark_safely(not out.get("fit_deferred"), out.get("fit_deferred"))
             out = _with_recovered(out)
         except (psycopg.Error, OSError) as e:        # OSError: a drain or status write failed — the save is on disk
             err = du.clean_error(e)
-            _mark_safely(False, err)
-            out = _held_reply(mid, err)
+            down = not isinstance(e, psycopg.Error) or isinstance(e, psycopg.OperationalError)
+            _mark_safely(not down, None if not down else err)
+            out = _held_reply(mid, err, down)
     _log({"tool": "memory_save", "tenant": tenant, "session_key": session_key,
           # FULL text, not an 80-char snippet: a warm save's text is recoverable via memory_id, but
           # a BUFFERED save returns memory_id None, so its (text -> concepts) pair would survive only

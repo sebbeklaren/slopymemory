@@ -342,7 +342,12 @@ def _held() -> Finding:
     only, so it answers with the server down."""
     rows = []
     for st in all_stores():
-        held, failed, status = _held_state(Path(st.server_env()["AM_M3_BUFFER_PATH"]).parent)
+        d = Path(st.server_env()["AM_M3_BUFFER_PATH"]).parent
+        held, failed, status = _held_state(d)
+        torn = len(list((d / "held").glob("*.tmp"))) if (d / "held").exists() else 0
+        if torn:
+            rows.append(f"{st.name}: {torn} unfinished write(s) in held/ (*.tmp, left by a crash before anything "
+                        "was claimed; safe to delete)")
         if not held and not failed:
             continue
         row = f"{st.name}: {len(held)} save(s) held"
@@ -353,7 +358,7 @@ def _held() -> Finding:
         if failed:
             row += f"; {len(failed)} failed: " + "; ".join(_failed_error(p) for p in failed)
         rows.append(row)
-    return Finding(not rows, "; ".join(rows) or "no save is held or failed in any store")
+    return Finding(not any("save(s) held" in r for r in rows), "; ".join(rows) or "no save is held or failed in any store")
 
 
 def _update() -> Finding:

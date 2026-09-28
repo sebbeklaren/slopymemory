@@ -514,3 +514,12 @@ def test_update_check_names_an_unreadable_record_and_a_missing_remote(tmp_home):
     assert "unreadable" in checks.by_id("update").run().detail
     updates.write_install(Path("/nonexistent"), [], True, None)
     assert "no remote" in checks.by_id("update").run().detail
+
+
+def test_held_check_mentions_torn_temporary_files(tmp_home):
+    st = Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system"); st.save()
+    d = _store_dir(st)
+    (d / "held").mkdir(parents=True)
+    (d / "held" / "00000000000000000001-a.tmp").write_text("partial")
+    f = checks.by_id("held").run()
+    assert "1 unfinished write" in f.detail
