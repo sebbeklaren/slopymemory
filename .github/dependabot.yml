@@ -5,6 +5,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Only inside the ranges pyproject.toml pins: those are deliberate, and widening one is a planned change.
+    versioning-strategy: lockfile-only
     # Majors of these are planned migrations, not weekly bumps: MCP SDK v2 moves the server modules; a new major of
     # the embedding stack can change every stored vector and must be proven bit-identical first.
     ignore:

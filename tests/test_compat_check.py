@@ -120,3 +120,12 @@ def test_dependabot_leaves_the_major_versions_that_are_planned_migrations():
     ignored = {i["dependency-name"]: i.get("update-types") for i in uv.get("ignore", [])}
     for name in ("mcp", "sentence-transformers", "transformers", "torch"):
         assert ignored.get(name) == ["version-update:semver-major"], name
+
+
+def test_dependabot_updates_only_within_the_ranges_pyproject_pins():
+    """The ranges in pyproject.toml are deliberate (the embedding stack is pinned so stored vectors stay the same):
+    Dependabot may move the lock inside them, never widen them — widening a pin is a planned change."""
+    import yaml
+    cfg = yaml.safe_load((Path(__file__).parent.parent / ".github" / "dependabot.yml").read_text())
+    uv = next(u for u in cfg["updates"] if u["package-ecosystem"] == "uv")
+    assert uv["versioning-strategy"] == "lockfile-only"
