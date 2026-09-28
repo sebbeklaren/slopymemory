@@ -388,15 +388,29 @@ class ReportRefused(Exception):
     pass
 
 
+def _postgres_version(st) -> str | None:
+    """The store's Postgres server version, read over the store's own DSN with a short timeout; None when it
+    cannot be reached (the report says so)."""
+    import psycopg
+    try:
+        with psycopg.connect(st.server_env()["DATABASE_URL"], connect_timeout=3) as conn:
+            return conn.execute("SHOW server_version").fetchone()[0].split()[0]
+    except Exception:
+        return None
+
+
 def _report_lines() -> list[str]:
     """Versions, and per store: its state, held and failed counts, the failed records' errors and the last error
     lines of its server log. Built from counts, states and error strings only — never a record's text, concepts or
     facets, and the stored errors were cleaned of database URLs and passwords when they were written."""
     import platform
-    lines = [f"slopymemory {md.version('slopymemory')} · Python {platform.python_version()} · {platform.platform()}"]
+    lines = [f"slopymemory {md.version('slopymemory')} (substrate agent_memory, same package) · "
+             f"Python {platform.python_version()} · {platform.platform()}"]
     for st in all_stores():
         held, failed, status = _held_state(Path(st.server_env()["AM_M3_BUFFER_PATH"]).parent)
-        row = (f"store {st.name} ({st.dialect}, {st.postgres} Postgres): state {status.get('state', 'unknown')}, "
+        pg = _postgres_version(st)
+        row = (f"store {st.name} ({st.dialect}, {st.postgres} Postgres {pg or 'unreachable'}): "
+               f"state {status.get('state', 'unknown')}, "
                f"held {len(held)}, failed {len(failed)}")
         if status.get("error"):
             row += f", error {status['error']}"

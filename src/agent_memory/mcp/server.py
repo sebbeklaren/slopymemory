@@ -107,6 +107,7 @@ def _drain(conn, skip: Path | None = None) -> None:
         du.fail(path, err); failed += 1; errors.append(err)
 
     try:
+        ids = du.held_ids()                            # listed once, kept current below — not once per record
         for path in du.held_paths():
             if path == skip:
                 continue
@@ -120,19 +121,19 @@ def _drain(conn, skip: Path | None = None) -> None:
             except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
                 keep(path, du.clean_error(e)); continue
             if mid in {b[0] for b in getattr(_store, "_buffer", ())} or LiveStore._has_row(conn, mid):
-                du.release(path); continue              # already in the warm-up buffer or committed: never placed twice
+                du.release(path); ids.discard(mid); continue   # already buffered or committed: never placed twice
             try:
                 out = handlers.memory_save(conn, _store, "default", rec.get("session_key") or "default", text,
                                            rec.get("scope"), rec.get("thread"), rec.get("facets"),
                                            rec.get("save_concepts"), rec.get("supersedes"),
-                                           memory_id=mid, now=now, known_ids=du.held_ids() - {mid})
+                                           memory_id=mid, now=now, known_ids=ids - {mid})
             except psycopg.OperationalError:
                 raise
             except Exception as e:                      # noqa: BLE001 — every other failure is kept, never lost
-                keep(path, du.clean_error(e)); continue
+                keep(path, du.clean_error(e)); ids.discard(mid); continue
             if out.get("status") in ("error", "noop"):
-                keep(path, out.get("note", out.get("status"))); continue
-            du.release(path); written += 1
+                keep(path, out.get("note", out.get("status"))); ids.discard(mid); continue
+            du.release(path); written += 1; ids.discard(mid)
     finally:                                   # a connection lost mid-drain still reports what was written before it
         if written or failed:
             prev = _recovered or {"written": 0, "failed": 0, "failed_errors": []}
@@ -260,7 +261,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
             # the drain or a deferred fit is the database — a missing extension, lost privileges, a read-only server.
             down = not own or not isinstance(e, psycopg.Error) or isinstance(e, psycopg.OperationalError)
             _mark_safely(not down, None if not down else err)
-            out = _held_reply(mid, err, down)
+            out = _with_recovered(_held_reply(mid, err, down))   # a partial drain before the fault is still reported
     _log({"tool": "memory_save", "tenant": tenant, "session_key": session_key,
           # FULL text, not an 80-char snippet: a warm save's text is recoverable via memory_id, but
           # a BUFFERED save returns memory_id None, so its (text -> concepts) pair would survive only

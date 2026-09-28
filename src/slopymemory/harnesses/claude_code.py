@@ -6,13 +6,17 @@ from . import Harness, SERVER_NAME, entry_named
 def config_dir() -> Path:
     """Where Claude Code keeps CLAUDE.md and settings.json: $CLAUDE_CONFIG_DIR when set, else ~/.claude."""
     d = os.environ.get("CLAUDE_CONFIG_DIR")
-    return Path(d).expanduser() if d else Path.home() / ".claude"
+    return Path(d) if d else Path.home() / ".claude"        # taken literally, as Claude Code takes it (no ~ expansion)
 
 
 def _cfg() -> Path:
-    """The MCP table's file: $CLAUDE_CONFIG_DIR/.claude.json when the variable is set, else ~/.claude.json."""
+    """The MCP table's file, where Claude Code reads it: a legacy `.config.json` in its config directory wins when it
+    exists; else $CLAUDE_CONFIG_DIR/.claude.json when the variable is set, else ~/.claude.json."""
+    legacy = config_dir() / ".config.json"
+    if legacy.exists():
+        return legacy
     d = os.environ.get("CLAUDE_CONFIG_DIR")
-    return Path(d).expanduser() / ".claude.json" if d else Path.home() / ".claude.json"
+    return Path(d) / ".claude.json" if d else Path.home() / ".claude.json"
 
 
 def _registered_as(launcher: str) -> str | None:

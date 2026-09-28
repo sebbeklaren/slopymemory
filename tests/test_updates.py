@@ -1,3 +1,4 @@
+from pathlib import Path
 import json
 import subprocess
 import time
@@ -165,3 +166,16 @@ def test_hand_written_flags_of_any_shape_never_crash_and_keep_quotes(home, tmp_p
     assert updates.install_flags() == []
     updates.install_file().write_text(f'source = "{tmp_path}"\nflags = "--postgres=\'a b\'"\nupdate_check = true\n')
     assert updates.install_flags() == ["--postgres=a b"]
+
+
+def test_the_cache_is_written_through_a_temporary_file_of_its_own(home, tmp_path, monkeypatch):
+    """Two launchers starting together must not interleave into one fixed .tmp name."""
+    updates.write_install(tmp_path, [], True, "https://example.invalid/x.git")
+    names = []
+    real = updates.os.replace
+    monkeypatch.setattr(updates.os, "replace", lambda a, b: (names.append(Path(a).name), real(a, b))[1])
+
+    def fake(cmd, **k):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    updates.refresh(run=fake)
+    assert names and names[0] != "update-check.json.tmp" and names[0].startswith("update-check.json.")

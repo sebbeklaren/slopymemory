@@ -532,3 +532,12 @@ def test_held_check_never_calls_a_temporary_file_safe_to_delete_while_a_server_m
     (d / "held" / "00000000000000000001-a.tmp").write_text("partial")
     detail = checks.by_id("held").run().detail
     assert "when no server is running" in detail
+
+
+def test_report_names_each_stores_postgres_version_or_why_not(tmp_home, monkeypatch):
+    st = Store(name="a", dialect="coding", port=8780, database="a_db", postgres="system"); st.save()
+    monkeypatch.setattr(checks, "_postgres_version", lambda s: "17.6")
+    out = checks.report()
+    assert "Postgres 17.6" in out and "substrate agent_memory" in out
+    monkeypatch.setattr(checks, "_postgres_version", lambda s: None)
+    assert "Postgres unreachable" in checks.report()

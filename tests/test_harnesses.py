@@ -1,3 +1,4 @@
+from pathlib import Path
 import subprocess
 import pytest
 from slopymemory import harnesses
@@ -758,3 +759,14 @@ def test_codex_config_follows_codex_home(tmp_path, monkeypatch):
     monkeypatch.delenv("CODEX_HOME")
     monkeypatch.setenv("HOME", str(tmp_path))
     assert codex._cfg() == tmp_path / ".codex" / "config.toml"
+
+
+def test_claude_config_dir_is_taken_literally_as_claude_code_does(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/cc")                     # Claude Code does not expand ~
+    assert claude_code._cfg() == Path("~/cc") / ".claude.json"
+
+
+def test_claude_codes_legacy_config_file_wins_when_it_exists(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    (tmp_path / ".config.json").write_text("{}")
+    assert claude_code._cfg() == tmp_path / ".config.json"

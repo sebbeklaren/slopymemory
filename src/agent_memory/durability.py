@@ -52,7 +52,16 @@ def _write_durably(path: Path, data: dict) -> None:
 
 
 def hold(rec: dict) -> Path:
-    path = _held() / f"{time.time_ns():020d}-{rec['memory_id']}.json"
+    """The file name orders the drain, so it must grow even if the wall clock steps back: never below the newest
+    held record's number."""
+    last = held_paths()
+    ns = time.time_ns()
+    if last:
+        try:
+            ns = max(ns, int(last[-1].name.split("-", 1)[0]) + 1)
+        except ValueError:
+            pass
+    path = _held() / f"{ns:020d}-{rec['memory_id']}.json"
     _write_durably(path, rec)
     return path
 

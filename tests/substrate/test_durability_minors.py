@@ -86,3 +86,20 @@ def test_a_fault_before_the_save_itself_is_the_database_down_not_a_rejection(srv
     out = server.memory_save(tenant="t", text="x")
     assert out["status"] == "held" and "database is back" in out["message"]
     assert du.read_status(du.state_dir())["state"] == "failing"
+
+
+def test_a_held_save_after_a_partial_drain_carries_what_was_written(srv, conn, monkeypatch):
+    down(monkeypatch)
+    server.memory_save(tenant="t", text="one")
+    server.memory_save(tenant="t", text="two")
+    up(monkeypatch)
+    real, calls = server.handlers.memory_save, []
+
+    def second_fails(conn, store, tenant, sk, text, *a, **k):
+        calls.append(text)
+        if len(calls) == 2:
+            raise psycopg.OperationalError("connection lost mid-drain")
+        return real(conn, store, tenant, sk, text, *a, **k)
+    monkeypatch.setattr(server.handlers, "memory_save", second_fails)
+    out = server.memory_save(tenant="t", text="three")                 # drains "one", loses the connection on "two"
+    assert out["status"] == "held" and out["recovered"]["written"] == 1

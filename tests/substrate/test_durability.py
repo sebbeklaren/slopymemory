@@ -75,3 +75,10 @@ def test_substrate_tests_never_write_state_into_the_checkout():
     left in the working tree would be read by the next run's drain, and could be committed."""
     from pathlib import Path
     assert not du.state_dir().resolve().is_relative_to(Path(__file__).resolve().parents[2])
+
+
+def test_a_clock_stepping_backwards_never_puts_a_later_save_before_an_earlier_one(state, monkeypatch):
+    times = iter([2_000_000_000_000_000_000, 1_000_000_000_000_000_000])      # the second save's clock went back
+    monkeypatch.setattr(du.time, "time_ns", lambda: next(times))
+    du.hold(_rec("first")); du.hold(_rec("second"))
+    assert [du.load(p)["memory_id"] for p in du.held_paths()] == ["first", "second"]

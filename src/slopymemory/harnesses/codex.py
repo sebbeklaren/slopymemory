@@ -6,7 +6,7 @@ from . import Harness, SERVER_NAME, entry_named
 def home() -> Path:
     """Codex's home: $CODEX_HOME when set, else ~/.codex — where its config.toml and AGENTS.md live."""
     d = os.environ.get("CODEX_HOME")
-    return Path(d).expanduser() if d else Path.home() / ".codex"
+    return Path(d) if d else Path.home() / ".codex"         # taken literally, as Codex takes it
 
 
 def _cfg() -> Path:

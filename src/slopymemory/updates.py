@@ -129,10 +129,25 @@ def refresh(now: float | None = None, run=subprocess.run) -> dict:
         error = f"git ls-remote could not run: {e}"
     cache = {"checked": now, "latest": latest, "installed": installed(), "error": error}
     try:
-        paths.write_atomic(cache_file(), json.dumps(cache))
+        _write_cache(cache)
     except OSError:
         pass
     return cache
+
+
+def _write_cache(cache: dict) -> None:
+    """Through a temporary file of its own: two launchers starting together must not interleave into one name."""
+    import tempfile
+    f = cache_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=f.parent, prefix=f.name + ".")
+    try:
+        with os.fdopen(fd, "w") as out:
+            out.write(json.dumps(cache))
+        os.replace(tmp, f)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def newer() -> str | None:
