@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CONTRACTS = ROOT / "tests" / "contract" / "test_harness_contracts.py"
-CLIS = {"claude-code": ["claude", "--version"], "codex": ["codex", "--version"], "slopy": ["slopy", "--version"]}
+CLIS = {"claude-code": ["claude", "--version"], "codex": ["codex", "--version"]}
 REPOS = {"claude-code": "anthropics/claude-code", "codex": "openai/codex", "mcp-python-sdk": "modelcontextprotocol/python-sdk"}
 KEYWORDS = re.compile(r"\b(mcp|config|hooks?|instructions|memory|settings)\b", re.I)
 _RESULT = re.compile(r"^(PASSED|FAILED|ERROR) \S+::\S+\[([\w-]+)\]")

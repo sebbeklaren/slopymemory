@@ -63,3 +63,17 @@ def test_contract_results_are_read_from_pytest_output():
            "FAILED tests/contract/test_harness_contracts.py::test_register_is_seen_by_the_harness_and_unregister_removes_it[codex] - x\n"
            "SKIPPED [1] tests/contract/test_harness_contracts.py:45: pi is not installed here\n")
     assert cc.parse_contracts(out) == {"claude-code": "passed", "codex": "failed"}
+
+
+def test_dependabot_watches_the_lock_and_the_actions_weekly():
+    import yaml
+    cfg = yaml.safe_load((Path(__file__).parent.parent / ".github" / "dependabot.yml").read_text())
+    eco = {u["package-ecosystem"]: u for u in cfg["updates"]}
+    assert cfg["version"] == 2 and set(eco) == {"uv", "github-actions"}
+    assert all(u["schedule"]["interval"] == "weekly" for u in eco.values())
+
+
+def test_the_compatibility_page_names_every_harness_the_contracts_cover():
+    page = (Path(__file__).parent.parent / "docs" / "COMPATIBILITY.md").read_text()
+    for name in ("Claude Code", "Codex", "Harnesses configured by hand", "MCP Python SDK", "SLOPYMEM_CONTRACT=1", "compat_check.py"):
+        assert name in page
