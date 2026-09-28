@@ -109,3 +109,14 @@ def test_the_contract_run_has_no_terminal_and_its_own_process_group(monkeypatch)
     monkeypatch.setattr(cc.subprocess, "Popen", popen)
     cc._run_pytest(["x"], {})
     assert seen["stdin"] == subprocess.DEVNULL and seen["start_new_session"] is True
+
+
+def test_dependabot_leaves_the_major_versions_that_are_planned_migrations():
+    """A major version of the MCP SDK or of the embedding stack is a migration (v2 moves the server modules; a new
+    embedder library can change every stored vector) — planned and proven, never a weekly pull request."""
+    import yaml
+    cfg = yaml.safe_load((Path(__file__).parent.parent / ".github" / "dependabot.yml").read_text())
+    uv = next(u for u in cfg["updates"] if u["package-ecosystem"] == "uv")
+    ignored = {i["dependency-name"]: i.get("update-types") for i in uv.get("ignore", [])}
+    for name in ("mcp", "sentence-transformers", "transformers", "torch"):
+        assert ignored.get(name) == ["version-update:semver-major"], name

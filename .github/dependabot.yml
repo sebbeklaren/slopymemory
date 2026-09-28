@@ -5,6 +5,17 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Majors of these are planned migrations, not weekly bumps: MCP SDK v2 moves the server modules; a new major of
+    # the embedding stack can change every stored vector and must be proven bit-identical first.
+    ignore:
+      - dependency-name: mcp
+        update-types: ["version-update:semver-major"]
+      - dependency-name: sentence-transformers
+        update-types: ["version-update:semver-major"]
+      - dependency-name: transformers
+        update-types: ["version-update:semver-major"]
+      - dependency-name: torch
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
