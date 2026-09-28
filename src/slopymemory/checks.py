@@ -362,10 +362,17 @@ def _update() -> Finding:
     from . import updates
     info, cache = updates.read_install(), updates.read_cache()
     v = updates.installed()
-    if info is None:
+    state = updates.install_state()
+    if state == "missing":
         return Finding(True, f"slopymemory {v}; no install record (installed before 0.4) — update by hand, see SETUP.md#update")
+    if state == "unreadable":
+        return Finding(True, f"slopymemory {v}; the install record {updates.install_file()} is unreadable — re-run "
+                             "./install.sh in your clone to rewrite it — see SETUP.md#update")
     if not info.get("update_check"):
         return Finding(True, f"slopymemory {v}; the daily update check is off (slopymem update --check on)")
+    if not info.get("remote"):
+        return Finding(True, f"slopymemory {v}; no remote recorded (not installed from a git clone), so no update "
+                             "check can run — update by hand, see SETUP.md#update")
     if cache.get("error"):
         return Finding(True, f"slopymemory {v}; the last update check failed: {cache['error']}")
     n = updates.newer()

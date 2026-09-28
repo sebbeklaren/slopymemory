@@ -40,8 +40,21 @@ def installed() -> str:
 def read_install() -> dict | None:
     try:
         return tomllib.loads(install_file().read_text())
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, ValueError):             # TOMLDecodeError and UnicodeDecodeError are both ValueErrors
         return None
+
+
+def install_state() -> str:
+    """missing (installed before 0.4), unreadable (the file exists and does not read), or ok."""
+    if not install_file().exists():
+        return "missing"
+    return "ok" if read_install() is not None else "unreadable"
+
+
+def install_flags() -> list[str]:
+    """The installer options recorded at install — a list, or a string someone wrote by hand."""
+    flags = (read_install() or {}).get("flags", [])
+    return flags.split() if isinstance(flags, str) else [str(f) for f in flags]
 
 
 def write_install(source: Path, flags: list[str], update_check: bool, remote: str | None) -> None:
@@ -97,7 +110,8 @@ def refresh(now: float | None = None, run=subprocess.run) -> dict:
                   timeout=TIMEOUT_S, stdin=subprocess.DEVNULL, start_new_session=True,
                   env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": "ssh -o BatchMode=yes"})
         if out.returncode != 0:
-            error = f"git ls-remote failed: {(out.stderr or '').strip().splitlines()[:1]}"
+            first = (out.stderr or "").strip().splitlines()
+            error = f"git ls-remote failed: {first[0] if first else f'exit status {out.returncode}'}"
         else:
             tags = [line.rsplit("refs/tags/", 1)[-1] for line in out.stdout.splitlines() if "refs/tags/" in line]
             latest = latest_of([t for t in tags if t.startswith("v")])      # release tags only, as `update` counts
@@ -118,7 +132,7 @@ def refresh(now: float | None = None, run=subprocess.run) -> dict:
 def newer() -> str | None:
     latest = read_cache().get("latest")
     info = read_install()
-    if not latest or not info or not info.get("update_check"):
+    if not isinstance(latest, str) or not info or not info.get("update_check"):
         return None
     lp, ip = parse(latest), parse(installed())
     return latest if lp and ip and lp > ip else None

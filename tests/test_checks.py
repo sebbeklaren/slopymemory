@@ -500,8 +500,17 @@ def test_update_check_says_when_it_is_off_or_failing(tmp_home, monkeypatch):
     import json, time
     from slopymemory import updates
     tmp_home.mkdir(parents=True, exist_ok=True)
-    updates.write_install(Path("/nonexistent"), [], False, None)
+    updates.write_install(Path("/nonexistent"), [], False, "https://example.invalid/x.git")
     assert "off" in checks.by_id("update").run().detail
     updates.set_check(True)
     updates.cache_file().write_text(json.dumps({"checked": time.time(), "latest": None, "error": "git not found on PATH"}))
     assert "git not found" in checks.by_id("update").run().detail
+
+
+def test_update_check_names_an_unreadable_record_and_a_missing_remote(tmp_home):
+    from slopymemory import updates
+    tmp_home.mkdir(parents=True, exist_ok=True)
+    updates.install_file().write_text("not = [toml")
+    assert "unreadable" in checks.by_id("update").run().detail
+    updates.write_install(Path("/nonexistent"), [], True, None)
+    assert "no remote" in checks.by_id("update").run().detail

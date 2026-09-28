@@ -118,3 +118,43 @@ def test_the_check_can_never_prompt_on_a_terminal(home, tmp_path):
     updates.refresh(run=spy)
     assert seen["stdin"] == subprocess.DEVNULL and seen["start_new_session"] is True
     assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0" and "BatchMode=yes" in seen["env"]["GIT_SSH_COMMAND"]
+
+
+def test_a_binary_install_record_reads_as_unreadable_not_a_crash(home):
+    updates.install_file().write_bytes(b"\xff\xfe\x00garbage")
+    assert updates.read_install() is None and updates.install_state() == "unreadable"
+
+
+def test_install_state_tells_missing_from_unreadable(home, tmp_path):
+    assert updates.install_state() == "missing"
+    updates.write_install(tmp_path, [], True, None)
+    assert updates.install_state() == "ok"
+    updates.install_file().write_text("not = [toml")
+    assert updates.install_state() == "unreadable"
+
+
+def test_a_cache_of_the_wrong_shape_is_no_notice_not_a_crash(home, tmp_path):
+    updates.write_install(tmp_path, [], True, "https://example.invalid/x.git")
+    updates.cache_file().write_text(json.dumps({"checked": time.time(), "latest": 5, "error": None}))
+    assert updates.newer() is None and updates.notice() is None
+
+
+def test_an_unparseable_installed_version_is_no_notice(home, tmp_path, monkeypatch):
+    monkeypatch.setattr(updates, "installed", lambda: "0.4.0.post1+local")
+    updates.write_install(tmp_path, [], True, "https://example.invalid/x.git")
+    updates.cache_file().write_text(json.dumps({"checked": time.time(), "latest": "0.5.0", "error": None}))
+    assert updates.newer() is None
+
+
+def test_a_failed_ls_remote_names_gits_message_without_brackets(home, tmp_path):
+    updates.write_install(tmp_path, [], True, "https://example.invalid/x.git")
+
+    def fail(cmd, **k):
+        return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: could not resolve host\nmore\n")
+    err = updates.refresh(run=fail)["error"]
+    assert err == "git ls-remote failed: fatal: could not resolve host"
+
+
+def test_flags_written_by_hand_as_one_string_are_split(home, tmp_path):
+    updates.install_file().write_text(f'source = "{tmp_path}"\nflags = "--no-harness --postgres=embedded"\nupdate_check = true\n')
+    assert updates.install_flags() == ["--no-harness", "--postgres=embedded"]

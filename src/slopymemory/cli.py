@@ -280,7 +280,7 @@ def cmd_update(a) -> int:
         return 0
     notes = _changes_between((source / "CHANGELOG.md").read_text(), old, target) if (source / "CHANGELOG.md").exists() else ""
     print(f"updating slopymemory {old} -> {target}\n\n{notes}\n")
-    rc = run_installer(source, list(info.get("flags", [])))
+    rc = run_installer(source, updates.install_flags())
     if rc != 0:
         return fail(f"the installer failed (its output is above); your stores are unchanged — see SETUP.md#update")
     for st in running_stores():

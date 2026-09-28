@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CONTRACTS = ROOT / "tests" / "contract" / "test_harness_contracts.py"
 CLIS = {"claude-code": ["claude", "--version"], "codex": ["codex", "--version"]}
 REPOS = {"claude-code": "anthropics/claude-code", "codex": "openai/codex", "mcp-python-sdk": "modelcontextprotocol/python-sdk"}
-KEYWORDS = re.compile(r"\b(mcp|config|hooks?|instructions|memory|settings)\b", re.I)
+KEYWORDS = re.compile(r"\b(mcp|config\w*|hooks?|instructions|memory|settings?)\b", re.I)
 _RESULT = re.compile(r"^(PASSED|FAILED|ERROR) \S+::\S+\[([\w-]+)\]")
 
 
@@ -97,10 +97,20 @@ def latest_record(d: Path) -> dict | None:
     files = sorted(d.glob("*.json")) if d.exists() else []
     for f in reversed(files):
         try:
-            return json.loads(f.read_text())
+            r = json.loads(f.read_text())
         except (OSError, ValueError):
             continue
+        if isinstance(r, dict) and isinstance(r.get("versions"), dict):
+            return r
     return None
+
+
+def release_window(prev: dict | None, default: str) -> str:
+    """Where to start reading releases: the last record's time — unless that run could not read them, then that
+    run's own start, so nothing in between is skipped."""
+    if prev and prev.get("releases_read") is False:
+        return prev.get("since") or default
+    return (prev or {}).get("when") or default
 
 
 def diff(prev: dict | None, cur: dict) -> list:
@@ -131,16 +141,25 @@ def release_notes(since_iso: str, repos: dict = REPOS, run=subprocess.run) -> li
     out = []
     for name, repo in repos.items():
         try:
-            p = run(["gh", "api", f"repos/{repo}/releases?per_page=30"], capture_output=True, text=True, timeout=30)
+            p = run(["gh", "api", "--paginate", f"repos/{repo}/releases?per_page=100",
+                     "--jq", ".[] | {tag_name, published_at, body}"], capture_output=True, text=True, timeout=60)
         except FileNotFoundError:
             return ["release notes skipped: gh is not installed"]
         except (OSError, subprocess.TimeoutExpired) as e:
             out.append(f"{name}: release notes not read ({e})")
             continue
         if p.returncode != 0:
-            out.append(f"{name}: release notes not read ({(p.stderr or '').strip().splitlines()[:1]})")
+            first = (p.stderr or "").strip().splitlines()
+            out.append(f"{name}: release notes not read ({first[0] if first else f'exit status {p.returncode}'})")
             continue
-        for r in json.loads(p.stdout or "[]"):
+        try:
+            releases = [json.loads(line) for line in (p.stdout or "").splitlines() if line.strip()]
+            if not all(isinstance(r, dict) for r in releases):
+                raise ValueError
+        except ValueError:
+            out.append(f"{name}: release notes not read (output was not a list of releases)")
+            continue
+        for r in releases:
             published = r.get("published_at")
             if not published or datetime.fromisoformat(published.replace("Z", "+00:00")) <= since:
                 continue
@@ -155,6 +174,10 @@ def main() -> int:
     d = record_dir()
     prev = latest_record(d)
     cur = {"when": now.isoformat(), "versions": harness_versions(), "contracts": run_contracts()}
+    since = release_window(prev, (now - timedelta(days=30)).isoformat())   # a first run shows the last month
+    notes = release_notes(since)
+    cur["since"] = since
+    cur["releases_read"] = not any("not read" in n or "skipped" in n for n in notes)
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{now:%Y-%m-%dT%H%M%S}.json").write_text(json.dumps(cur, indent=1))
     print(f"compatibility check, {now:%Y-%m-%d %H:%M} UTC")
@@ -163,9 +186,8 @@ def main() -> int:
     print("changed since the last record:")
     for line in diff(prev, cur) or ["nothing"]:
         print(f"  {line}")
-    print("upstream releases that mention what slopymemory relies on:")
-    first_window = (now - timedelta(days=30)).isoformat()          # a first run shows the last month, not all history
-    for line in release_notes(prev["when"] if prev else first_window) or ["none"]:
+    print(f"upstream releases since {since[:10]} that mention what slopymemory relies on:")
+    for line in notes or ["none"]:
         print(f"  {line}")
     failed = [n for n, r in cur["contracts"].items() if r != "passed"]
     if failed:

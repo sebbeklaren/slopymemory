@@ -37,7 +37,7 @@ def test_release_notes_keep_only_new_releases_that_touch_what_we_rely_on():
     ]
 
     def fake(cmd, **k):
-        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(releases), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(json.dumps(r) for r in releases), stderr="")
     out = cc.release_notes("2026-09-28T00:00:00+00:00", repos={"claude-code": "o/r"}, run=fake)
     assert out == ["claude-code v2.1.290: MCP servers now reload on config change."]
 
@@ -129,3 +129,30 @@ def test_dependabot_updates_only_within_the_ranges_pyproject_pins():
     cfg = yaml.safe_load((Path(__file__).parent.parent / ".github" / "dependabot.yml").read_text())
     uv = next(u for u in cfg["updates"] if u["package-ecosystem"] == "uv")
     assert uv["versioning-strategy"] == "lockfile-only"
+
+
+def test_release_notes_read_every_page_and_survive_malformed_output():
+    pages = []
+
+    def fake(cmd, **k):
+        pages.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="{not json", stderr="")
+    out = cc.release_notes("2026-09-28T00:00:00+00:00", repos={"x": "o/r"}, run=fake)
+    assert "--paginate" in pages[0] and out == ["x: release notes not read (output was not a list of releases)"]
+
+
+def test_the_keywords_catch_configuration_and_settings_words():
+    assert cc.KEYWORDS.search("Configuration files are now reloaded") and cc.KEYWORDS.search("new setting")
+
+
+def test_a_record_of_the_wrong_shape_is_skipped(tmp_path):
+    (tmp_path / "a-older.json").write_text(json.dumps(_rec({"codex": "1"}, {})))
+    (tmp_path / "b-newer.json").write_text("[1, 2]")
+    assert cc.latest_record(tmp_path)["versions"] == {"codex": "1"}
+
+
+def test_the_release_window_starts_at_the_last_record_whose_releases_were_read():
+    prev = {"when": "2026-09-28T00:00:00+00:00", "releases_read": False, "since": "2026-09-01T00:00:00+00:00"}
+    assert cc.release_window(prev, "2026-10-01T00:00:00+00:00") == "2026-09-01T00:00:00+00:00"
+    assert cc.release_window({"when": "2026-09-28T00:00:00+00:00", "releases_read": True}, "x") == "2026-09-28T00:00:00+00:00"
+    assert cc.release_window({}, "2026-10-01T00:00:00+00:00") == "2026-10-01T00:00:00+00:00"
