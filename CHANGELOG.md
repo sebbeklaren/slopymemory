@@ -1,0 +1,28 @@
+# Changelog
+
+What a user of slopymemory notices, newest first. A release that changes the code the store servers run says so:
+restart each running store with `slopymem stop <name>` and `slopymem start <name>`.
+
+## 0.4.0
+
+Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
+
+- A save made while the database is down is kept on disk and written in, in order, once it is back; the agent is told
+  `held`, with the error. One save is one transaction. `slopymem doctor` shows held saves; `doctor --report` prints a
+  block to paste into an issue, without memory text.
+- Retrieval finds a memory whose concepts were filed in the other space from the question's, and each result carries up
+  to two strongly related memories (same thread, or two shared concepts) under `related`.
+- `slopymem update`, and a once-a-day check for a newer version (asked at install; `slopymem update --check off`).
+- The usage rules no longer ask agents to label their own choices; memories stay anonymous.
+
+## 0.3
+
+The usage rules the server sends, the reversible harness-memory switch, the registered name `slopymemory`.
+
+## 0.2
+
+Installable by a stranger: one installer, embedded or system Postgres, `slopymem doctor`.
+
+## 0.1
+
+The launcher and one store per project.
