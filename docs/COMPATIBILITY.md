@@ -8,7 +8,7 @@ you. When one of these changes in a way slopymemory does not handle, the fix shi
 
 | | what slopymemory uses | how a change is caught |
 |---|---|---|
-| **Claude Code** | `claude mcp add --scope user --transport stdio <name> -- <launcher>` and `claude mcp remove --scope user`; the `mcpServers` table in `~/.claude.json`; `~/.claude/CLAUDE.md`, read at session start; `autoMemoryEnabled` in `~/.claude/settings.json` | the contract test registers, reads back with `claude mcp get` and removes, against the real CLI |
+| **Claude Code** | `claude mcp add --scope user --transport stdio <name> -- <launcher>` and `claude mcp remove --scope user`; the `mcpServers` table in `~/.claude.json`; `~/.claude/CLAUDE.md`, read at session start; `autoMemoryEnabled` in `~/.claude/settings.json`; its 2,048-character cap on each tool description and on server instructions (since 2.1.280) | the contract test registers, reads back with `claude mcp get` and removes, against the real CLI; a test keeps every description and the instructions under the cap |
 | **Codex** | `codex mcp add <name> -- <launcher>` and `codex mcp remove`; `[mcp_servers.<name>]` in `$CODEX_HOME/config.toml`; `~/.codex/AGENTS.md` | the contract test, the same way, with `codex mcp get` |
 | **Harnesses configured by hand** (an MCP server entry in the harness's own config file) | the stdio launcher command, its environment, the server's instructions given to the model, tool results passed through as they are | slopymemory never writes their config; changes are tracked with each harness's maintainers |
 | **MCP Python SDK** | the low-level server, the stdio server and the streamable-HTTP client, pinned in `uv.lock` | weekly Dependabot pull requests, each run through CI |

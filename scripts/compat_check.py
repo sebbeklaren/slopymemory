@@ -15,7 +15,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -129,7 +129,8 @@ def main() -> int:
     for line in diff(prev, cur) or ["nothing"]:
         print(f"  {line}")
     print("upstream releases that mention what slopymemory relies on:")
-    for line in release_notes(prev["when"] if prev else (now.replace(year=now.year - 1)).isoformat()) or ["none"]:
+    first_window = (now - timedelta(days=30)).isoformat()          # a first run shows the last month, not all history
+    for line in release_notes(prev["when"] if prev else first_window) or ["none"]:
         print(f"  {line}")
     failed = [n for n, r in cur["contracts"].items() if r != "passed"]
     if failed:
