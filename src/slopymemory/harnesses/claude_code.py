@@ -1,10 +1,18 @@
-import json, shutil
+import json, os, shutil
 from pathlib import Path
 from . import Harness, SERVER_NAME, entry_named
 
 
+def config_dir() -> Path:
+    """Where Claude Code keeps CLAUDE.md and settings.json: $CLAUDE_CONFIG_DIR when set, else ~/.claude."""
+    d = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(d).expanduser() if d else Path.home() / ".claude"
+
+
 def _cfg() -> Path:
-    return Path.home() / ".claude.json"
+    """The MCP table's file: $CLAUDE_CONFIG_DIR/.claude.json when the variable is set, else ~/.claude.json."""
+    d = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(d).expanduser() / ".claude.json" if d else Path.home() / ".claude.json"
 
 
 def _registered_as(launcher: str) -> str | None:
@@ -22,6 +30,6 @@ HARNESS = Harness(
     register_cmd=lambda launcher: ["claude", "mcp", "add", "--scope", "user", "--transport", "stdio", SERVER_NAME, "--", launcher],
     registered_as=_registered_as,
     unregister_cmd=lambda name: ["claude", "mcp", "remove", "--scope", "user", name],
-    config_hint="~/.claude.json → top-level mcpServers.slopymemory = {\"type\":\"stdio\",\"command\":\"<launcher>\"}",
-    instructions_file=lambda: Path.home() / ".claude" / "CLAUDE.md",
+    config_hint="~/.claude.json ($CLAUDE_CONFIG_DIR/.claude.json when set) → top-level mcpServers.slopymemory = {\"type\":\"stdio\",\"command\":\"<launcher>\"}",
+    instructions_file=lambda: config_dir() / "CLAUDE.md",
 )

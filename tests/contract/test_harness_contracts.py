@@ -41,6 +41,25 @@ def test_register_is_seen_by_the_harness_and_unregister_removes_it(throwaway, h,
     assert harnesses.TRIGGER_PREFIX not in (f.read_text() if f.exists() else "")
 
 
+@opt_in
+@pytest.mark.parametrize("h,cli,show", CASES, ids=["claude-code", "codex"])
+def test_a_config_kept_elsewhere_is_found_where_the_harness_keeps_it(throwaway, monkeypatch, h, cli, show):
+    """CLAUDE_CONFIG_DIR and CODEX_HOME moved away from their defaults: slopymemory must read the same file the
+    harness writes, or it cannot tell it is registered and cannot remove itself."""
+    if shutil.which(cli) is None:
+        pytest.skip(f"{cli} is not installed here")
+    (throwaway / "cc").mkdir(); (throwaway / "cx").mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(throwaway / "cc"))
+    monkeypatch.setenv("CODEX_HOME", str(throwaway / "cx"))
+    guard(throwaway)
+    launcher = harnesses.launcher_path()
+    assert harnesses.register(h.id, True, print_summary=False) == 0
+    assert launcher in subprocess.run(show, capture_output=True, text=True, timeout=120).stdout
+    assert h.registered(launcher), f"slopymemory does not see its own entry in {h.name}'s moved config"
+    assert harnesses.unregister(h, launcher) == 0
+    assert launcher not in subprocess.run(show, capture_output=True, text=True, timeout=120).stdout
+
+
 def test_the_guard_refuses_the_real_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(_real_home()))
     with pytest.raises(RuntimeError, match="refusing"):

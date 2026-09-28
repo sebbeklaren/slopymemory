@@ -731,3 +731,30 @@ def test_summary_says_when_a_newer_version_is_out(tmp_home, monkeypatch):
     from slopymemory import updates
     monkeypatch.setattr(updates, "newer", lambda: "0.5.0")
     assert any("A newer slopymemory is out: 0.5.0" in line and "slopymem update" in line for line in harnesses.summary())
+
+
+def test_claude_code_config_follows_claude_config_dir(tmp_path, monkeypatch):
+    """Claude Code keeps .claude.json, CLAUDE.md and settings.json in $CLAUDE_CONFIG_DIR when it is set."""
+    from slopymemory import harness_memory
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cc"))
+    assert claude_code._cfg() == tmp_path / "cc" / ".claude.json"
+    assert claude_code.HARNESS.instructions_file() == tmp_path / "cc" / "CLAUDE.md"
+    assert harness_memory.claude_settings() == tmp_path / "cc" / "settings.json"
+
+
+def test_claude_code_config_defaults_to_home_without_the_variable(tmp_path, monkeypatch):
+    from slopymemory import harness_memory
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert claude_code._cfg() == tmp_path / ".claude.json"
+    assert claude_code.HARNESS.instructions_file() == tmp_path / ".claude" / "CLAUDE.md"
+    assert harness_memory.claude_settings() == tmp_path / ".claude" / "settings.json"
+
+
+def test_codex_config_follows_codex_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "cx"))
+    assert codex._cfg() == tmp_path / "cx" / "config.toml"
+    assert codex.HARNESS.instructions_file() == tmp_path / "cx" / "AGENTS.md"
+    monkeypatch.delenv("CODEX_HOME")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert codex._cfg() == tmp_path / ".codex" / "config.toml"

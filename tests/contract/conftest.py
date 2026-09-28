@@ -20,8 +20,9 @@ def guard(throwaway: Path) -> None:
     home = Path.home().resolve()
     if home == _real_home() or home != t:
         raise RuntimeError(f"refusing: HOME is {home}, not the throwaway home {throwaway}")
-    if os.environ.get("CLAUDE_CONFIG_DIR"):
-        raise RuntimeError("refusing: CLAUDE_CONFIG_DIR is set — Claude Code would write there, not in the throwaway home")
+    ccd = os.environ.get("CLAUDE_CONFIG_DIR")
+    if ccd and not Path(ccd).resolve().is_relative_to(t):
+        raise RuntimeError(f"refusing: CLAUDE_CONFIG_DIR is {ccd} — Claude Code would write there, outside the throwaway home")
     for var in ("CODEX_HOME", "SLOPYMEM_HOME"):
         p = Path(os.environ.get(var, "/")).resolve()
         if not p.is_relative_to(t):

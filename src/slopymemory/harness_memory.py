@@ -24,7 +24,8 @@ def STATE_FILE() -> Path:
 
 
 def claude_settings() -> Path:
-    return Path.home() / ".claude" / "settings.json"
+    from .harnesses import claude_code
+    return claude_code.config_dir() / "settings.json"
 
 
 def _records() -> dict:
