@@ -258,6 +258,20 @@ ls ~/.slopymemory/stores/*/held ~/.slopymemory/stores/*/held-failed
 
 **Fix:** start Postgres (SETUP.md#postgres); held saves are written on the next tool call. A record in held-failed/ is kept with its error: fix the cause, then move the file back into held/
 
+## update
+
+**Symptom:** `slopymem update` is suggested, or the version seems old
+
+**Verifies:** the installed version, whether the daily check is on, and the newest version it last saw — from ~/.slopymemory/install.toml and update-check.json, no network
+
+**See for yourself:**
+
+```bash
+slopymem update --check on; cat ~/.slopymemory/update-check.json
+```
+
+**Fix:** run `slopymem update`; without an install record: `git pull` in your clone, then `./install.sh`
+
 ## local-paths
 
 **Symptom:** a leak of the author's machine into the package

@@ -370,6 +370,12 @@ def summary() -> list[str]:
 
     lines.append("  To undo everything: slopymem uninstall  (your harness memory comes back exactly as it was)")
     lines.append("  A project gets memory the first time you accept the agent's offer, or with: slopymem init")
+    try:
+        from .. import updates
+        if (n := updates.newer()):
+            lines.append(f"  A newer slopymemory is out: {n} — run: slopymem update")
+    except Exception:                                 # never raises: the summary must print whatever else is true
+        pass
     return lines
 
 

@@ -6,7 +6,7 @@ from slopymemory import checks
 from slopymemory.store import Store
 
 
-IDS = ["python", "package", "postgres", "model", "registry", "servers", "harnesses", "space", "logs", "secrets", "held", "local-paths"]
+IDS = ["python", "package", "postgres", "model", "registry", "servers", "harnesses", "space", "logs", "secrets", "held", "update", "local-paths"]
 
 
 def test_every_check_has_an_id_symptom_verify_and_fix():
@@ -483,3 +483,25 @@ def test_doctor_report_prints_the_block_and_exits_zero(tmp_home, capsys):
     from slopymemory import cli
     assert cli.main(["doctor", "--report"]) == 0
     assert "Open an issue" in capsys.readouterr().out
+
+
+def test_update_check_names_a_newer_version_and_the_command(tmp_home, monkeypatch):
+    import json, time
+    from slopymemory import updates
+    tmp_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(updates, "installed", lambda: "0.4.0")
+    updates.write_install(Path("/nonexistent"), [], True, "https://example.invalid/x.git")
+    updates.cache_file().write_text(json.dumps({"checked": time.time(), "latest": "0.5.0", "error": None}))
+    f = checks.by_id("update").run()
+    assert f.ok and "0.5.0 is available" in f.detail and "slopymem update" in f.detail
+
+
+def test_update_check_says_when_it_is_off_or_failing(tmp_home, monkeypatch):
+    import json, time
+    from slopymemory import updates
+    tmp_home.mkdir(parents=True, exist_ok=True)
+    updates.write_install(Path("/nonexistent"), [], False, None)
+    assert "off" in checks.by_id("update").run().detail
+    updates.set_check(True)
+    updates.cache_file().write_text(json.dumps({"checked": time.time(), "latest": None, "error": "git not found on PATH"}))
+    assert "git not found" in checks.by_id("update").run().detail

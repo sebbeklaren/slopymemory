@@ -725,3 +725,9 @@ def test_summary_does_not_claim_the_user_switched_memory_off():
     line = harnesses._harness_memory_line("off (not by slopymemory)", "Codex")
     assert "own choice" not in line
     assert "not switched off by slopymemory" in line and "no fallback memory there" in line
+
+
+def test_summary_says_when_a_newer_version_is_out(tmp_home, monkeypatch):
+    from slopymemory import updates
+    monkeypatch.setattr(updates, "newer", lambda: "0.5.0")
+    assert any("A newer slopymemory is out: 0.5.0" in line and "slopymem update" in line for line in harnesses.summary())

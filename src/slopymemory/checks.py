@@ -356,6 +356,22 @@ def _held() -> Finding:
     return Finding(not rows, "; ".join(rows) or "no save is held or failed in any store")
 
 
+def _update() -> Finding:
+    """The installed version, and whether a newer one is known — from the install record and the daily check's cache
+    only (no network here). Informational: an older version is not a broken machine."""
+    from . import updates
+    info, cache = updates.read_install(), updates.read_cache()
+    v = updates.installed()
+    if info is None:
+        return Finding(True, f"slopymemory {v}; no install record (installed before 0.4) — update by hand, see SETUP.md#update")
+    if not info.get("update_check"):
+        return Finding(True, f"slopymemory {v}; the daily update check is off (slopymem update --check on)")
+    if cache.get("error"):
+        return Finding(True, f"slopymemory {v}; the last update check failed: {cache['error']}")
+    n = updates.newer()
+    return Finding(True, f"slopymemory {v}; {n} is available — run `slopymem update`" if n else f"slopymemory {v} is the newest known")
+
+
 class ReportRefused(Exception):
     pass
 
@@ -468,6 +484,11 @@ CHECKS: list[Check] = [
           "ls ~/.slopymemory/stores/*/held ~/.slopymemory/stores/*/held-failed",
           "start Postgres (SETUP.md#postgres); held saves are written on the next tool call. A record in held-failed/ "
           "is kept with its error: fix the cause, then move the file back into held/", _held),
+    Check("update", "`slopymem update` is suggested, or the version seems old",
+          "the installed version, whether the daily check is on, and the newest version it last saw — from "
+          "~/.slopymemory/install.toml and update-check.json, no network",
+          "slopymem update --check on; cat ~/.slopymemory/update-check.json",
+          "run `slopymem update`; without an install record: `git pull` in your clone, then `./install.sh`", _update),
     Check("local-paths", "a leak of the author's machine into the package",
           "no file of the two installed packages (slopymemory and agent_memory) contains a home path (/home/<user>, /Users/<user>) "
           "or a private mailbox; a hit names the file and the shape",
