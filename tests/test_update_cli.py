@@ -15,7 +15,8 @@ def _clone_with_tags(tmp_path, *tags):
     _git("init", "-q", "--bare", str(remote))
     _git("clone", "-q", str(remote), str(work))
     (work / "CHANGELOG.md").write_text("# Changelog\n\n## 0.4.0\n\n- the current one\n")
-    _git("add", "CHANGELOG.md", cwd=work)
+    (work / "pyproject.toml").write_text('[project]\nname = "slopymemory"\nversion = "0.4.0"\n')
+    _git("add", "CHANGELOG.md", "pyproject.toml", cwd=work)
     _git("-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "a", cwd=work)
     _git("push", "-q", "origin", "HEAD", cwd=work)
     return remote, work
@@ -26,6 +27,7 @@ def _publish(tmp_path, remote, version):
     _git("clone", "-q", str(remote), str(other))
     cl = other / "CHANGELOG.md"
     cl.write_text(cl.read_text().replace("# Changelog\n\n", f"# Changelog\n\n## {version}\n\n- a newer one\n\n"))
+    (other / "pyproject.toml").write_text(f'[project]\nname = "slopymemory"\nversion = "{version}"\n')
     _git("-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qam", version, cwd=other)
     _git("tag", f"v{version}", cwd=other)
     _git("push", "-q", "--tags", "origin", "HEAD", cwd=other)
@@ -111,3 +113,37 @@ def test_record_install_writes_the_record_with_the_clones_remote(tmp_home, tmp_p
     assert cli.main(["record-install", "--source", str(work), "--flags=--no-harness", "--update-check", "yes"]) == 0
     info = updates.read_install()
     assert info["remote"] == str(remote) and info["flags"] == ["--no-harness"] and info["update_check"] is True
+
+
+def test_check_on_without_an_install_record_refuses_and_writes_nothing(tmp_home, capsys):
+    tmp_home.mkdir(parents=True, exist_ok=True)
+    assert cli.main(["update", "--check", "on"]) == 1
+    assert "install record" in capsys.readouterr().err and not updates.install_file().exists()
+
+
+def test_update_with_a_record_missing_its_source_never_runs_git_where_it_stands(tmp_home, tmp_path, monkeypatch, capsys):
+    tmp_home.mkdir(parents=True, exist_ok=True)
+    updates.install_file().write_text("update_check = true\n")
+    ran = []
+    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: ran.append(a) or subprocess.CompletedProcess(a, 0, "", ""))
+    assert cli.main(["update", "--yes"]) == 1
+    assert ran == [] and "SETUP.md#update" in capsys.readouterr().err
+
+
+def test_record_install_without_git_records_no_remote(tmp_home, tmp_path, monkeypatch):
+    tmp_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("PATH", "/nonexistent")
+    assert cli.main(["record-install", "--source", str(tmp_path), "--update-check", "yes"]) == 0
+    assert "remote" not in updates.read_install()
+
+
+def test_update_installs_what_the_pulled_clone_is_not_a_tag_it_does_not_contain(installed, tmp_path, capsys):
+    remote, work, calls = installed
+    _publish(tmp_path, remote, "0.5.0")
+    other = tmp_path / "side"
+    _git("clone", "-q", str(remote), str(other))
+    _git("tag", "v9.0.0", "HEAD~1", cwd=other)                       # a tag outside what the clone will pull
+    _git("push", "-q", "origin", "v9.0.0", cwd=other)
+    assert cli.main(["update", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "0.4.0 -> 0.5.0" in out and "9.0.0" not in out

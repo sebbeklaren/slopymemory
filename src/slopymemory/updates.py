@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.metadata as md
 import json
+import os
 import re
 import subprocess
 import time
@@ -52,7 +53,11 @@ def write_install(source: Path, flags: list[str], update_check: bool, remote: st
 
 
 def set_check(on: bool) -> None:
-    info = read_install() or {}
+    """Change the answer in an existing install record. Without a valid record there is nothing to change: writing
+    a record with only this key would look like an install that has no source."""
+    info = read_install()
+    if not info or not isinstance(info.get("source"), str) or not info["source"]:
+        raise ValueError("there is no valid install record (~/.slopymemory/install.toml)")
     info["update_check"] = bool(on)
     paths.write_atomic(install_file(), tomli_w.dumps(info))
 
@@ -86,12 +91,16 @@ def refresh(now: float | None = None, run=subprocess.run) -> dict:
         return cache
     latest, error = None, None
     try:
+        # Never a prompt: no terminal, no ssh question, no credential helper asking — a background check that
+        # needs one simply fails. Its own session, so a timeout's kill takes ssh with it.
         out = run(["git", "ls-remote", "--tags", "--refs", info["remote"]], capture_output=True, text=True,
-                  timeout=TIMEOUT_S)
+                  timeout=TIMEOUT_S, stdin=subprocess.DEVNULL, start_new_session=True,
+                  env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": "ssh -o BatchMode=yes"})
         if out.returncode != 0:
             error = f"git ls-remote failed: {(out.stderr or '').strip().splitlines()[:1]}"
         else:
-            latest = latest_of([line.rsplit("refs/tags/", 1)[-1] for line in out.stdout.splitlines() if "refs/tags/" in line])
+            tags = [line.rsplit("refs/tags/", 1)[-1] for line in out.stdout.splitlines() if "refs/tags/" in line]
+            latest = latest_of([t for t in tags if t.startswith("v")])      # release tags only, as `update` counts
     except FileNotFoundError:
         error = "git not found on PATH — the update check needs it"
     except subprocess.TimeoutExpired:

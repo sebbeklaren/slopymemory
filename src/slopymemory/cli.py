@@ -244,14 +244,19 @@ def _changes_between(changelog: str, old: str, new: str) -> str:
 
 def cmd_update(a) -> int:
     if a.check:
-        updates.set_check(a.check == "on")
+        try:
+            updates.set_check(a.check == "on")
+        except ValueError as e:
+            return fail(f"{e} — re-run ./install.sh in your clone to write one — see SETUP.md#update")
         print(f"the daily update check is {a.check}")
         return 0
     info = updates.read_install()
     if not info:
         return fail("this install has no install record (installed before 0.4) — update by hand: `git pull` in your "
                     "clone, then `./install.sh` — see SETUP.md#update")
-    source, remote = Path(info.get("source", "")), info.get("remote")
+    if not isinstance(info.get("source"), str) or not info["source"]:
+        return fail("the install record names no source clone — re-run ./install.sh in your clone — see SETUP.md#update")
+    source, remote = Path(info["source"]), info.get("remote")
     if shutil.which("git") is None:
         return fail("git is not on PATH — update by hand: `git pull` in your clone, then `./install.sh` — see SETUP.md#update")
     if not (source / ".git").exists():
@@ -265,11 +270,12 @@ def cmd_update(a) -> int:
     pull = subprocess.run(["git", "-C", str(source), "pull", "--ff-only", "--tags"], capture_output=True, text=True)
     if pull.returncode != 0:
         return fail(f"git pull --ff-only refused: {pull.stderr.strip()} — see SETUP.md#update")
-    new = tomllib.loads((source / "pyproject.toml").read_text())["project"]["version"] if (source / "pyproject.toml").exists() else None
-    latest = updates.latest_of(subprocess.run(["git", "-C", str(source), "tag", "--list", "v*"],
-                                              capture_output=True, text=True).stdout.split()) or new
-    target = latest if latest and (not new or updates.parse(latest) >= updates.parse(new)) else new
-    if not target or not updates.parse(target) or updates.parse(target) <= updates.parse(old):
+    # What the pulled clone IS — the version its installer will install — never a tag it may not contain.
+    try:
+        target = tomllib.loads((source / "pyproject.toml").read_text())["project"]["version"]
+    except (OSError, KeyError, tomllib.TOMLDecodeError) as e:
+        return fail(f"the pulled clone has no readable version in pyproject.toml ({e}) — see SETUP.md#update")
+    if not updates.parse(target) or not updates.parse(old) or updates.parse(target) <= updates.parse(old):
         print(f"slopymemory {old} is already the newest")
         return 0
     notes = _changes_between((source / "CHANGELOG.md").read_text(), old, target) if (source / "CHANGELOG.md").exists() else ""
@@ -286,9 +292,12 @@ def cmd_update(a) -> int:
 
 
 def cmd_record_install(a) -> int:
-    remote = subprocess.run(["git", "-C", a.source, "remote", "get-url", "origin"], capture_output=True, text=True)
-    updates.write_install(Path(a.source), a.flags.split() if a.flags else [], a.update_check == "yes",
-                          remote.stdout.strip() if remote.returncode == 0 else None)
+    try:                                     # not a git clone, or no git at all: installed fine, just never checked
+        out = subprocess.run(["git", "-C", a.source, "remote", "get-url", "origin"], capture_output=True, text=True)
+        remote = out.stdout.strip() if out.returncode == 0 else None
+    except OSError:
+        remote = None
+    updates.write_install(Path(a.source), a.flags.split() if a.flags else [], a.update_check == "yes", remote)
     return 0
 
 

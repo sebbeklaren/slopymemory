@@ -98,3 +98,23 @@ def test_no_notice_when_installed_is_newer(home, tmp_path, monkeypatch):
     updates.write_install(tmp_path, [], True, "https://example.invalid/x.git")
     updates.cache_file().write_text(json.dumps({"checked": time.time(), "latest": "0.5.0", "error": None}))
     assert updates.newer() is None and updates.notice() is None
+
+
+def test_refresh_counts_only_v_tags(home, tmp_path):
+    updates.write_install(tmp_path, [], True, "https://example.invalid/x.git")
+
+    def fake(cmd, **k):
+        return subprocess.CompletedProcess(cmd, 0, stdout="a\trefs/tags/2026.09\nb\trefs/tags/v0.5.0\n", stderr="")
+    assert updates.refresh(run=fake)["latest"] == "0.5.0"
+
+
+def test_the_check_can_never_prompt_on_a_terminal(home, tmp_path):
+    updates.write_install(tmp_path, [], True, "git@example.invalid:x.git")
+    seen = {}
+
+    def spy(cmd, **k):
+        seen.update(k)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    updates.refresh(run=spy)
+    assert seen["stdin"] == subprocess.DEVNULL and seen["start_new_session"] is True
+    assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0" and "BatchMode=yes" in seen["env"]["GIT_SSH_COMMAND"]
