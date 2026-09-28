@@ -4,12 +4,15 @@ implementation, the CLI is the reference."""
 from __future__ import annotations
 import argparse
 import os
+import re
 import shutil
+import subprocess
 import sys
+import tomllib
 from pathlib import Path
 import psycopg
 from . import embedded_pg, harness_memory as hm, install_steps, paths, server as srv
-from . import checks
+from . import checks, updates
 from .checks import run_all
 from .embedded_pg import EmbeddedPostgres
 from . import harnesses
@@ -210,6 +213,83 @@ def cmd_doctor(a) -> int:
             return fail(str(e))
         return 0
     return run_all()
+
+
+def run_installer(source: Path, flags: list[str]) -> int:
+    """The installer is the one update path for the venv: idempotent, it repairs and changes nothing already right."""
+    return subprocess.run([str(source / "install.sh"), *flags]).returncode
+
+
+def running_stores() -> list[Store]:
+    return [st for st in all_stores() if srv.probe(st.port)]
+
+
+def _restart(st: Store) -> None:
+    srv.stop(st)
+    srv.ensure_up(st)
+
+
+def _changes_between(changelog: str, old: str, new: str) -> str:
+    """The CHANGELOG sections above the installed version, up to and including the new one."""
+    out, keep = [], False
+    for line in changelog.splitlines():
+        m = re.match(r"^## (\S+)\s*$", line)
+        if m:
+            v = updates.parse(m.group(1))
+            keep = bool(v and updates.parse(old) and v > updates.parse(old) and v <= updates.parse(new))
+        if keep:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def cmd_update(a) -> int:
+    if a.check:
+        updates.set_check(a.check == "on")
+        print(f"the daily update check is {a.check}")
+        return 0
+    info = updates.read_install()
+    if not info:
+        return fail("this install has no install record (installed before 0.4) — update by hand: `git pull` in your "
+                    "clone, then `./install.sh` — see SETUP.md#update")
+    source, remote = Path(info.get("source", "")), info.get("remote")
+    if shutil.which("git") is None:
+        return fail("git is not on PATH — update by hand: `git pull` in your clone, then `./install.sh` — see SETUP.md#update")
+    if not (source / ".git").exists():
+        how = f"`git clone {remote}` and run `./install.sh` in it" if remote else "clone slopymemory again and run `./install.sh`"
+        return fail(f"the clone this was installed from ({source}) is gone — {how} — see SETUP.md#update")
+    dirty = subprocess.run(["git", "-C", str(source), "status", "--porcelain"], capture_output=True, text=True).stdout.strip()
+    if dirty:
+        return fail(f"the clone at {source} has local changes; an update never overwrites them:\n{dirty}\n"
+                    "commit or stash them, then run it again — see SETUP.md#update")
+    old = updates.installed()
+    pull = subprocess.run(["git", "-C", str(source), "pull", "--ff-only", "--tags"], capture_output=True, text=True)
+    if pull.returncode != 0:
+        return fail(f"git pull --ff-only refused: {pull.stderr.strip()} — see SETUP.md#update")
+    new = tomllib.loads((source / "pyproject.toml").read_text())["project"]["version"] if (source / "pyproject.toml").exists() else None
+    latest = updates.latest_of(subprocess.run(["git", "-C", str(source), "tag", "--list", "v*"],
+                                              capture_output=True, text=True).stdout.split()) or new
+    target = latest if latest and (not new or updates.parse(latest) >= updates.parse(new)) else new
+    if not target or not updates.parse(target) or updates.parse(target) <= updates.parse(old):
+        print(f"slopymemory {old} is already the newest")
+        return 0
+    notes = _changes_between((source / "CHANGELOG.md").read_text(), old, target) if (source / "CHANGELOG.md").exists() else ""
+    print(f"updating slopymemory {old} -> {target}\n\n{notes}\n")
+    rc = run_installer(source, list(info.get("flags", [])))
+    if rc != 0:
+        return fail(f"the installer failed (its output is above); your stores are unchanged — see SETUP.md#update")
+    for st in running_stores():
+        if confirm(f"restart store {st.name} now, so it runs the new code?", a.yes):
+            _restart(st); print(f"{st.name}: restarted")
+        else:
+            print(f"{st.name}: not restarted — it keeps the old code until `slopymem stop {st.name}` and `start`")
+    return 0
+
+
+def cmd_record_install(a) -> int:
+    remote = subprocess.run(["git", "-C", a.source, "remote", "get-url", "origin"], capture_output=True, text=True)
+    updates.write_install(Path(a.source), a.flags.split() if a.flags else [], a.update_check == "yes",
+                          remote.stdout.strip() if remote.returncode == 0 else None)
+    return 0
 
 
 def read_memories(st: Store) -> list[tuple]:
@@ -565,6 +645,12 @@ def build() -> argparse.ArgumentParser:
     s = sub.add_parser("remove"); s.add_argument("store"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_remove)
     s = sub.add_parser("doctor"); s.set_defaults(fn=cmd_doctor)
     s.add_argument("--report", action="store_true", help="print a block to paste into an issue (nothing is sent)")
+    s = sub.add_parser("update", help="update slopymemory from the clone it was installed from (asked, never automatic)")
+    s.add_argument("--yes", action="store_true"); s.add_argument("--check", choices=["on", "off"])
+    s.set_defaults(fn=cmd_update)
+    s = sub.add_parser("record-install")                                   # the installer's own step; not for users
+    s.add_argument("--source", required=True); s.add_argument("--flags", default="")
+    s.add_argument("--update-check", choices=["yes", "no"], required=True); s.set_defaults(fn=cmd_record_install)
     s = sub.add_parser("scan-store", help="report memories that look like secrets (never deletes)"); s.add_argument("store"); s.set_defaults(fn=cmd_scan_store)
     s = sub.add_parser("register"); s.add_argument("harness", nargs="?"); s.add_argument("--detected", action="store_true", help="every harness found on this machine")
     s.add_argument("--yes", action="store_true")
