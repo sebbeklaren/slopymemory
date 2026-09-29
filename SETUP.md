@@ -102,6 +102,15 @@ record never outlives the install.
 To undo it by hand instead: for Claude Code, remove `autoMemoryEnabled` from `~/.claude/settings.json` (or set it
 to `true`); for Codex, run `codex features enable memories`.
 
+## unattended
+
+In an interactive session the harness asks once before it uses a memory tool. Run without a person there
+(`claude -p`, `codex exec`, a script), nothing can answer, and the call is refused. Pre-approve the server:
+
+- Claude Code: `claude -p "..." --allowedTools mcp__slopymemory` (or the same rule under `permissions.allow` in
+  its settings).
+- Codex: `default_tools_approval_mode = "approve"` under `[mcp_servers.slopymemory]` in its `config.toml`.
+
 ## Checks (generated from `slopymemory.checks` — do not edit below this line)
 
 ## python
