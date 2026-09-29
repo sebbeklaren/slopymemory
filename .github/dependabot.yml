@@ -18,6 +18,9 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: torch
         update-types: ["version-update:semver-major"]
+      # The model's download library: transformers pins its major, so a new one cannot resolve until they move.
+      - dependency-name: huggingface-hub
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

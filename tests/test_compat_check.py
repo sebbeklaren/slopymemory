@@ -118,7 +118,7 @@ def test_dependabot_leaves_the_major_versions_that_are_planned_migrations():
     cfg = yaml.safe_load((Path(__file__).parent.parent / ".github" / "dependabot.yml").read_text())
     uv = next(u for u in cfg["updates"] if u["package-ecosystem"] == "uv")
     ignored = {i["dependency-name"]: i.get("update-types") for i in uv.get("ignore", [])}
-    for name in ("mcp", "sentence-transformers", "transformers", "torch"):
+    for name in ("mcp", "sentence-transformers", "transformers", "torch", "huggingface-hub"):
         assert ignored.get(name) == ["version-update:semver-major"], name
 
 
