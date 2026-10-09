@@ -17,6 +17,7 @@ import psycopg
 from pgvector.psycopg import register_vector
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from agent_memory import durability as du
 from agent_memory.config import settings
@@ -191,7 +192,10 @@ def _session_key_from_context(ctx: "Context | None") -> str:
         sid = None
     if sid:
         return sid
-    sess = getattr(ctx, "session", None)
+    try:
+        sess = getattr(ctx, "session", None)
+    except Exception:              # the v2 Context raises outside a request instead of answering None
+        sess = None
     return f"sess-{id(sess)}" if sess is not None else "default"
 
 
@@ -237,7 +241,10 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
               "refused": "secret", "kind": kind, "field": field, "status": "refused"})
         return {"status": "refused", "reason": "secret", "kind": kind, "field": field,
                 "message": refusal_message(secret, field)}
-    noop = handlers.check_save(text, facets, supersedes)
+    try:
+        noop = handlers.check_save(text, facets, supersedes, save_concepts)
+    except handlers.BadArgument as e:
+        raise ToolError(str(e)) from e
     if noop is not None:
         return noop
     mid, now = uuid.uuid4().hex, datetime.now(timezone.utc)
@@ -321,8 +328,11 @@ def memory_retrieve(tenant: str, query: str, k: int = 5,
             conn = _connect()
             try:
                 _prepare(conn)
-                out = handlers.memory_retrieve(conn, _store, tenant, query, k, query_facets=query_facets,
-                                               query_concepts=query_concepts)
+                try:
+                    out = handlers.memory_retrieve(conn, _store, tenant, query, k, query_facets=query_facets,
+                                                   query_concepts=query_concepts)
+                except handlers.BadArgument as e:
+                    raise ToolError(str(e)) from e
             finally:
                 conn.close()
             _mark_safely(True)

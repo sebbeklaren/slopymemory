@@ -39,7 +39,9 @@ def test_explicit_env_overrides_win_for_adopted_stores(tmp_home):
     assert env["DATABASE_URL"] == "postgresql://role@/x"
 
 
-def test_port_allocation_skips_taken(tmp_home):
+def test_port_allocation_skips_taken(tmp_home, monkeypatch):
+    import slopymemory.store as st
+    monkeypatch.setattr(st, "_bound", lambda p: False)     # this machine's own servers must not decide the answer
     assert allocate_port({8780, 8781}) == 8782
 
 

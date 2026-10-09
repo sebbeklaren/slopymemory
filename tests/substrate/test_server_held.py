@@ -25,7 +25,8 @@ def test_a_save_while_the_database_is_down_is_held_on_disk_and_says_so(srv, monk
 def test_input_errors_are_answered_as_today_and_hold_nothing(srv, monkeypatch):
     down(monkeypatch)
     assert server.memory_save(tenant="t", text="   ")["status"] == "noop"
-    with pytest.raises(ValueError):
+    from mcp.server.mcpserver.exceptions import ToolError
+    with pytest.raises(ToolError, match="facets keys must be content spaces"):   # the model reads why
         server.memory_save(tenant="t", text="x", facets={"semantic": "y"})
     assert du.held_paths() == []
 
