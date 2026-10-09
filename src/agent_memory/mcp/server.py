@@ -199,6 +199,20 @@ def _session_key_from_context(ctx: "Context | None") -> str:
     return f"sess-{id(sess)}" if sess is not None else "default"
 
 
+# Facets are a design-store aspect: a concept-primary (coding) store has no facet projectors, so it never asks for
+# them — a model told to send facets sent a concept space as a facet key and was refused.
+_FACETS = settings.m3_retrieval_mode != "concept_primary"
+_SAVE_FACETS = (
+    "For design/why memories, ALSO extract the memory's facets (function/feeling/fiction/"
+    "player_facing — same aspect definitions as memory_retrieve's query_facets) and pass them "
+    "as `facets`: the memory is then born multi-space (retrievable via any of its aspects), not "
+    "semantic-only. Be NONE-honest — omit any aspect the memory is silent on. ") if _FACETS else ""
+_RETRIEVE_FACETS = (
+    "For design/why questions, extract the query's facets (function/feeling/fiction/player_facing "
+    "— same aspect definitions as saving) and pass them as query_facets: in-distribution seeds "
+    "massively outperform raw-text routing; omit facets the query is silent on. ") if _FACETS else ""
+
+
 @mcp.tool(
     description=(
         "Save salient facts/decisions to long-term memory. Call this when the user states "
@@ -208,10 +222,7 @@ def _session_key_from_context(ctx: "Context | None") -> str:
         "session id. Optionally tag the save with a short `thread` label for the design/rationale "
         "topic it belongs to (e.g. 'combat-weight'); saves sharing a thread are associated durably "
         "across sessions — keep threads narrow (one rationale unit per thread). "
-        "For design/why memories, ALSO extract the memory's facets (function/feeling/fiction/"
-        "player_facing — same aspect definitions as memory_retrieve's query_facets) and pass them "
-        "as `facets`: the memory is then born multi-space (retrievable via any of its aspects), not "
-        "semantic-only. Be NONE-honest — omit any aspect the memory is silent on. "
+        + _SAVE_FACETS +
         "ALSO extract the memory's typed CONCEPTS and pass `save_concepts=[[space,label],…]` — same "
         "dialect as retrieve's query_concepts — so the memory is immediately concept-retrievable. "
         "When the user explicitly confirms that this save CORRECTS a specific stored memory (one you "
@@ -302,9 +313,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
         "reasons pulled in alongside — the tangential-looking results often carry the WHY. Weigh "
         "the set; never take just the top hit. Use k~8 for design/why questions (default 5 suits "
         "quick lookups). Empty results means nothing is known. `tenant` identifies the user. "
-        "For design/why questions, extract the query's facets (function/feeling/fiction/player_facing "
-        "— same aspect definitions as saving) and pass them as query_facets: in-distribution seeds "
-        "massively outperform raw-text routing; omit facets the query is silent on. "
+        + _RETRIEVE_FACETS +
         "CONCEPT-PRIMARY mode: also extract the query's sparse typed CONCEPTS — the handful of things "
         "the query is ABOUT, each a short noun phrase typed by space (function/feeling/fiction/"
         "player_facing/semantic), NONE-honest (omit a space with nothing, never invent) — and pass as "
