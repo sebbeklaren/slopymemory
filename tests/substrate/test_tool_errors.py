@@ -37,3 +37,28 @@ async def test_a_malformed_save_concept_is_refused_by_name_before_anything_is_he
 async def test_a_malformed_query_concept_is_refused_by_name(srv, bad):
     msg = await _refusal("memory_retrieve", {"tenant": "t", "query": "q", "query_concepts": bad})
     assert "query_concepts" in msg and "[space, label]" in msg, msg
+
+
+@pytest.mark.parametrize("field", ["text", "thread", "scope", "facets", "save_concepts", "supersedes"])
+async def test_a_nul_byte_in_any_save_string_is_refused_before_anything_is_held(srv, field):
+    """Postgres refuses NUL in text; a held save carrying one would fail for good on the next drain."""
+    import agent_memory.durability as du
+    value = {"facets": {"function": "a\x00b"}, "save_concepts": [["semantic", "a\x00b"]]}.get(field, "a\x00b")
+    args = {"tenant": "t", "text": "x", field: value}
+    msg = await _refusal("memory_save", args)
+    assert "NUL" in msg and field in msg, msg
+    assert du.counts() == (0, 0)
+
+
+@pytest.mark.parametrize("k", [0, -1])
+async def test_a_retrieve_asking_for_no_results_is_refused_not_reported_as_an_outage(srv, k):
+    msg = await _refusal("memory_retrieve", {"tenant": "t", "query": "q", "k": k})
+    assert "k must be" in msg, msg
+    assert server._state["failing"] is False
+
+
+async def test_a_bad_retrieve_is_refused_even_while_the_database_is_down(srv, monkeypatch):
+    from tests_support_fakes import down
+    down(monkeypatch)
+    msg = await _refusal("memory_retrieve", {"tenant": "t", "query": "q", "query_concepts": [["bogus", "x"]]})
+    assert "query_concepts" in msg

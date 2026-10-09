@@ -54,17 +54,44 @@ def _validate_concepts(pairs, *, arg: str) -> None:
             raise BadArgument(f"{shape}; the label of {pair!r} must be a non-empty string")
 
 
+def _refuse_nul(**fields) -> None:
+    """Postgres refuses a NUL byte in text, so a save carrying one could never be written: refused by field name."""
+    def has_nul(v):
+        if isinstance(v, str):
+            return "\x00" in v
+        if isinstance(v, dict):
+            return any(has_nul(x) for x in v.values())
+        if isinstance(v, (list, tuple)):
+            return any(has_nul(x) for x in v)
+        return False
+    for name, value in fields.items():
+        if has_nul(value):
+            raise BadArgument(f"{name} contains a NUL byte (\\x00), which cannot be stored; remove it")
+
+
+def check_retrieve(k, query, query_facets, query_concepts) -> None:
+    """The retrieve checks that need no database — answered before connecting, so a bad call is refused as such
+    even while the database is down, and never marks the store failing."""
+    if isinstance(k, bool) or not isinstance(k, int) or k < 1:
+        raise BadArgument(f"k must be a whole number of at least 1, got {k!r}")
+    _validate_query_facets(query_facets)
+    _validate_concepts(query_concepts, arg="query_concepts")
+    _refuse_nul(query=query, query_facets=query_facets, query_concepts=query_concepts)
+
+
 def _validate_query_facets(query_facets) -> None:
     """B1 query-side wrapper over the shared facet-map validator (kept for the existing call site)."""
     _validate_facet_map(query_facets, arg="query_facets")
 
 
-def check_save(text, facets, supersedes, save_concepts=None) -> dict | None:
+def check_save(text, facets, supersedes, save_concepts=None, thread=None, scope=None) -> dict | None:
     """The checks that need no database and can never succeed on a retry — answered before anything is held:
     a noop reply for empty text, BadArgument for a bad facet map, concept list or supersedes; None when the save may
     go ahead."""
     _validate_facet_map(facets, arg="facets")
     _validate_concepts(save_concepts, arg="save_concepts")
+    _refuse_nul(text=text, thread=thread, scope=scope, facets=facets, save_concepts=save_concepts,
+                supersedes=supersedes)
     if supersedes is not None and (not isinstance(supersedes, str) or not supersedes.strip()):
         raise BadArgument("supersedes must be a memory_id string or None")
     if not text or not text.strip():

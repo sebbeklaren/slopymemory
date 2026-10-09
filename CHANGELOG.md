@@ -10,8 +10,11 @@ Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
 - A save or retrieve refused for a bad argument tells the agent why again (a wrong facet key, a malformed concept),
   so it can correct the call. Since 0.5.0 the agent saw only "Error executing tool", read it as the store being
   down, and stopped saving.
-- A malformed `save_concepts` list is refused before the save is kept. It used to be kept, and then fail on every
-  later attempt to write it.
+- A save whose arguments could never be stored is refused before it is kept: a malformed `save_concepts` list, or a
+  NUL byte in any field. Such a save used to be kept, fail when written, and stay counted as failed on every
+  retrieve until removed by hand.
+- A retrieve with a bad argument is refused as such, before the database is asked: a malformed `query_concepts` list
+  (now checked in every dialect), or a `k` below 1, which used to be reported as the database being down.
 - A coding store's tools no longer ask for facets, which coding stores do not use.
 
 ## 0.5.0

@@ -253,7 +253,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
         return {"status": "refused", "reason": "secret", "kind": kind, "field": field,
                 "message": refusal_message(secret, field)}
     try:
-        noop = handlers.check_save(text, facets, supersedes, save_concepts)
+        noop = handlers.check_save(text, facets, supersedes, save_concepts, thread, scope)
     except handlers.BadArgument as e:
         raise ToolError(str(e)) from e
     if noop is not None:
@@ -332,16 +332,17 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
 def memory_retrieve(tenant: str, query: str, k: int = 5,
                     query_facets: dict[str, str] | None = None,
                     query_concepts: list | None = None) -> dict:
+    try:
+        handlers.check_retrieve(k, query, query_facets, query_concepts)
+    except handlers.BadArgument as e:
+        raise ToolError(str(e)) from e
     with _lock:
         try:
             conn = _connect()
             try:
                 _prepare(conn)
-                try:
-                    out = handlers.memory_retrieve(conn, _store, tenant, query, k, query_facets=query_facets,
-                                                   query_concepts=query_concepts)
-                except handlers.BadArgument as e:
-                    raise ToolError(str(e)) from e
+                out = handlers.memory_retrieve(conn, _store, tenant, query, k, query_facets=query_facets,
+                                               query_concepts=query_concepts)
             finally:
                 conn.close()
             _mark_safely(True)

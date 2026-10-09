@@ -164,3 +164,19 @@ def test_the_server_never_closes_an_idle_session(monkeypatch):
     s.main()
     assert seen["transport"] == "streamable-http"
     assert "session_idle_timeout" in seen and seen["session_idle_timeout"] is None
+
+
+def test_session_key_falls_back_to_default_when_the_context_raises():
+    """The v2 Context raises outside a request instead of answering None; the key must not crash the call."""
+    from agent_memory.mcp.server import _session_key_from_context
+
+    class _Ctx:
+        @property
+        def request_context(self):
+            raise ValueError("Context is not available outside of a request")
+
+        @property
+        def session(self):
+            raise ValueError("Context is not available outside of a request")
+
+    assert _session_key_from_context(_Ctx()) == "default"
