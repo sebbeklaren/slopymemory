@@ -1407,7 +1407,7 @@ wheels = [
 
 [[package]]
 name = "slopymemory"
-version = "0.5.0"
+version = "0.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "einops" },
@@ -1545,13 +1545,13 @@ resolution-markers = [
     "python_full_version < '3.14' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "jinja2" },
-    { name = "networkx" },
-    { name = "setuptools" },
-    { name = "sympy" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "sys_platform == 'darwin'" },
+    { name = "fsspec", marker = "sys_platform == 'darwin'" },
+    { name = "jinja2", marker = "sys_platform == 'darwin'" },
+    { name = "networkx", marker = "sys_platform == 'darwin'" },
+    { name = "setuptools", marker = "sys_platform == 'darwin'" },
+    { name = "sympy", marker = "sys_platform == 'darwin'" },
+    { name = "typing-extensions", marker = "sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.14.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:caf6359d64c0074bcb9f8641a169239118c8165a0a0fef79110c72bfd6474bec", upload-time = "2026-09-02T00:26:15Z" },
@@ -1572,13 +1572,13 @@ resolution-markers = [
     "python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "jinja2" },
-    { name = "networkx" },
-    { name = "setuptools" },
-    { name = "sympy" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "sys_platform != 'darwin'" },
+    { name = "fsspec", marker = "sys_platform != 'darwin'" },
+    { name = "jinja2", marker = "sys_platform != 'darwin'" },
+    { name = "networkx", marker = "sys_platform != 'darwin'" },
+    { name = "setuptools", marker = "sys_platform != 'darwin'" },
+    { name = "sympy", marker = "sys_platform != 'darwin'" },
+    { name = "typing-extensions", marker = "sys_platform != 'darwin'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.14.0%2Bcpu-cp313-cp313-linux_s390x.whl", hash = "sha256:d87cfff3af33c937b88c9bc6c0dfa17f2156e2599f63447c696f2345928b518a", upload-time = "2026-09-02T18:31:55Z" },

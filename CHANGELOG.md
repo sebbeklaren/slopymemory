@@ -3,6 +3,17 @@
 What a user of slopymemory notices, newest first. A release that changes the code the store servers run says so:
 restart each running store with `slopymem stop <name>` and `slopymem start <name>`.
 
+## 0.5.1
+
+Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
+
+- A save or retrieve refused for a bad argument tells the agent why again (a wrong facet key, a malformed concept),
+  so it can correct the call. Since 0.5.0 the agent saw only "Error executing tool", read it as the store being
+  down, and stopped saving.
+- A malformed `save_concepts` list is refused before the save is kept. It used to be kept, and then fail on every
+  later attempt to write it.
+- A coding store's tools no longer ask for facets, which coding stores do not use.
+
 ## 0.5.0
 
 Update with `slopymem update` (the MCP library changes underneath), then restart your stores:
