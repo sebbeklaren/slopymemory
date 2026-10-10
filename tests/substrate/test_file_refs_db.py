@@ -64,3 +64,15 @@ def test_the_same_anchor_written_twice_is_kept_once(conn):
     file_refs.write(conn, "m1", refs)
     file_refs.write(conn, "m1", refs)
     assert len(file_refs.refs_of(conn, ["m1"])["m1"]) == 2
+
+
+def test_the_schema_step_clears_duplicates_written_before_the_unique_key(conn):
+    """A store that ran 0.6.0 may hold a duplicated anchor; the unique key must not stop it from starting."""
+    from agent_memory.spaces import store as m3
+    _memory(conn, "m1")
+    with conn.cursor() as cur:
+        cur.execute("DROP INDEX m3_file_ref_uq")
+        for _ in range(2):
+            cur.execute("INSERT INTO m3_file_ref (memory_id, path, sha256) VALUES ('m1', 'a.py', %s)", (H,))
+    m3.apply_schema(conn)
+    assert len(file_refs.refs_of(conn, ["m1"])["m1"]) == 1

@@ -93,8 +93,9 @@ def normalize(files, *, arg: str, save: bool) -> list[dict] | None:
                                "launcher computes it")
         if save:
             ref["line_start"], ref["line_end"] = _lines(e, where)
-        if not save and any(r["path"] == ref["path"] and r.get("sha256", ref.get("sha256")) != ref.get("sha256")
-                            for r in out):
+        key = (ref["path"], ref.get("line_start"), ref.get("line_end"))
+        if any((r["path"], r.get("line_start"), r.get("line_end")) == key and "sha256" in r and "sha256" in ref
+               and r["sha256"] != ref["sha256"] for r in out):
             raise FileRefError(f"{where} names {ref['path']!r} twice with different sha256 values; send each file once")
         if ref not in out:
             out.append(ref)

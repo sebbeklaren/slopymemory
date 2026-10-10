@@ -153,5 +153,10 @@ CREATE TABLE IF NOT EXISTS m3_file_ref (
 CREATE INDEX IF NOT EXISTS m3_file_ref_path_idx   ON m3_file_ref (path);
 CREATE INDEX IF NOT EXISTS m3_file_ref_memory_idx ON m3_file_ref (memory_id);
 -- One row per anchor: a warm-up replayed after a crash between its commit and clearing its log writes them again.
+-- A store that ran 0.6.0 (no key yet) may hold a duplicate; it is cleared first, or the key would stop the store from
+-- starting. Once the key exists this deletes nothing.
+DELETE FROM m3_file_ref a USING m3_file_ref b
+ WHERE a.ctid > b.ctid AND a.memory_id = b.memory_id AND a.path = b.path
+   AND coalesce(a.line_start, 0) = coalesce(b.line_start, 0) AND coalesce(a.line_end, 0) = coalesce(b.line_end, 0);
 CREATE UNIQUE INDEX IF NOT EXISTS m3_file_ref_uq
     ON m3_file_ref (memory_id, path, coalesce(line_start, 0), coalesce(line_end, 0));

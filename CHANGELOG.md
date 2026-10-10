@@ -9,10 +9,12 @@ Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
 
 - A store restarted onto an older version in the middle of a session refuses `files` with the restart command,
   rather than dropping the anchors.
-- A retrieve that names one file twice with different hashes is refused, rather than the last one winning.
+- A save or retrieve that names the same file (and lines) twice with different hashes is refused, rather than one
+  silently winning.
 - A path with a NUL byte is refused by the store with its reason, rather than failing in the launcher; the message
   for an unreadable file no longer shows the project's full path.
-- An anchor is never stored twice, even when a store's warm-up is replayed after a crash.
+- An anchor is never stored twice, even when a store's warm-up is replayed after a crash; a duplicate an earlier
+  0.6.0 store may hold is cleared when the store starts.
 
 ## 0.6.0
 

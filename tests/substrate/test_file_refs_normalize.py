@@ -83,3 +83,17 @@ def test_one_path_with_two_different_current_hashes_is_refused():
     assert "a.py" in str(e.value) and "twice" in str(e.value)
     assert normalize([{"path": "a.py", "sha256": H}, {"path": "./a.py", "sha256": H}], arg="files", save=False) == [
         {"path": "a.py", "sha256": H}]
+
+
+def test_a_bare_entry_never_conflicts_whatever_its_order():
+    for files in ([{"path": "a.py"}, {"path": "a.py", "sha256": H}], [{"path": "a.py", "sha256": H}, {"path": "a.py"}]):
+        assert normalize(files, arg="files", save=False)
+
+
+def test_a_save_naming_one_anchor_twice_with_different_hashes_is_refused():
+    with pytest.raises(FileRefError) as e:
+        normalize([{"path": "a.py", "sha256": H, "line": 2}, {"path": "a.py", "sha256": "b" * 64, "line": 2}],
+                  arg="files", save=True)
+    assert "twice" in str(e.value)
+    assert len(normalize([{"path": "a.py", "sha256": H, "line": 2}, {"path": "a.py", "sha256": "b" * 64, "line": 3}],
+                         arg="files", save=True)) == 2
