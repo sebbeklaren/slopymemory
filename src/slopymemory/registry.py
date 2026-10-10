@@ -40,7 +40,7 @@ class Registry:
         paths.write_atomic(paths.registry_file(),
                            tomli_w.dumps({"link": [{"path": str(l.path), "store": l.store} for l in self.links]}))
 
-    def resolve(self, cwd: Path) -> str | None:
+    def _best(self, cwd: Path) -> Link | None:
         cwd = cwd.resolve()
         best: Link | None = None
         for l in self.links:
@@ -48,7 +48,16 @@ class Registry:
             if cwd == p or p in cwd.parents:
                 if best is None or len(p.parts) > len(best.path.resolve().parts):
                     best = l
+        return best
+
+    def resolve(self, cwd: Path) -> str | None:
+        best = self._best(cwd)
         return best.store if best else None
+
+    def root_of(self, cwd: Path) -> Path | None:
+        """The linked folder that `resolve` picks for cwd — the project root that file anchors are relative to."""
+        best = self._best(cwd)
+        return best.path.resolve() if best else None
 
     def link(self, path: Path, store: str) -> None:
         path = path.resolve()

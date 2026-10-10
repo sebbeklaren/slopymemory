@@ -20,7 +20,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.lowlevel import NotificationOptions, Server
 from mcp.server.stdio import stdio_server
 from mcp.shared.exceptions import MCPError
-from . import SERVER_NAME, embedded_pg, paths, server as srv, updates
+from . import SERVER_NAME, anchors, embedded_pg, paths, server as srv, updates
 from .embedded_pg import EmbeddedPostgres
 from .provision import TEMPLATE_HINT, InitRefused, SystemPostgres, apply_init, choose_backend, plan_init
 from .paths import ConfigError
@@ -127,6 +127,7 @@ class Launcher:
         self._connected = False                # did the current attempt ever establish a session? (words the announcement)
         self._reconnecting = asyncio.Lock()    # concurrent callers that found the same loss share one attempt
         self._noticed = False                  # the update notice rides on this session's first tool reply only
+        self._takes_files: tuple[object, bool] | None = None   # (upstream session, whether its tools accept files)
         self.server = Server(SERVER_NAME, instructions=USAGE_RULES,
                              on_list_tools=self._on_list_tools, on_call_tool=self._on_call_tool,
                              on_list_prompts=self._on_list_prompts, on_list_resources=self._on_list_resources,
@@ -346,6 +347,8 @@ class Launcher:
                 if name != "memory_init":
                     raise RuntimeError(self.failure or f"no memory store for {self.cwd} — call memory_init first — see SETUP.md#registry")
                 return types.CallToolResult(content=await self._init(arguments, ctx))
+            if anchors.needs(name, arguments):
+                arguments = await self._anchor(name, arguments)
             result = await self._forward(lambda u: u.call_tool(name, arguments))
         except Exception as e:
             return types.CallToolResult(content=[types.TextContent(type="text", text=_text(e))], isError=True)
@@ -358,6 +361,19 @@ class Launcher:
             if line:
                 result.content = [*result.content, types.TextContent(type="text", text=line)]
         return result
+
+    async def _anchor(self, name: str, arguments: dict) -> dict:
+        """Fill the hashes a harness left out, once the store server is known to take `files` — checked once per
+        upstream session, so a store restarted onto newer code is seen as such."""
+        if self._takes_files is None or self._takes_files[0] is not self.upstream:
+            tools = (await self._forward(lambda u: u.list_tools())).tools
+            self._takes_files = (self.upstream, anchors.server_takes_files(tools))
+        if not self._takes_files[1]:
+            n = self.store.name if self.store else "?"
+            raise RuntimeError(f"store {n} runs an older slopymemory that would drop `files` — restart it: "
+                               f"slopymem stop {n} && slopymem start {n}")
+        root = Registry.load().root_of(self.cwd) or self.cwd
+        return await asyncio.to_thread(anchors.fill, name, arguments, root)
 
     async def _on_list_prompts(self, ctx, params) -> types.ListPromptsResult:
         if await self._session() is None:

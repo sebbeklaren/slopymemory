@@ -528,3 +528,60 @@ def test_a_long_init_description_is_cut_to_the_cap_with_a_mark_not_silently():
     long = "y" * 5000
     out = fit_description(long)
     assert len(out) <= 2048 and out.endswith("… (cut to fit the 2,048-character limit — run `slopymem doctor`)")
+
+
+async def test_the_launcher_hashes_files_relative_to_the_project_root(tmp_home, tmp_path, free_port):
+    import hashlib, json
+    repo, store = _linked_store(tmp_path, free_port)
+    (repo / "src").mkdir(); (repo / "src" / "a.py").write_text("print(1)\n")
+    try:
+        async with stdio_client(launcher_params(repo / "src", tmp_home, FAKE_MCP_FILES="new")) as (rd, wr):
+            async with ClientSession(rd, wr) as s:
+                await s.initialize()
+                res = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "src/a.py"}]})
+                plain = await s.call_tool("memory_save", {"tenant": "t", "text": "x"})
+                gone = await s.call_tool("memory_retrieve", {"tenant": "t", "query": "q", "files": [{"path": "no.py"}]})
+                bad = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "no.py"}]})
+        assert json.loads(res.content[0].text)["files"] == [
+            {"path": "src/a.py", "sha256": hashlib.sha256(b"print(1)\n").hexdigest()}]
+        assert json.loads(plain.content[0].text)["files"] is None
+        assert json.loads(gone.content[0].text)["files"] == [{"path": "no.py", "sha256": None}]
+        assert bad.is_error and "no.py" in bad.content[0].text
+    finally:
+        server.stop(store)
+
+
+async def test_files_to_an_older_store_server_are_refused_with_the_restart(tmp_home, tmp_path, free_port):
+    repo, store = _linked_store(tmp_path, free_port)
+    (repo / "a.py").write_text("a")
+    try:
+        async with stdio_client(launcher_params(repo, tmp_home, FAKE_MCP_FILES="old")) as (rd, wr):
+            async with ClientSession(rd, wr) as s:
+                await s.initialize()
+                res = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "a.py"}]})
+                ok = await s.call_tool("memory_save", {"tenant": "t", "text": "x"})
+        assert res.is_error and "older" in res.content[0].text and f"slopymem stop {store.name}" in res.content[0].text
+        assert not ok.is_error
+    finally:
+        server.stop(store)
+
+
+async def test_takes_files_is_rechecked_per_upstream_session(monkeypatch):
+    from types import SimpleNamespace as T
+    from slopymemory import anchors
+    from slopymemory.launcher import Launcher
+    launcher = Launcher()
+    launcher.store = T(name="s")
+    calls = []
+
+    async def forward(fn):
+        calls.append(launcher.upstream)
+        return T(tools=[T(name=n, input_schema={"properties": {"files": {}}}) for n in anchors.TOOLS])
+    monkeypatch.setattr(launcher, "_forward", forward)
+    monkeypatch.setattr(anchors, "fill", lambda tool, args, root: args)
+    launcher.upstream = object()
+    await launcher._anchor("memory_save", {"files": [{"path": "a"}]})
+    await launcher._anchor("memory_save", {"files": [{"path": "a"}]})
+    launcher.upstream = object()
+    await launcher._anchor("memory_save", {"files": [{"path": "a"}]})
+    assert len(calls) == 2, "checked once per upstream session"

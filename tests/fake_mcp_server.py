@@ -62,5 +62,24 @@ if os.environ.get("FAKE_MCP_MEMORY"):
                                             for i, t in enumerate(_saved[:k], start=1)]}
 
 
+# FAKE_MCP_FILES=new: memory_save / memory_retrieve take `files` and echo it back — what the launcher sent. =old: the
+# same save without a `files` parameter, the shape of a store server from before file anchors.
+if (_files := os.environ.get("FAKE_MCP_FILES")) == "new":
+    @mcp.tool()
+    def memory_save(tenant: str, text: str, files: list | None = None) -> dict:
+        """Echo of the files the launcher forwarded."""
+        return {"files": files}
+
+    @mcp.tool()
+    def memory_retrieve(tenant: str, query: str, files: list | None = None) -> dict:
+        """Echo of the files the launcher forwarded."""
+        return {"files": files}
+elif _files == "old":
+    @mcp.tool()
+    def memory_save(tenant: str, text: str) -> dict:
+        """A pre-anchor save."""
+        return {"status": "saved"}
+
+
 if __name__ == "__main__":
     mcp.run(transport="streamable-http", host="127.0.0.1", port=int(os.environ["AM_MCP_PORT"]))

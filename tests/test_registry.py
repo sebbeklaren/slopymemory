@@ -68,3 +68,11 @@ def test_save_is_atomic_no_tmp_file_remains(tmp_home, tmp_path):
     r = Registry.load(); r.link(tmp_path, "a"); r.save()
     assert Registry.load() == r
     assert [p.name for p in tmp_home.iterdir()] == ["registry.toml"]
+
+
+def test_root_of_is_the_linked_folder_for_a_subfolder(tmp_home, tmp_path):
+    from slopymemory.registry import Registry
+    repo = tmp_path / "repo"; (repo / "src" / "deep").mkdir(parents=True)
+    r = Registry.load(); r.link(repo, "repo"); r.save()
+    assert Registry.load().root_of(repo / "src" / "deep") == repo.resolve()
+    assert Registry.load().root_of(tmp_path / "elsewhere") is None
