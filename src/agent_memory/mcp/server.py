@@ -392,7 +392,7 @@ def memory_retrieve(tenant: str, query: str, k: int = 5,
           "returned": [r.get("memory_id") for r in results],
           "results": [{"memory_id": r.get("memory_id"), "score": r.get("score"),
                        "superseded_by": bool(r.get("superseded_by")),
-                       "anchored": bool(r.get("anchored"))} for r in results]})
+                       **({"anchored": bool(r.get("anchored"))} if files else {})} for r in results]})
     return out
 
 

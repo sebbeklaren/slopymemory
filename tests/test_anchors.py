@@ -90,3 +90,15 @@ def test_fill_cleans_a_path_the_way_the_server_does_before_hashing(tmp_path):
 def test_fill_passes_a_path_the_server_would_refuse_unchanged(tmp_path):
     entry = {"path": "src\\a.py"}
     assert anchors.fill("memory_save", {"files": [entry]}, tmp_path)["files"] == [entry]
+
+
+def test_fill_passes_a_path_with_a_nul_unchanged_for_the_server_to_refuse(tmp_path):
+    entry = {"path": "a\x00b.py"}
+    assert anchors.fill("memory_save", {"files": [entry]}, tmp_path)["files"] == [entry]
+    assert anchors.sha256_of(tmp_path, "a\x00b.py") is None
+
+
+def test_the_unreadable_message_names_the_file_not_the_project_root(tmp_path):
+    with pytest.raises(anchors.Unreadable) as e:
+        anchors.fill("memory_save", {"files": [{"path": "nope.py"}]}, tmp_path)
+    assert "nope.py" in str(e.value) and str(tmp_path) not in str(e.value)

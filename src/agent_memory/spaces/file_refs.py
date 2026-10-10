@@ -37,6 +37,8 @@ def _path(raw, where: str) -> str:
 
 def clean_path(raw) -> str | None:
     """The path as the store keeps it, or None when the store would refuse it — the launcher hashes exactly this."""
+    if isinstance(raw, str) and "\x00" in raw:            # refused by the server, by name
+        return None
     try:
         return _path(raw, "files")
     except FileRefError:
@@ -91,6 +93,9 @@ def normalize(files, *, arg: str, save: bool) -> list[dict] | None:
                                "launcher computes it")
         if save:
             ref["line_start"], ref["line_end"] = _lines(e, where)
+        if not save and any(r["path"] == ref["path"] and r.get("sha256", ref.get("sha256")) != ref.get("sha256")
+                            for r in out):
+            raise FileRefError(f"{where} names {ref['path']!r} twice with different sha256 values; send each file once")
         if ref not in out:
             out.append(ref)
     return out
@@ -103,7 +108,7 @@ def write(conn, memory_id: str, refs: list[dict] | None) -> int:
     with conn.cursor() as cur:
         for r in refs:
             cur.execute("INSERT INTO m3_file_ref (memory_id, path, sha256, line_start, line_end) "
-                        "VALUES (%s, %s, %s, %s, %s)",
+                        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
                         (memory_id, r["path"], r["sha256"], r["line_start"], r["line_end"]))
     return len(refs)
 

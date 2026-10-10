@@ -55,3 +55,12 @@ def test_the_table_refuses_a_hash_that_is_not_lower_hex(conn):
     _memory(conn, "m1")
     with pytest.raises(psycopg.errors.CheckViolation):
         file_refs.write(conn, "m1", [_ref("a", "A" * 64)])
+
+
+def test_the_same_anchor_written_twice_is_kept_once(conn):
+    """A warm-up replayed after a crash between its commit and clearing its log writes the anchors again."""
+    _memory(conn, "m1")
+    refs = [_ref("a.py"), {"path": "a.py", "sha256": H, "line_start": 3, "line_end": 3}]
+    file_refs.write(conn, "m1", refs)
+    file_refs.write(conn, "m1", refs)
+    assert len(file_refs.refs_of(conn, ["m1"])["m1"]) == 2

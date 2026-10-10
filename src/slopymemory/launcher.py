@@ -349,7 +349,9 @@ class Launcher:
                 return types.CallToolResult(content=await self._init(arguments, ctx))
             if anchors.needs(name, arguments):
                 arguments = await self._anchor(name, arguments)
-            result = await self._forward(lambda u: u.call_tool(name, arguments))
+                result = await self._forward(lambda u: self._call_anchored(u, name, arguments))
+            else:
+                result = await self._forward(lambda u: u.call_tool(name, arguments))
         except Exception as e:
             return types.CallToolResult(content=[types.TextContent(type="text", text=_text(e))], isError=True)
         if not self._noticed:
@@ -363,18 +365,23 @@ class Launcher:
         return result
 
     async def _anchor(self, name: str, arguments: dict) -> dict:
-        """Fill the hashes a harness left out, once the store server is known to take `files`. A yes is kept for the
-        upstream session it was read on; a no is asked again on every call — a refused call is never forwarded, so it
-        would never notice that the store has since been restarted onto newer code."""
-        if self._takes_files is None or self._takes_files[0] is not self.upstream or not self._takes_files[1]:
-            tools = (await self._forward(lambda u: u.list_tools())).tools
-            self._takes_files = (self.upstream, anchors.server_takes_files(tools))
+        """Fill the hashes a harness left out — the registry read and the hashing both off the event loop."""
+        def fill() -> dict:
+            root = Registry.load().root_of(self.cwd) or self.cwd
+            return anchors.fill(name, arguments, root)
+        return await asyncio.to_thread(fill)
+
+    async def _call_anchored(self, session: ClientSession, name: str, arguments: dict):
+        """A call carrying `files`, made only on a session whose server takes them — checked on the session the call
+        actually goes out on, so a reconnect onto a restarted store (newer or older) is checked again. A yes is kept
+        for its session; a no is asked again on every call."""
+        if self._takes_files is None or self._takes_files[0] is not session or not self._takes_files[1]:
+            self._takes_files = (session, anchors.server_takes_files((await session.list_tools()).tools))
         if not self._takes_files[1]:
             n = self.store.name if self.store else "?"
             raise RuntimeError(f"store {n} runs an older slopymemory that would drop `files` — restart it: "
                                f"slopymem stop {n} && slopymem start {n}")
-        root = Registry.load().root_of(self.cwd) or self.cwd
-        return await asyncio.to_thread(anchors.fill, name, arguments, root)
+        return await session.call_tool(name, arguments)
 
     async def _on_list_prompts(self, ctx, params) -> types.ListPromptsResult:
         if await self._session() is None:

@@ -75,3 +75,11 @@ def test_a_malformed_retrieve_entry_is_refused_by_name(files, needle):
     with pytest.raises(FileRefError) as e:
         normalize(files, arg="files", save=False)
     assert needle in str(e.value)
+
+
+def test_one_path_with_two_different_current_hashes_is_refused():
+    with pytest.raises(FileRefError) as e:
+        normalize([{"path": "a.py", "sha256": H}, {"path": "./a.py", "sha256": None}], arg="files", save=False)
+    assert "a.py" in str(e.value) and "twice" in str(e.value)
+    assert normalize([{"path": "a.py", "sha256": H}, {"path": "./a.py", "sha256": H}], arg="files", save=False) == [
+        {"path": "a.py", "sha256": H}]

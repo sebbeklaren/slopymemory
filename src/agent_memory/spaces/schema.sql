@@ -152,3 +152,6 @@ CREATE TABLE IF NOT EXISTS m3_file_ref (
 );
 CREATE INDEX IF NOT EXISTS m3_file_ref_path_idx   ON m3_file_ref (path);
 CREATE INDEX IF NOT EXISTS m3_file_ref_memory_idx ON m3_file_ref (memory_id);
+-- One row per anchor: a warm-up replayed after a crash between its commit and clearing its log writes them again.
+CREATE UNIQUE INDEX IF NOT EXISTS m3_file_ref_uq
+    ON m3_file_ref (memory_id, path, coalesce(line_start, 0), coalesce(line_end, 0));

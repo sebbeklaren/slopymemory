@@ -21,7 +21,7 @@ def sha256_of(root: Path, rel: str) -> str | None:
     root = root.resolve()
     try:
         p = (root / rel).resolve(strict=True)
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):       # ValueError: a NUL byte in the path
         return None
     if not p.is_relative_to(root) or not p.is_file():
         return None
@@ -49,7 +49,7 @@ def fill(tool: str, arguments: dict, root: Path) -> dict:
         if isinstance(e, dict) and "sha256" not in e and (path := clean_path(e.get("path"))) is not None:
             h = sha256_of(root, path)
             if h is None and tool == "memory_save":
-                raise Unreadable(f"cannot anchor {path!r}: not a readable file under the project root {root}")
+                raise Unreadable(f"cannot anchor {path!r}: not a readable file under the project root")
             e = {**e, "path": path, "sha256": h}
         out.append(e)
     return {**arguments, "files": out}

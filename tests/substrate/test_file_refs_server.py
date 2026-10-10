@@ -80,3 +80,27 @@ def test_calls_without_files_reply_as_before(srv):
     got = server.memory_retrieve(tenant="t", query="q")
     assert "files_anchored" not in saved
     assert all("files" not in r and "anchored" not in r for r in got["results"])
+
+
+def test_a_held_record_from_before_anchors_drains_without_them(srv, monkeypatch):
+    from datetime import datetime, timezone
+    rec = du.record("pre06", "held before anchors existed", "s", None, datetime.now(timezone.utc),
+                    None, None, None, None)
+    del rec["files"]                                         # the shape a 0.5.x server wrote
+    du.hold(rec)
+    got = server.memory_retrieve(tenant="t", query="q")
+    assert du.counts() == (0, 0) and "pre06" in [r["memory_id"] for r in got["results"]]
+
+
+def test_a_reply_without_files_has_exactly_the_keys_it_had_before(srv):
+    saved = server.memory_save(tenant="t", text="plain")
+    assert set(saved) == {"status", "memory_id"}
+    got = server.memory_retrieve(tenant="t", query="q")
+    assert all(set(r) <= {"memory_id", "score", "text", "related", "superseded_by"} for r in got["results"])
+
+
+def test_the_retrieve_log_marks_anchored_only_when_files_were_asked_for(srv):
+    server.memory_save(tenant="t", text="x", files=[{"path": "a.py", "sha256": H}])
+    server.memory_retrieve(tenant="t", query="q")
+    line = json.loads((srv / "inv.jsonl").read_text().splitlines()[-1])
+    assert all("anchored" not in r for r in line["results"])

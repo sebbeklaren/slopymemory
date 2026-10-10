@@ -3,6 +3,17 @@
 What a user of slopymemory notices, newest first. A release that changes the code the store servers run says so:
 restart each running store with `slopymem stop <name>` and `slopymem start <name>`.
 
+## 0.6.1
+
+Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
+
+- A store restarted onto an older version in the middle of a session refuses `files` with the restart command,
+  rather than dropping the anchors.
+- A retrieve that names one file twice with different hashes is refused, rather than the last one winning.
+- A path with a NUL byte is refused by the store with its reason, rather than failing in the launcher; the message
+  for an unreadable file no longer shows the project's full path.
+- An anchor is never stored twice, even when a store's warm-up is replayed after a crash.
+
 ## 0.6.0
 
 Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.

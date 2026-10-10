@@ -566,25 +566,60 @@ async def test_files_to_an_older_store_server_are_refused_with_the_restart(tmp_h
         server.stop(store)
 
 
-async def test_takes_files_is_rechecked_per_upstream_session(monkeypatch):
+async def test_takes_files_is_rechecked_per_upstream_session():
+    """A yes is kept for the session it was read on; a new session is asked again."""
     from types import SimpleNamespace as T
     from slopymemory import anchors
     from slopymemory.launcher import Launcher
     launcher = Launcher()
     launcher.store = T(name="s")
-    calls = []
+    asked = []
 
-    async def forward(fn):
-        calls.append(launcher.upstream)
-        return T(tools=[T(name=n, input_schema={"properties": {"files": {}}}) for n in anchors.TOOLS])
-    monkeypatch.setattr(launcher, "_forward", forward)
+    def session():
+        async def list_tools():
+            asked.append(1)
+            return T(tools=[T(name=n, input_schema={"properties": {"files": {}}}) for n in anchors.TOOLS])
+        async def call_tool(name, args):
+            return "ok"
+        return T(list_tools=list_tools, call_tool=call_tool)
+    first, second = session(), session()
+    assert await launcher._call_anchored(first, "memory_save", {}) == "ok"
+    assert await launcher._call_anchored(first, "memory_save", {}) == "ok"
+    assert await launcher._call_anchored(second, "memory_save", {}) == "ok"
+    assert len(asked) == 2
+
+
+async def test_the_registry_is_read_off_the_event_loop(monkeypatch, tmp_path):
+    import threading
+    from slopymemory import anchors, launcher as L
+    seen = []
+
+    class Reg:
+        def root_of(self, cwd): return tmp_path
+    monkeypatch.setattr(L.Registry, "load", staticmethod(lambda: seen.append(threading.current_thread()) or Reg()))
     monkeypatch.setattr(anchors, "fill", lambda tool, args, root: args)
-    launcher.upstream = object()
-    await launcher._anchor("memory_save", {"files": [{"path": "a"}]})
-    await launcher._anchor("memory_save", {"files": [{"path": "a"}]})
-    launcher.upstream = object()
-    await launcher._anchor("memory_save", {"files": [{"path": "a"}]})
-    assert len(calls) == 2, "checked once per upstream session"
+    await L.Launcher()._anchor("memory_save", {"files": [{"path": "a"}]})
+    assert seen and seen[0] is not threading.main_thread()
+
+
+async def test_a_store_restarted_onto_older_code_refuses_files_rather_than_dropping_them(tmp_home, tmp_path, free_port, monkeypatch):
+    import json
+    repo, store = _linked_store(tmp_path, free_port)
+    (repo / "a.py").write_text("a")
+    monkeypatch.setattr(server, "server_command", lambda s: [sys.executable, FAKE])   # for the restart below
+    try:
+        async with stdio_client(launcher_params(repo, tmp_home, FAKE_MCP_FILES="new")) as (rd, wr):
+            async with ClientSession(rd, wr) as s:
+                await s.initialize()
+                ok = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "a.py"}]})
+                assert not ok.is_error and json.loads(ok.content[0].text)["files"]
+                assert server.stop(store)
+                monkeypatch.setenv("FAKE_MCP_FILES", "old")
+                server.ensure_up(store)                             # the same store, now on code without files
+                res = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "a.py"}]})
+        assert res.is_error and "older" in res.content[0].text, res.content[0].text
+    finally:
+        server.stop(store)
 
 
 async def test_a_store_restarted_onto_new_code_takes_files_without_another_restart(tmp_home, tmp_path, free_port, monkeypatch):
