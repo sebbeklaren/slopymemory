@@ -3,6 +3,19 @@
 What a user of slopymemory notices, newest first. A release that changes the code the store servers run says so:
 restart each running store with `slopymem stop <name>` and `slopymem start <name>`.
 
+## 0.6.0
+
+Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
+
+- A memory can be anchored to the files it is about: `memory_save` takes `files=[{path, sha256?, line? | lines}]`,
+  paths relative to the project root. The launcher fills in each file's sha256 when the harness leaves it out; only
+  the hash leaves your project folder, never the file, and the store never reads the disk.
+- `memory_retrieve` takes `files=[{path}]`: the memories anchored to those files come first, marked `anchored`, and
+  every result shows its anchors. An anchor whose file has changed since the save is marked `stale: true`, one whose
+  file is gone `missing: true`; such memories are still shown, to be read as possibly out of date.
+- Memories without files are unchanged. A launcher talking to a store server that has not been restarted yet refuses
+  `files` with the restart command, rather than letting the anchors be dropped.
+
 ## 0.5.1
 
 Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.

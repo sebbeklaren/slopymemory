@@ -129,6 +129,13 @@ From then on the directory decides which store a session talks to. The commands 
 - `slopymem doctor` — check the whole install end to end
 - `slopymem remove <store>` — delete a store (asks twice first)
 
+## Files
+
+A memory can name the files it is about. Pass `files` when saving and the store keeps each path with a fingerprint
+(sha256) of the file as it was; pass `files` when retrieving and the memories about those files come first, each
+anchor marked `stale` if the file has changed since and `missing` if it is gone. The fingerprints are made on your
+machine by the launcher; the store never reads your files and keeps no copy of them.
+
 ## Size
 
 A store's data — the database plus its state directory and logs — usually stays small. `slopymem
