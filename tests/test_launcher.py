@@ -585,3 +585,26 @@ async def test_takes_files_is_rechecked_per_upstream_session(monkeypatch):
     launcher.upstream = object()
     await launcher._anchor("memory_save", {"files": [{"path": "a"}]})
     assert len(calls) == 2, "checked once per upstream session"
+
+
+async def test_a_store_restarted_onto_new_code_takes_files_without_another_restart(tmp_home, tmp_path, free_port, monkeypatch):
+    """Refused once as an older server, the store is restarted onto code that takes files: the next files call goes
+    through — the user is not told to restart again."""
+    import json
+    repo, store = _linked_store(tmp_path, free_port)
+    (repo / "a.py").write_text("a")
+    monkeypatch.setattr(server, "server_command", lambda s: [sys.executable, FAKE])   # for the restart below
+    try:
+        async with stdio_client(launcher_params(repo, tmp_home, FAKE_MCP_FILES="old")) as (rd, wr):
+            async with ClientSession(rd, wr) as s:
+                await s.initialize()
+                refused = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "a.py"}]})
+                assert refused.is_error and "older" in refused.content[0].text
+                assert server.stop(store)
+                monkeypatch.setenv("FAKE_MCP_FILES", "new")
+                server.ensure_up(store)                             # the same store, now on code that takes files
+                res = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "a.py"}]})
+        assert not res.is_error, res.content[0].text
+        assert json.loads(res.content[0].text)["files"][0]["path"] == "a.py"
+    finally:
+        server.stop(store)

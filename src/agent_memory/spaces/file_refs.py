@@ -35,6 +35,14 @@ def _path(raw, where: str) -> str:
     return "/".join(parts)
 
 
+def clean_path(raw) -> str | None:
+    """The path as the store keeps it, or None when the store would refuse it — the launcher hashes exactly this."""
+    try:
+        return _path(raw, "files")
+    except FileRefError:
+        return None
+
+
 def _lines(e: dict, where: str) -> tuple[int | None, int | None]:
     if "line" in e and "lines" in e:
         raise FileRefError(f"{where} takes line or lines, not both")

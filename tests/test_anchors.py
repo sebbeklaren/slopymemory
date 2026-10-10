@@ -75,3 +75,18 @@ def test_server_takes_files_reads_the_schemas():
     new = [T(name=n, input_schema={"properties": {"files": {}}}) for n in anchors.TOOLS]
     old = [T(name=n, input_schema={"properties": {"text": {}}}) for n in anchors.TOOLS]
     assert anchors.server_takes_files(new) and not anchors.server_takes_files(old)
+
+
+def test_fill_cleans_a_path_the_way_the_server_does_before_hashing(tmp_path):
+    """A stray space or ./ must not make an existing file look gone: the launcher hashes and forwards the same path
+    the server will store."""
+    (tmp_path / "src").mkdir(); (tmp_path / "src" / "a.py").write_text("a")
+    got = anchors.fill("memory_retrieve", {"files": [{"path": " ./src//a.py "}]}, tmp_path)
+    assert got["files"] == [{"path": "src/a.py", "sha256": _h(b"a")}]
+    saved = anchors.fill("memory_save", {"files": [{"path": "src/a.py "}]}, tmp_path)
+    assert saved["files"] == [{"path": "src/a.py", "sha256": _h(b"a")}]
+
+
+def test_fill_passes_a_path_the_server_would_refuse_unchanged(tmp_path):
+    entry = {"path": "src\\a.py"}
+    assert anchors.fill("memory_save", {"files": [entry]}, tmp_path)["files"] == [entry]

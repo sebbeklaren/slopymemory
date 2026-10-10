@@ -3,6 +3,8 @@ an agent names; the store server never reads the disk. Only the sha256 leaves th
 import hashlib
 from pathlib import Path
 
+from agent_memory.spaces.file_refs import clean_path
+
 TOOLS = ("memory_save", "memory_retrieve")
 _CHUNK = 1 << 20
 
@@ -39,15 +41,16 @@ def needs(tool: str, arguments: dict) -> bool:
 
 def fill(tool: str, arguments: dict, root: Path) -> dict:
     """A copy of `arguments` in which every `files` entry without a sha256 key has one. An entry with a sha256 (a hash
-    or null) and a malformed entry pass unchanged, for the server to judge. On a save an unreadable file raises
-    Unreadable naming it; on a retrieve it is sent as null — the file is gone."""
+    or null) and a malformed entry pass unchanged, for the server to judge. The path is cleaned the way the store
+    cleans it, so the hash belongs to the file the store will name. On a save an unreadable file raises Unreadable
+    naming it; on a retrieve it is sent as null — the file is gone."""
     out = []
     for e in arguments["files"]:
-        if isinstance(e, dict) and "sha256" not in e and isinstance(e.get("path"), str):
-            h = sha256_of(root, e["path"])
+        if isinstance(e, dict) and "sha256" not in e and (path := clean_path(e.get("path"))) is not None:
+            h = sha256_of(root, path)
             if h is None and tool == "memory_save":
-                raise Unreadable(f"cannot anchor {e['path']!r}: not a readable file under the project root {root}")
-            e = {**e, "sha256": h}
+                raise Unreadable(f"cannot anchor {path!r}: not a readable file under the project root {root}")
+            e = {**e, "path": path, "sha256": h}
         out.append(e)
     return {**arguments, "files": out}
 
