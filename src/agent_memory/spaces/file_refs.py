@@ -86,3 +86,49 @@ def normalize(files, *, arg: str, save: bool) -> list[dict] | None:
         if ref not in out:
             out.append(ref)
     return out
+
+
+def write(conn, memory_id: str, refs: list[dict] | None) -> int:
+    """Insert one memory's anchors, on the caller's connection (inside the save's transaction)."""
+    if not refs:
+        return 0
+    with conn.cursor() as cur:
+        for r in refs:
+            cur.execute("INSERT INTO m3_file_ref (memory_id, path, sha256, line_start, line_end) "
+                        "VALUES (%s, %s, %s, %s, %s)",
+                        (memory_id, r["path"], r["sha256"], r["line_start"], r["line_end"]))
+    return len(refs)
+
+
+def _shown(path, sha256, start, end) -> dict:
+    ref = {"path": path, "sha256": sha256}
+    if start is not None:
+        if start == end:
+            ref["line"] = start
+        else:
+            ref["lines"] = [start, end]
+    return ref
+
+
+def refs_of(conn, memory_ids: list[str]) -> dict[str, list[dict]]:
+    if not memory_ids:
+        return {}
+    out: dict[str, list[dict]] = {}
+    with conn.cursor() as cur:
+        cur.execute("SELECT memory_id, path, sha256, line_start, line_end FROM m3_file_ref "
+                    "WHERE memory_id = ANY(%s) ORDER BY memory_id, path, line_start NULLS FIRST, created_at",
+                    (list(memory_ids),))
+        for mid, path, sha, start, end in cur.fetchall():
+            out.setdefault(mid, []).append(_shown(path, sha, start, end))
+    return out
+
+
+def anchored(conn, paths: list[str]) -> list[tuple[str, str | None]]:
+    """The memories anchored to any of `paths`, newest first, with their text."""
+    if not paths:
+        return []
+    with conn.cursor() as cur:
+        cur.execute("SELECT m.memory_id, m.text FROM m3_memory m WHERE EXISTS "
+                    "(SELECT 1 FROM m3_file_ref f WHERE f.memory_id = m.memory_id AND f.path = ANY(%s)) "
+                    "ORDER BY m.created_at DESC, m.memory_id", (list(paths),))
+        return [(m, t) for m, t in cur.fetchall()]

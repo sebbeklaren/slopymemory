@@ -138,3 +138,17 @@ CREATE TABLE IF NOT EXISTS m3_memory_supersession (
     PRIMARY KEY (stale_memory_id, by_memory_id),
     CHECK (stale_memory_id <> by_memory_id)
 );
+
+-- File anchors: the files a memory is about, by path relative to the project root and the sha256 the file had when
+-- the memory was saved. Outside the space machinery on purpose — a path is matched exactly, never by similarity. The
+-- store never reads the disk; the caller sends the hashes. Deleted with its memory.
+CREATE TABLE IF NOT EXISTS m3_file_ref (
+    memory_id  text NOT NULL REFERENCES m3_memory(memory_id) ON DELETE CASCADE,
+    path       text NOT NULL,
+    sha256     text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    line_start integer CHECK (line_start >= 1),
+    line_end   integer CHECK (line_end >= line_start),
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS m3_file_ref_path_idx   ON m3_file_ref (path);
+CREATE INDEX IF NOT EXISTS m3_file_ref_memory_idx ON m3_file_ref (memory_id);
