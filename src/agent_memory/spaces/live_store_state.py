@@ -18,6 +18,7 @@ from agent_memory.spaces.live_store import (save_memory, retrieve_memories, _mem
 from agent_memory.spaces.concepts import place_text_concepts
 from agent_memory.spaces.memory_supersession import note_memory_supersession, attach_supersessions
 from agent_memory.spaces.related import attach_related
+from agent_memory.spaces import file_refs
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class LiveStore:
         self.bootstrap_n = bootstrap_n or settings.m3_bootstrap_n
         self.fit_fn = fit_fn
         self.projector = projector                 # None until warm
-        self._buffer = []                          # [(memory_id, text, session_key, scope, timestamp, thread, facets, save_concepts, supersedes)]
+        self._buffer = []                          # [(memory_id, text, session_key, scope, timestamp, thread, facets, save_concepts, supersedes, files)]
         self._session_nodes = {}    # session_key -> [semantic node_id]; in-memory by design:
                                     # DB keeps memories+edges across restart, only interrupted-session linking is lost
         self._epi = cs.fixed_origin_episodic()
@@ -122,13 +123,14 @@ class LiveStore:
                                      r["scope"], datetime.fromisoformat(r["now"]), r.get("thread"),
                                      r.get("facets"),           # absent in WALs from before facets existed -> None
                                      r.get("save_concepts"),    # absent in pre-concept WALs -> None
-                                     r.get("supersedes")))      # absent in pre-supersession WALs -> None
+                                     r.get("supersedes"),       # absent in pre-supersession WALs -> None
+                                     r.get("files")))           # absent in pre-anchor WALs -> None
 
     def _next_id(self) -> str:
         return uuid.uuid4().hex          # process-restart-safe (a per-process counter collides on source_ref)
 
     def _wal_append(self, mid, text, session_key, scope, now, thread=None, facets=None,
-                    save_concepts=None, supersedes=None) -> None:
+                    save_concepts=None, supersedes=None, files=None) -> None:
         """Write-ahead one buffered save (pre-warm only): full record to disk BEFORE
         returning 'buffered', so a restart can never silently lose real content (including
         power loss, via fsync). B2: `facets` rides the record (backward-compatible — read with
@@ -142,7 +144,7 @@ class LiveStore:
             f.write(json.dumps({"memory_id": mid, "text": text, "session_key": session_key,
                                 "scope": scope, "now": now.isoformat(), "thread": thread,
                                 "facets": facets, "save_concepts": save_concepts,
-                                "supersedes": supersedes},
+                                "supersedes": supersedes, "files": files},
                                ensure_ascii=False) + "\n")
             f.flush()
             os.fsync(f.fileno())
@@ -151,7 +153,7 @@ class LiveStore:
         Path(settings.m3_buffer_path).unlink(missing_ok=True)
 
     def _place(self, conn, mid, text, session_key, scope, now, thread=None, facets=None,
-               save_concepts=None):
+               save_concepts=None, files=None):
         """Place one memory (semantic + episodic/project + co-occurrence wiring), then — B2 — persist
         + (iff projectors loaded) place its content facets, star-bound to the new semantic node, and —
         concept-primary — place/dedup/link the memory's typed concepts (768-cosine layer). Returns
@@ -176,7 +178,8 @@ class LiveStore:
         if save_concepts:                                      # the gate: no concepts -> byte-identical
             concepts_placed = len(place_text_concepts(
                 conn, mid, [tuple(c) for c in save_concepts], self.embedder))
-        return ids, placed, deferred, concepts_placed
+        files_anchored = file_refs.write(conn, mid, files)       # no files -> nothing written
+        return ids, placed, deferred, concepts_placed, files_anchored
 
     def _note_session(self, session_key, thread, semantic_node_id) -> None:
         """After a commit only: the in-memory session map must never name a node the database does not hold.
@@ -203,10 +206,10 @@ class LiveStore:
         try:
             with conn.transaction():
                 pending = []                         # supersession links, written after every buffered row exists
-                for mid, text, session_key, scope, ts, thread, facets, save_concepts, supersedes in self._buffer:
-                    ids, placed, deferred, concepts_placed = self._place(
-                        conn, mid, text, session_key, scope, ts, thread, facets, save_concepts)
-                    results[mid] = (placed, deferred, concepts_placed)
+                for mid, text, session_key, scope, ts, thread, facets, save_concepts, supersedes, files in self._buffer:
+                    ids, placed, deferred, concepts_placed, files_anchored = self._place(
+                        conn, mid, text, session_key, scope, ts, thread, facets, save_concepts, files)
+                    results[mid] = (placed, deferred, concepts_placed, files_anchored)
                     sessions.append((session_key, thread, ids["semantic"]))
                     if supersedes:
                         pending.append((mid, supersedes))
@@ -230,7 +233,7 @@ class LiveStore:
         return True
 
     def save(self, conn, text, *, session_key, now=None, scope=None, memory_id=None, thread=None,
-             facets=None, save_concepts=None, supersedes=None, known_ids=None) -> dict:
+             facets=None, save_concepts=None, supersedes=None, known_ids=None, files=None) -> dict:
         """Optional `facets` = {content-space: text} (validated at the MCP boundary). When
         provided + warm, each facet is persisted (m3_facet) and placed into its space (iff its
         projector is loaded) + bound to the semantic node; the reply gains facets_placed /
@@ -276,9 +279,9 @@ class LiveStore:
             return {"status": "buffered", "warming": True, "count": len(self._buffer), "need": self.bootstrap_n}
         if not self.warm:                                       # bootstrap buffering
             self._buffer.append((mid, text, session_key, scope, now, thread, facets, save_concepts,
-                                 supersedes))
+                                 supersedes, files))
             self._wal_append(mid, text, session_key, scope, now, thread, facets, save_concepts,
-                             supersedes)
+                             supersedes, files)
             if len(self._buffer) >= self.bootstrap_n:
                 try:
                     results = self._fit_and_place(conn)         # writes buffered supersession links post-replay
@@ -287,7 +290,7 @@ class LiveStore:
                     return {"status": "buffered", "warming": True, "count": len(self._buffer),
                             "need": self.bootstrap_n, "fit_deferred": clean_error(e)}
                 out = {"status": "saved", "memory_id": mid, "warmed": True}
-                placed, deferred, concepts_placed = results.get(mid, ([], [], 0))
+                placed, deferred, concepts_placed, files_anchored = results.get(mid, ([], [], 0, 0))
                 if supersedes:
                     out["supersedes"] = supersedes
                 if facets:
@@ -295,6 +298,8 @@ class LiveStore:
                     out["facets_deferred"] = deferred
                 if save_concepts:
                     out["concepts_placed"] = concepts_placed
+                if files:
+                    out["files_anchored"] = files_anchored
                 return out
             out = {"status": "buffered", "warming": True,
                    "count": len(self._buffer), "need": self.bootstrap_n}
@@ -303,14 +308,17 @@ class LiveStore:
             if facets:                                          # persisted on the WAL, not yet placed
                 out["facets_placed"] = []
                 out["facets_deferred"] = sorted(facets)
+            if files:                                           # on the WAL, written at fit
+                out["files_anchored"] = 0
+                out["files_deferred"] = len(files)
             return out
         # A target known only as a held save has no row yet: the link is written when that save is drained (in
         # order, so before this one), never here where its foreign key would fail.
         pending = (supersedes if supersedes and supersedes in set(known_ids or ())
                    and not self._has_row(conn, supersedes) else None)
         with conn.transaction():                               # one save, one transaction
-            ids, placed, deferred, concepts_placed = self._place(
-                conn, mid, text, session_key, scope, now, thread, facets, save_concepts)
+            ids, placed, deferred, concepts_placed, files_anchored = self._place(
+                conn, mid, text, session_key, scope, now, thread, facets, save_concepts, files)
             if supersedes and not pending:
                 note_memory_supersession(conn, mid, supersedes)
         self._note_session(session_key, thread, ids["semantic"])
@@ -324,6 +332,8 @@ class LiveStore:
             out["facets_deferred"] = deferred
         if save_concepts:
             out["concepts_placed"] = concepts_placed
+        if files:
+            out["files_anchored"] = files_anchored
         return out
 
     def retrieve(self, conn, query, k, *, query_facets=None, facets=None, epoch_range=None,

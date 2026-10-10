@@ -53,7 +53,7 @@ def test_the_drain_releases_a_record_already_in_the_warm_up_buffer(srv, monkeypa
     down(monkeypatch)
     mid = server.memory_save(tenant="t", text="buffered then crashed")["memory_id"]
     up(monkeypatch)
-    cold._buffer.append((mid, "buffered then crashed", "s", None, None, None, None, None, None))   # recovered from WAL
+    cold._buffer.append((mid, "buffered then crashed", "s", None, None, None, None, None, None, None))   # recovered from WAL
     server.memory_retrieve(tenant="t", query="q")
     assert du.held_paths() == [] and [b[0] for b in cold._buffer].count(mid) == 1
 
