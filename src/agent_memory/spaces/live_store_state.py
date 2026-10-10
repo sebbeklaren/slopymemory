@@ -337,7 +337,7 @@ class LiveStore:
         return out
 
     def retrieve(self, conn, query, k, *, query_facets=None, facets=None, epoch_range=None,
-                 query_concepts=None, **kwargs) -> dict:
+                 query_concepts=None, files=None, **kwargs) -> dict:
         if not self.warm:
             return {"status": "warming up", "results": []}
         self._ensure_facet_projectors()             # lazy load for an injected-projector warm store
@@ -348,6 +348,7 @@ class LiveStore:
         if settings.m3_retrieval_mode == "concept_primary" and query_concepts:
             from agent_memory.spaces.word_vote import retrieve_concept_primary
             results = retrieve_concept_primary(conn, self.embedder, query_concepts, k)
+            results = file_refs.anchor(conn, results, files, k)    # before supersessions: a path-only hit gets them too
             return {"status": "ok", "results": attach_related(conn, attach_supersessions(conn, results),
                                                               settings.m3_related_per_result)}
         # query_facets (B1 enhancer): None -> raw-text fallback; dict (possibly {}) -> in-distribution
@@ -360,5 +361,6 @@ class LiveStore:
             log.warning("retrieve: %d/%d results have no text row (pre-fix legacy data)",
                         sum(1 for m, _ in mems if m not in texts), len(mems))
         results = [{"memory_id": m, "score": round(s, 4), "text": texts.get(m)} for m, s in mems]
+        results = file_refs.anchor(conn, results, files, k)
         return {"status": "ok", "results": attach_related(conn, attach_supersessions(conn, results),
                                                           settings.m3_related_per_result)}

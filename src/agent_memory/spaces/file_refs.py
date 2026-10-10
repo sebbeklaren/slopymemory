@@ -132,3 +132,38 @@ def anchored(conn, paths: list[str]) -> list[tuple[str, str | None]]:
                     "(SELECT 1 FROM m3_file_ref f WHERE f.memory_id = m.memory_id AND f.path = ANY(%s)) "
                     "ORDER BY m.created_at DESC, m.memory_id", (list(paths),))
         return [(m, t) for m, t in cur.fetchall()]
+
+
+def anchor(conn, results: list[dict], files: list[dict] | None, k: int) -> list[dict]:
+    """ADD-ONLY for results the query reached; then the memories anchored to `files`' paths come first: those the
+    query also reached (in its order), then the others newest first (score None — found by path, not ranked), then
+    the rest of the results; the list stops at k. Every result with anchors shows them under `files`; an anchor whose
+    path the caller sent a hash for gains stale (the hash differs) or missing (the caller sent null)."""
+    out = list(results)
+    paths = [f["path"] for f in files or ()]
+    if paths:
+        hits = anchored(conn, paths)
+        ids = {m for m, _ in hits}
+        if ids:
+            reached = [r for r in results if r["memory_id"] in ids]
+            seen = {r["memory_id"] for r in reached}
+            by_path = [{"memory_id": m, "score": None, "text": t} for m, t in hits if m not in seen]
+            out = (reached + by_path + [r for r in results if r["memory_id"] not in ids])[:k]
+            for r in out:
+                if r["memory_id"] in ids:
+                    r["anchored"] = True
+    current = {f["path"]: f["sha256"] for f in files or () if "sha256" in f}
+    refs = refs_of(conn, [r["memory_id"] for r in out])
+    for r in out:
+        mine = refs.get(r["memory_id"])
+        if not mine:
+            continue
+        for ref in mine:
+            if ref["path"] in current:
+                now = current[ref["path"]]
+                if now is None:
+                    ref["missing"] = True
+                else:
+                    ref["stale"] = now != ref["sha256"]
+        r["files"] = mine
+    return out
