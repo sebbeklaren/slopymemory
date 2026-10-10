@@ -12,9 +12,11 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Annotated
 
 import psycopg
 from pgvector.psycopg import register_vector
+from pydantic import Field
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -128,7 +130,7 @@ def _drain(conn, skip: Path | None = None) -> None:
             try:
                 out = handlers.memory_save(conn, _store, "default", rec.get("session_key") or "default", text,
                                            rec.get("scope"), rec.get("thread"), rec.get("facets"),
-                                           rec.get("save_concepts"), rec.get("supersedes"),
+                                           rec.get("save_concepts"), rec.get("supersedes"), rec.get("files"),
                                            memory_id=mid, now=now, known_ids=ids - {mid})
             except psycopg.OperationalError:
                 raise
@@ -211,6 +213,16 @@ _RETRIEVE_FACETS = (
     "For design/why questions, extract the query's facets (function/feeling/fiction/player_facing "
     "— same aspect definitions as saving) and pass them as query_facets: in-distribution seeds "
     "massively outperform raw-text routing; omit facets the query is silent on. ") if _FACETS else ""
+# The `files` parameters explain themselves in their own schema descriptions: the design dialect's retrieve
+# description is already near the 2,048-character cap a harness cuts at.
+_FILES_SAVE = (
+    "Optional: the files this memory is about, as [{path, sha256?, line? | lines: [start, end]}], path relative to the "
+    "project root. sha256 is filled in for you when omitted. Retrieval then finds the memory by path and says when a "
+    "file has changed since.")
+_FILES_RETRIEVE = (
+    "Optional: [{path}] for files you are about to read, edit or audit. Memories anchored to them rank first, marked "
+    "anchored. A result's files lists its anchors; stale: true / missing: true means that file changed or is gone "
+    "since the memory was saved: read the memory as possibly out of date, never as wrong.")
 
 
 @mcp.tool(
@@ -229,6 +241,7 @@ _RETRIEVE_FACETS = (
         "quoted to them from retrieval), pass supersedes=<that memory_id>: the correction is durably bound "
         "and retrieval will thereafter attach the standing version to the old memory. Only on their "
         "explicit confirmation — never infer supersession yourself. "
+        "Anchor a memory to the files it is about with `files` (see its description). "
         "Never save passwords, keys or tokens: a save that contains one is refused; save where the "
         "secret lives instead. "
         "Returns {status: saved|noop|buffered|refused|held}. "
@@ -237,9 +250,11 @@ _RETRIEVE_FACETS = (
 )
 def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | None = None,
                 facets: dict[str, str] | None = None, save_concepts: list | None = None,
-                supersedes: str | None = None, ctx: Context | None = None) -> dict:
+                supersedes: str | None = None,
+                files: Annotated[list | None, Field(description=_FILES_SAVE)] = None,
+                ctx: Context | None = None) -> dict:
     session_key = _session_key_from_context(ctx)   # server-derived from the MCP session — never agent-supplied
-    hit = find_secret_in_save(text, thread, scope, facets, save_concepts)
+    hit = find_secret_in_save(text, thread, scope, facets, save_concepts, files)
     if hit is not None:
         # REFUSED, never redacted, before any connection is opened: a memory is repeated on every retrieval,
         # so a secret stored once is leaked forever. Every agent-supplied string is guarded (text, thread,
@@ -253,7 +268,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
         return {"status": "refused", "reason": "secret", "kind": kind, "field": field,
                 "message": refusal_message(secret, field)}
     try:
-        noop = handlers.check_save(text, facets, supersedes, save_concepts, thread, scope)
+        noop = handlers.check_save(text, facets, supersedes, save_concepts, thread, scope, files)
     except handlers.BadArgument as e:
         raise ToolError(str(e)) from e
     if noop is not None:
@@ -262,7 +277,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
     with _lock:
         # Write first: from here on the save survives whatever the database does. An unwritable held/ raises
         # (the save fails loudly with that error, nothing is claimed).
-        path = du.hold(du.record(mid, text, session_key, scope, now, thread, facets, save_concepts, supersedes))
+        path = du.hold(du.record(mid, text, session_key, scope, now, thread, facets, save_concepts, supersedes, files))
         own = False                                # True only while this record's own save runs
         try:
             conn = _connect()
@@ -270,7 +285,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
                 _prepare(conn, skip=path)          # earlier held saves first: the order they were made in
                 own = True
                 out = handlers.memory_save(conn, _store, tenant, session_key, text, scope, thread, facets,
-                                           save_concepts, supersedes, memory_id=mid, now=now,
+                                           save_concepts, supersedes, files, memory_id=mid, now=now,
                                            known_ids=du.held_ids() - {mid})
             finally:
                 conn.close()
@@ -300,6 +315,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
           "thread": thread or "", "facets": facets or None,
           "save_concepts": save_concepts or None,
           "supersedes": supersedes or "",
+          "files": files or None,
           "status": out.get("status", ""), "note": out.get("note", "")})
     return out
 
@@ -331,9 +347,10 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
 )
 def memory_retrieve(tenant: str, query: str, k: int = 5,
                     query_facets: dict[str, str] | None = None,
-                    query_concepts: list | None = None) -> dict:
+                    query_concepts: list | None = None,
+                    files: Annotated[list | None, Field(description=_FILES_RETRIEVE)] = None) -> dict:
     try:
-        handlers.check_retrieve(k, query, query_facets, query_concepts)
+        handlers.check_retrieve(k, query, query_facets, query_concepts, files)
     except handlers.BadArgument as e:
         raise ToolError(str(e)) from e
     with _lock:
@@ -342,7 +359,7 @@ def memory_retrieve(tenant: str, query: str, k: int = 5,
             try:
                 _prepare(conn)
                 out = handlers.memory_retrieve(conn, _store, tenant, query, k, query_facets=query_facets,
-                                               query_concepts=query_concepts)
+                                               query_concepts=query_concepts, files=files)
             finally:
                 conn.close()
             _mark_safely(True)
@@ -366,6 +383,7 @@ def memory_retrieve(tenant: str, query: str, k: int = 5,
     _log({"tool": "memory_retrieve", "tenant": tenant, "query": query, "k": k,
           "query_facets": query_facets or None,
           "query_concepts": query_concepts or None,
+          "files": files or None,
           # `returned` stays a flat id list — existing readers depend on it. `results` adds the
           # OUTCOME half: without the score, "was the right memory surfaced, and WHERE?" is
           # unanswerable after the fact, and a real-use harvest has no re-run. superseded_by is
@@ -373,7 +391,8 @@ def memory_retrieve(tenant: str, query: str, k: int = 5,
           # rather than from a transcript read.
           "returned": [r.get("memory_id") for r in results],
           "results": [{"memory_id": r.get("memory_id"), "score": r.get("score"),
-                       "superseded_by": bool(r.get("superseded_by"))} for r in results]})
+                       "superseded_by": bool(r.get("superseded_by")),
+                       "anchored": bool(r.get("anchored"))} for r in results]})
     return out
 
 

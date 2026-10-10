@@ -3,6 +3,7 @@
 scoping in v1); session_key drives co-occurrence edge-spawn within a session. No MCP import here."""
 from datetime import datetime, timezone
 
+from agent_memory.spaces import file_refs
 from agent_memory.spaces.concepts import CONCEPT_SPACES
 
 # The four content-facet spaces a query_facets dict may address. Semantic is NEVER a facet key — it
@@ -69,14 +70,23 @@ def _refuse_nul(**fields) -> None:
             raise BadArgument(f"{name} contains a NUL byte (\\x00), which cannot be stored; remove it")
 
 
-def check_retrieve(k, query, query_facets, query_concepts) -> None:
+def _check_files(files, *, save: bool) -> list[dict] | None:
+    """`files` normalised (paths cleaned, hashes lower-case), or BadArgument naming the bad entry."""
+    try:
+        return file_refs.normalize(files, arg="files", save=save)
+    except file_refs.FileRefError as e:
+        raise BadArgument(str(e)) from e
+
+
+def check_retrieve(k, query, query_facets, query_concepts, files=None) -> None:
     """The retrieve checks that need no database — answered before connecting, so a bad call is refused as such
     even while the database is down, and never marks the store failing."""
     if isinstance(k, bool) or not isinstance(k, int) or k < 1:
         raise BadArgument(f"k must be a whole number of at least 1, got {k!r}")
     _validate_query_facets(query_facets)
     _validate_concepts(query_concepts, arg="query_concepts")
-    _refuse_nul(query=query, query_facets=query_facets, query_concepts=query_concepts)
+    _check_files(files, save=False)
+    _refuse_nul(query=query, query_facets=query_facets, query_concepts=query_concepts, files=files)
 
 
 def _validate_query_facets(query_facets) -> None:
@@ -84,14 +94,15 @@ def _validate_query_facets(query_facets) -> None:
     _validate_facet_map(query_facets, arg="query_facets")
 
 
-def check_save(text, facets, supersedes, save_concepts=None, thread=None, scope=None) -> dict | None:
+def check_save(text, facets, supersedes, save_concepts=None, thread=None, scope=None, files=None) -> dict | None:
     """The checks that need no database and can never succeed on a retry — answered before anything is held:
     a noop reply for empty text, BadArgument for a bad facet map, concept list or supersedes; None when the save may
     go ahead."""
     _validate_facet_map(facets, arg="facets")
     _validate_concepts(save_concepts, arg="save_concepts")
+    _check_files(files, save=True)
     _refuse_nul(text=text, thread=thread, scope=scope, facets=facets, save_concepts=save_concepts,
-                supersedes=supersedes)
+                supersedes=supersedes, files=files)
     if supersedes is not None and (not isinstance(supersedes, str) or not supersedes.strip()):
         raise BadArgument("supersedes must be a memory_id string or None")
     if not text or not text.strip():
@@ -101,7 +112,7 @@ def check_save(text, facets, supersedes, save_concepts=None, thread=None, scope=
 
 def memory_save(conn, store, tenant: str, session_key: str, text: str, scope: str | None = None,
                 thread: str | None = None, facets: dict[str, str] | None = None,
-                save_concepts: list | None = None, supersedes: str | None = None, *,
+                save_concepts: list | None = None, supersedes: str | None = None, files: list | None = None, *,
                 memory_id: str | None = None, now=None, known_ids: set | None = None) -> dict:
     """Save agent text into the m3 live store under `session_key` (co-occurrence). Empty -> explicit
     no-op. During bootstrap returns {status: buffered, ...}; warm returns {status: saved, memory_id}.
@@ -118,7 +129,8 @@ def memory_save(conn, store, tenant: str, session_key: str, text: str, scope: st
     `supersedes`: the memory_id of a stored memory this save corrects (on the user's explicit confirmation).
     Validated at this boundary (None ok; else a non-empty string, else ValueError). Passed through to
     the store, which fail-loud-rejects an unknown target (nothing saved) and, on success, durably
-    binds the correction (reply gains `supersedes`)."""
+    binds the correction (reply gains `supersedes`).
+    `files`: the memory's file anchors, normalised here and written in the save's transaction."""
     _validate_facet_map(facets, arg="facets")
     if supersedes is not None and (not isinstance(supersedes, str) or not supersedes.strip()):
         raise BadArgument("supersedes must be a memory_id string or None")
@@ -126,12 +138,13 @@ def memory_save(conn, store, tenant: str, session_key: str, text: str, scope: st
         return {"status": "noop", "note": "empty input — nothing saved"}
     return store.save(conn, text, session_key=session_key, now=now or datetime.now(timezone.utc),
                       scope=scope, thread=thread, facets=facets, save_concepts=save_concepts,
-                      supersedes=supersedes, memory_id=memory_id, known_ids=known_ids)
+                      supersedes=supersedes, memory_id=memory_id, known_ids=known_ids,
+                      files=_check_files(files, save=True))
 
 
 def memory_retrieve(conn, store, tenant: str, query: str, k: int = 5,
                     query_facets: dict | None = None, facets: dict | None = None,
-                    query_concepts: list | None = None) -> dict:
+                    query_concepts: list | None = None, files: list | None = None) -> dict:
     """Retrieve a graded set of memories (semantic seed + co-occurrence burst, memory-level top-k).
     Returns {status: 'warming up'|'ok', results: [{memory_id, score, text}]} — input to reason
     over (text = the memory's own content; null only for pre-fix legacy rows).
@@ -146,4 +159,4 @@ def memory_retrieve(conn, store, tenant: str, query: str, k: int = 5,
     _validate_query_facets(query_facets)
     _validate_concepts(query_concepts, arg="query_concepts")
     return store.retrieve(conn, query, k, query_facets=query_facets, facets=facets,
-                          query_concepts=query_concepts)
+                          query_concepts=query_concepts, files=_check_files(files, save=False))

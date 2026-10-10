@@ -16,3 +16,9 @@ def test_every_tool_description_fits_the_cap():
         assert len(server.mcp._tool_manager.get_tool(name).description) <= CAP, name
     longest_backend_note = 400          # memory_init's description gains one sentence about the Postgres it will use
     assert len(INIT_DESCRIPTION) + longest_backend_note <= CAP
+
+
+def test_the_files_parameter_descriptions_fit():
+    for name in ("memory_save", "memory_retrieve"):
+        d = server.mcp._tool_manager.get_tool(name).parameters["properties"]["files"]["description"]
+        assert 0 < len(d) <= 600, name

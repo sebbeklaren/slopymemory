@@ -131,10 +131,11 @@ def find_secret(text: str | None) -> Secret | None:
 
 
 def find_secret_in_save(text: str | None, thread: str | None = None, scope: str | None = None,
-                        facets: dict | None = None, save_concepts: list | None = None) -> tuple[Secret, str] | None:
+                        facets: dict | None = None, save_concepts: list | None = None,
+                        files: list | None = None) -> tuple[Secret, str] | None:
     """Every agent-supplied string of a save, not only the text: a token in a thread label, a scope, a facet value or
     a concept label is stored and repeated just the same. Returns (secret, field) for the first hit, field one of
-    text | thread | scope | facet | concept — a fixed name, never the value or the key the agent supplied — or None.
+    text | thread | scope | facet | concept | file path — a fixed name, never the value or the key the agent supplied — or None.
     Only strings are looked at; a malformed shape is the downstream validation's business, as before."""
     for field, value in (("text", text), ("thread", thread), ("scope", scope)):
         if isinstance(value, str) and (s := find_secret(value)) is not None:
@@ -150,6 +151,11 @@ def find_secret_in_save(text: str | None, thread: str | None = None, scope: str 
             for candidate in parts:
                 if isinstance(candidate, str) and (s := find_secret(candidate)) is not None:
                     return s, "concept"
+    if isinstance(files, (list, tuple)):
+        for entry in files:
+            path = entry.get("path") if isinstance(entry, dict) else None
+            if isinstance(path, str) and (s := find_secret(path)) is not None:
+                return s, "file path"
     return None
 
 

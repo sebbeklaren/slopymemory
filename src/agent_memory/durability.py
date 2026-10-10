@@ -28,10 +28,10 @@ def _failed() -> Path:
     return state_dir() / "held-failed"
 
 
-def record(memory_id, text, session_key, scope, now, thread, facets, save_concepts, supersedes) -> dict:
+def record(memory_id, text, session_key, scope, now, thread, facets, save_concepts, supersedes, files=None) -> dict:
     return {"memory_id": memory_id, "text": text, "session_key": session_key, "scope": scope,
             "now": now.isoformat(), "thread": thread, "facets": facets, "save_concepts": save_concepts,
-            "supersedes": supersedes}
+            "supersedes": supersedes, "files": files}
 
 
 def _write_durably(path: Path, data: dict) -> None:
