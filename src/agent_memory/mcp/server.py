@@ -128,7 +128,7 @@ def _drain(conn, skip: Path | None = None) -> None:
             if mid in {b[0] for b in getattr(_store, "_buffer", ())} or LiveStore._has_row(conn, mid):
                 du.release(path); ids.discard(mid); continue   # already buffered or committed: never placed twice
             try:
-                out = handlers.memory_save(conn, _store, "default", rec.get("session_key") or "default", text,
+                out = handlers.memory_save(conn, _store, rec.get("session_key") or "default", text,
                                            rec.get("scope"), rec.get("thread"), rec.get("facets"),
                                            rec.get("save_concepts"), rec.get("supersedes"), rec.get("files"),
                                            memory_id=mid, now=now, known_ids=ids - {mid})
@@ -228,8 +228,7 @@ _FILES_RETRIEVE = (
 @mcp.tool(
     description=(
         "Save salient facts/decisions to long-term memory. Call this when the user states "
-        "something worth remembering across sessions. `tenant` identifies the user (inert in v1 "
-        "single-tenant); `scope` optionally tags the memory (e.g. 'ops/auth'). Co-occurrence "
+        "something worth remembering across sessions. `scope` optionally tags the memory (e.g. 'ops/auth'). Co-occurrence "
         "(facts saved together in one session) is tracked automatically — you do NOT supply a "
         "session id. Optionally tag the save with a short `thread` label for the design/rationale "
         "topic it belongs to (e.g. 'combat-weight'); saves sharing a thread are associated durably "
@@ -248,7 +247,7 @@ _FILES_RETRIEVE = (
         "`held` or `unavailable` means the memory database is down — tell the user and show the error."
     )
 )
-def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | None = None,
+def memory_save(text: str, scope: str | None = None, thread: str | None = None,
                 facets: dict[str, str] | None = None, save_concepts: list | None = None,
                 supersedes: str | None = None,
                 files: Annotated[list | None, Field(description=_FILES_SAVE)] = None,
@@ -263,7 +262,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
         # outlives the session.
         secret, field = hit
         kind = kind_in_field(secret, field)
-        _log({"tool": "memory_save", "tenant": tenant, "session_key": session_key,
+        _log({"tool": "memory_save", "session_key": session_key,
               "refused": "secret", "kind": kind, "field": field, "status": "refused"})
         return {"status": "refused", "reason": "secret", "kind": kind, "field": field,
                 "message": refusal_message(secret, field)}
@@ -284,7 +283,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
             try:
                 _prepare(conn, skip=path)          # earlier held saves first: the order they were made in
                 own = True
-                out = handlers.memory_save(conn, _store, tenant, session_key, text, scope, thread, facets,
+                out = handlers.memory_save(conn, _store, session_key, text, scope, thread, facets,
                                            save_concepts, supersedes, files, memory_id=mid, now=now,
                                            known_ids=du.held_ids() - {mid})
             finally:
@@ -301,7 +300,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
             down = not own or not isinstance(e, psycopg.Error) or isinstance(e, psycopg.OperationalError)
             _mark_safely(not down, None if not down else err)
             out = _with_recovered(_held_reply(mid, err, down))   # a partial drain before the fault is still reported
-    _log({"tool": "memory_save", "tenant": tenant, "session_key": session_key,
+    _log({"tool": "memory_save", "session_key": session_key,
           # FULL text, not an 80-char snippet: a warm save's text is recoverable via memory_id, but
           # a BUFFERED save returns memory_id None, so its (text -> concepts) pair would survive only
           # in the WAL. Under a real-use harvest there is no re-run to recover it from.
@@ -328,7 +327,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
         "ground truth, and not a single answer: read it as core hits (top 2-3) plus connected "
         "reasons pulled in alongside — the tangential-looking results often carry the WHY. Weigh "
         "the set; never take just the top hit. Use k~8 for design/why questions (default 5 suits "
-        "quick lookups). Empty results means nothing is known. `tenant` identifies the user. "
+        "quick lookups). Empty results means nothing is known. "
         + _RETRIEVE_FACETS +
         "CONCEPT-PRIMARY mode: also extract the query's sparse typed CONCEPTS — the handful of things "
         "the query is ABOUT, each a short noun phrase typed by space (function/feeling/fiction/"
@@ -345,7 +344,7 @@ def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | 
         "`held` or `unavailable` means the memory database is down — tell the user and show the error."
     )
 )
-def memory_retrieve(tenant: str, query: str, k: int = 5,
+def memory_retrieve(query: str, k: int = 5,
                     query_facets: dict[str, str] | None = None,
                     query_concepts: list | None = None,
                     files: Annotated[list | None, Field(description=_FILES_RETRIEVE)] = None) -> dict:
@@ -358,7 +357,7 @@ def memory_retrieve(tenant: str, query: str, k: int = 5,
             conn = _connect()
             try:
                 _prepare(conn)
-                out = handlers.memory_retrieve(conn, _store, tenant, query, k, query_facets=query_facets,
+                out = handlers.memory_retrieve(conn, _store, query, k, query_facets=query_facets,
                                                query_concepts=query_concepts, files=files)
             finally:
                 conn.close()
@@ -380,7 +379,7 @@ def memory_retrieve(tenant: str, query: str, k: int = 5,
     # the exact pair query-concept extraction depends on, and query-concept extraction is the
     # retrieval ceiling. Guarded by a regression test that asserts this field is logged verbatim.
     results = out.get("results", [])
-    _log({"tool": "memory_retrieve", "tenant": tenant, "query": query, "k": k,
+    _log({"tool": "memory_retrieve", "query": query, "k": k,
           "query_facets": query_facets or None,
           "query_concepts": query_concepts or None,
           "files": files or None,

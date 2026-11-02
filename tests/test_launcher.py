@@ -538,10 +538,10 @@ async def test_the_launcher_hashes_files_relative_to_the_project_root(tmp_home, 
         async with stdio_client(launcher_params(repo / "src", tmp_home, FAKE_MCP_FILES="new")) as (rd, wr):
             async with ClientSession(rd, wr) as s:
                 await s.initialize()
-                res = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "src/a.py"}]})
-                plain = await s.call_tool("memory_save", {"tenant": "t", "text": "x"})
-                gone = await s.call_tool("memory_retrieve", {"tenant": "t", "query": "q", "files": [{"path": "no.py"}]})
-                bad = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "no.py"}]})
+                res = await s.call_tool("memory_save", {"text": "x", "files": [{"path": "src/a.py"}]})
+                plain = await s.call_tool("memory_save", {"text": "x"})
+                gone = await s.call_tool("memory_retrieve", {"query": "q", "files": [{"path": "no.py"}]})
+                bad = await s.call_tool("memory_save", {"text": "x", "files": [{"path": "no.py"}]})
         assert json.loads(res.content[0].text)["files"] == [
             {"path": "src/a.py", "sha256": hashlib.sha256(b"print(1)\n").hexdigest()}]
         assert json.loads(plain.content[0].text)["files"] is None
@@ -558,8 +558,8 @@ async def test_files_to_an_older_store_server_are_refused_with_the_restart(tmp_h
         async with stdio_client(launcher_params(repo, tmp_home, FAKE_MCP_FILES="old")) as (rd, wr):
             async with ClientSession(rd, wr) as s:
                 await s.initialize()
-                res = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "a.py"}]})
-                ok = await s.call_tool("memory_save", {"tenant": "t", "text": "x"})
+                res = await s.call_tool("memory_save", {"text": "x", "files": [{"path": "a.py"}]})
+                ok = await s.call_tool("memory_save", {"text": "x"})
         assert res.is_error and "older" in res.content[0].text and f"slopymem stop {store.name}" in res.content[0].text
         assert not ok.is_error
     finally:
@@ -611,12 +611,12 @@ async def test_a_store_restarted_onto_older_code_refuses_files_rather_than_dropp
         async with stdio_client(launcher_params(repo, tmp_home, FAKE_MCP_FILES="new")) as (rd, wr):
             async with ClientSession(rd, wr) as s:
                 await s.initialize()
-                ok = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "a.py"}]})
+                ok = await s.call_tool("memory_save", {"text": "x", "files": [{"path": "a.py"}]})
                 assert not ok.is_error and json.loads(ok.content[0].text)["files"]
                 assert server.stop(store)
                 monkeypatch.setenv("FAKE_MCP_FILES", "old")
                 server.ensure_up(store)                             # the same store, now on code without files
-                res = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "a.py"}]})
+                res = await s.call_tool("memory_save", {"text": "x", "files": [{"path": "a.py"}]})
         assert res.is_error and "older" in res.content[0].text, res.content[0].text
     finally:
         server.stop(store)
@@ -633,12 +633,12 @@ async def test_a_store_restarted_onto_new_code_takes_files_without_another_resta
         async with stdio_client(launcher_params(repo, tmp_home, FAKE_MCP_FILES="old")) as (rd, wr):
             async with ClientSession(rd, wr) as s:
                 await s.initialize()
-                refused = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "a.py"}]})
+                refused = await s.call_tool("memory_save", {"text": "x", "files": [{"path": "a.py"}]})
                 assert refused.is_error and "older" in refused.content[0].text
                 assert server.stop(store)
                 monkeypatch.setenv("FAKE_MCP_FILES", "new")
                 server.ensure_up(store)                             # the same store, now on code that takes files
-                res = await s.call_tool("memory_save", {"tenant": "t", "text": "x", "files": [{"path": "a.py"}]})
+                res = await s.call_tool("memory_save", {"text": "x", "files": [{"path": "a.py"}]})
         assert not res.is_error, res.content[0].text
         assert json.loads(res.content[0].text)["files"][0]["path"] == "a.py"
     finally:

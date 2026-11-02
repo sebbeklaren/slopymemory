@@ -37,27 +37,27 @@ def test_a_rejected_save_is_not_worded_as_a_database_that_is_down(srv, monkeypat
     def reject(*a, **k):
         raise psycopg.errors.CharacterNotInRepertoire("invalid byte sequence")
     monkeypatch.setattr(server.handlers, "memory_save", reject)
-    out = server.memory_save(tenant="t", text="bad bytes")
+    out = server.memory_save(text="bad bytes")
     assert out["status"] == "held" and "rejected this save" in out["message"] and "database is back" not in out["message"]
 
 
 def test_a_partial_drain_is_still_reported(srv, conn, monkeypatch):
     down(monkeypatch)
-    server.memory_save(tenant="t", text="one")
-    server.memory_save(tenant="t", text="two")
+    server.memory_save(text="one")
+    server.memory_save(text="two")
     up(monkeypatch)
     real, calls = server.handlers.memory_save, []
 
-    def second_fails(conn, store, tenant, sk, text, *a, **k):
+    def second_fails(conn, store, sk, text, *a, **k):
         calls.append(text)
         if len(calls) == 2:
             raise psycopg.OperationalError("connection lost mid-drain")
-        return real(conn, store, tenant, sk, text, *a, **k)
+        return real(conn, store, sk, text, *a, **k)
     monkeypatch.setattr(server.handlers, "memory_save", second_fails)
-    first = server.memory_retrieve(tenant="t", query="q")             # drains "one", loses the connection on "two"
+    first = server.memory_retrieve(query="q")             # drains "one", loses the connection on "two"
     assert first["status"] == "unavailable" and first["recovered"]["written"] == 1   # reported at once, not lost
     monkeypatch.setattr(server.handlers, "memory_save", real)
-    second = server.memory_retrieve(tenant="t", query="q")
+    second = server.memory_retrieve(query="q")
     assert second["recovered"]["written"] == 1 and du.held_paths() == []
 
 
@@ -71,7 +71,7 @@ def test_a_deferred_fit_marks_the_database_failing(srv, conn, monkeypatch):
     def boom(*a, **k):
         raise psycopg.errors.AdminShutdown("fit failed")
     monkeypatch.setattr(ls, "save_memory", boom)
-    out = server.memory_save(tenant="t", text="first")
+    out = server.memory_save(text="first")
     assert out["status"] == "buffered" and out.get("fit_deferred")
     assert du.read_status(du.state_dir())["state"] == "failing"
 
@@ -83,25 +83,25 @@ def test_a_fault_before_the_save_itself_is_the_database_down_not_a_rejection(srv
     def no_vector(conn):
         raise psycopg.ProgrammingError("vector type not found in the database")
     monkeypatch.setattr(server, "register_vector", no_vector)
-    out = server.memory_save(tenant="t", text="x")
+    out = server.memory_save(text="x")
     assert out["status"] == "held" and "database is back" in out["message"]
     assert du.read_status(du.state_dir())["state"] == "failing"
 
 
 def test_a_held_save_after_a_partial_drain_carries_what_was_written(srv, conn, monkeypatch):
     down(monkeypatch)
-    server.memory_save(tenant="t", text="one")
-    server.memory_save(tenant="t", text="two")
+    server.memory_save(text="one")
+    server.memory_save(text="two")
     up(monkeypatch)
     real, calls = server.handlers.memory_save, []
 
-    def second_fails(conn, store, tenant, sk, text, *a, **k):
+    def second_fails(conn, store, sk, text, *a, **k):
         calls.append(text)
         if len(calls) == 2:
             raise psycopg.OperationalError("connection lost mid-drain")
-        return real(conn, store, tenant, sk, text, *a, **k)
+        return real(conn, store, sk, text, *a, **k)
     monkeypatch.setattr(server.handlers, "memory_save", second_fails)
-    out = server.memory_save(tenant="t", text="three")                 # drains "one", loses the connection on "two"
+    out = server.memory_save(text="three")                 # drains "one", loses the connection on "two"
     assert out["status"] == "held" and out["recovered"]["written"] == 1
 
 
@@ -110,7 +110,7 @@ def test_a_held_correction_of_an_unreadable_held_record_goes_to_failed_not_silen
     held.mkdir(parents=True, exist_ok=True)
     (held / "00000000000000000001-badtarget.json").write_text("{torn")
     down(monkeypatch)
-    server.memory_save(tenant="t", text="the fix", supersedes="badtarget")
+    server.memory_save(text="the fix", supersedes="badtarget")
     up(monkeypatch)
-    out = server.memory_retrieve(tenant="t", query="q")
+    out = server.memory_retrieve(query="q")
     assert out["recovered"]["failed"] == 2 and du.counts() == (0, 2)

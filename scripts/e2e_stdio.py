@@ -22,7 +22,6 @@ import time
 from pathlib import Path
 
 WARM_AT = 12          # the coding dialect's warm-up count: the store fits its projector on the twelfth save
-TENANT = "e2e"
 INIT_TIMEOUT_S = 300.0    # memory_init starts the store's server, which loads the embedder first
 CALL_TIMEOUT_S = 120.0    # a save (the twelfth fits the projector) or a retrieve
 
@@ -173,7 +172,7 @@ async def _run(project: Path, launcher: str) -> int:
 
             for n, (text, concepts) in enumerate(MEMORIES, start=1):
                 t0 = time.monotonic()
-                res = await s.call_tool("memory_save", {"tenant": TENANT, "text": text, "thread": "e2e", "save_concepts": concepts},
+                res = await s.call_tool("memory_save", {"text": text, "thread": "e2e", "save_concepts": concepts},
                                         read_timeout_seconds=CALL_TIMEOUT_S)
                 payload = payload_of(res)
                 if n < WARM_AT:
@@ -184,7 +183,7 @@ async def _run(project: Path, launcher: str) -> int:
                     _say(f"save {n:2d}/{WARM_AT}", t0, f"saved — the store is warm (memory_id {payload['memory_id']})")
 
             t0 = time.monotonic()
-            res = await s.call_tool("memory_retrieve", {"tenant": TENANT, "query": QUESTION, "k": 5, "query_concepts": QUERY_CONCEPTS},
+            res = await s.call_tool("memory_retrieve", {"query": QUESTION, "k": 5, "query_concepts": QUERY_CONCEPTS},
                                     read_timeout_seconds=CALL_TIMEOUT_S)
             payload = payload_of(res)
             hit = assert_text_back(payload, EXPECTED_PREFIX)

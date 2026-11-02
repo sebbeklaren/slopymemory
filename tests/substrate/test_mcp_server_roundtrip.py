@@ -46,14 +46,13 @@ async def _roundtrip(url: str) -> tuple[dict, dict]:
             saved = await session.call_tool(
                 "memory_save",
                 {
-                    "tenant": "default",
                     "text": "The build server has 64 GB of memory.",
                     "session_key": "roundtrip",
                 },
             )
             got = await session.call_tool(
                 "memory_retrieve",
-                {"tenant": "default", "query": "how much memory does the build server have?", "k": 5},
+                {"query": "how much memory does the build server have?", "k": 5},
             )
             return _payload(saved), _payload(got)
 

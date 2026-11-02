@@ -10,7 +10,7 @@ from tests_support_fakes import srv, down  # noqa: F401  (fixture)
 
 def test_a_save_while_the_database_is_down_is_held_on_disk_and_says_so(srv, monkeypatch):
     down(monkeypatch)
-    out = server.memory_save(tenant="t", text="keep the port at 8781")
+    out = server.memory_save(text="keep the port at 8781")
     assert out["status"] == "held" and out["held_count"] == 1 and out["memory_id"]
     assert out["error"].startswith("OperationalError: ") and "pw@" not in out["error"]
     assert "SETUP.md#postgres" in out["message"] and "doctor --report" in out["message"]
@@ -24,18 +24,18 @@ def test_a_save_while_the_database_is_down_is_held_on_disk_and_says_so(srv, monk
 
 def test_input_errors_are_answered_as_today_and_hold_nothing(srv, monkeypatch):
     down(monkeypatch)
-    assert server.memory_save(tenant="t", text="   ")["status"] == "noop"
+    assert server.memory_save(text="   ")["status"] == "noop"
     from mcp.server.mcpserver.exceptions import ToolError
     with pytest.raises(ToolError, match="facets keys must be content spaces"):   # the model reads why
-        server.memory_save(tenant="t", text="x", facets={"semantic": "y"})
+        server.memory_save(text="x", facets={"semantic": "y"})
     assert du.held_paths() == []
 
 
 def test_a_save_with_the_database_up_leaves_nothing_held_and_status_ok(srv, monkeypatch):
     down(monkeypatch)
-    server.memory_save(tenant="t", text="while down")
+    server.memory_save(text="while down")
     from tests_support_fakes import up
     up(monkeypatch)
-    out = server.memory_save(tenant="t", text="a decision")
+    out = server.memory_save(text="a decision")
     assert out["status"] == "saved"
     assert du.read_status(srv)["state"] == "ok"

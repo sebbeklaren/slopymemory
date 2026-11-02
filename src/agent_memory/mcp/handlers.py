@@ -1,6 +1,6 @@
 # src/agent_memory/mcp/handlers.py
-"""Pure MCP tool logic over the m3 LiveStore. tenant is threaded (single-tenant store, unused for
-scoping in v1); session_key drives co-occurrence edge-spawn within a session. No MCP import here."""
+"""Pure MCP tool logic over the m3 LiveStore. A store is one project's memory (the
+launcher picks it by folder), so no tool takes a tenant; session_key drives co-occurrence edge-spawn within a session. No MCP import here."""
 from datetime import datetime, timezone
 
 from agent_memory.spaces import file_refs
@@ -110,7 +110,7 @@ def check_save(text, facets, supersedes, save_concepts=None, thread=None, scope=
     return None
 
 
-def memory_save(conn, store, tenant: str, session_key: str, text: str, scope: str | None = None,
+def memory_save(conn, store, session_key: str, text: str, scope: str | None = None,
                 thread: str | None = None, facets: dict[str, str] | None = None,
                 save_concepts: list | None = None, supersedes: str | None = None, files: list | None = None, *,
                 memory_id: str | None = None, now=None, known_ids: set | None = None) -> dict:
@@ -142,13 +142,12 @@ def memory_save(conn, store, tenant: str, session_key: str, text: str, scope: st
                       files=_check_files(files, save=True))
 
 
-def memory_retrieve(conn, store, tenant: str, query: str, k: int = 5,
+def memory_retrieve(conn, store, query: str, k: int = 5,
                     query_facets: dict | None = None, facets: dict | None = None,
                     query_concepts: list | None = None, files: list | None = None) -> dict:
     """Retrieve a graded set of memories (semantic seed + co-occurrence burst, memory-level top-k).
     Returns {status: 'warming up'|'ok', results: [{memory_id, score, text}]} — input to reason
     over (text = the memory's own content; null only for pre-fix legacy rows).
-    `tenant` is inert in v1 (single-tenant, matches memory_save).
     `query_facets` (B1 enhancer): the query's extracted content facets {space: text} for
     in-distribution seeding — None omits (raw-text fallback), {} means semantic-only. Validated at
     this boundary (unknown space / empty text -> ValueError). `facets` is the legacy project/episodic

@@ -26,7 +26,6 @@ class Settings:
     extractor_version: str = os.getenv("AM_EXTRACTOR_VERSION", "extractor-v1")
     match_tau: float = float(os.getenv("AM_MATCH_TAU", "0.85"))
     sources_dir: str = os.getenv("AM_SOURCES_DIR", "sources")
-    default_tenant: str = os.getenv("AM_DEFAULT_TENANT", "default")
     mcp_host: str = os.getenv("AM_MCP_HOST", "127.0.0.1")
     mcp_port: int = int(os.getenv("AM_MCP_PORT", "8765"))
     mcp_surface_floor: float = float(os.getenv("AM_MCP_SURFACE_FLOOR", "0.5"))  # legacy (768 MCP tiering, removed); unused

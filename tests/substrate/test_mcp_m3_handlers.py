@@ -16,33 +16,33 @@ class _FakeStore:
 
 def test_memory_save_threads_session_key_and_scope():
     st = _FakeStore()
-    out = handlers.memory_save(None, st, "tenantX", "sessABC", "a fact", scope="ops/auth")
+    out = handlers.memory_save(None, st, "sessABC", "a fact", scope="ops/auth")
     assert out["status"] == "saved"
     assert st.saved == [("a fact", "sessABC", "ops/auth")]
 
 
 def test_memory_save_threads_thread_tag():
     st = _FakeStore()
-    out = handlers.memory_save(None, st, "t", "sess1", "a fact", thread="combat-weight")
+    out = handlers.memory_save(None, st, "sess1", "a fact", thread="combat-weight")
     assert out["status"] == "saved"
     assert st.saved_threads == ["combat-weight"]          # add saved_threads tracking to _FakeStore
 
 
 def test_memory_save_empty_is_noop():
     st = _FakeStore()
-    out = handlers.memory_save(None, st, "t", "s", "   ")
+    out = handlers.memory_save(None, st, "s", "   ")
     assert out["status"] == "noop" and st.saved == []
 
 
 def test_memory_retrieve_returns_graded_set():
-    out = handlers.memory_retrieve(None, _FakeStore(), "t", "how to auth", k=3)
+    out = handlers.memory_retrieve(None, _FakeStore(), "how to auth", k=3)
     assert out["status"] == "ok" and out["results"][0]["memory_id"] == "m1"
 
 
 def test_memory_retrieve_handler_returns_text_field():
     """Handler-level twin: non-gated dual to the MCP server roundtrip test. Verifies the
     handler returns text from the store's retrieve verbatim, unmodified."""
-    out = handlers.memory_retrieve(None, _FakeStore(), "t", "which database does the deploy use", k=3)
+    out = handlers.memory_retrieve(None, _FakeStore(), "which database does the deploy use", k=3)
     assert out["status"] == "ok"
     result = out["results"][0]
     assert result["text"] == "the deploy uses the blue database"
@@ -54,7 +54,7 @@ def test_memory_retrieve_handler_returns_text_field():
 def test_memory_retrieve_threads_valid_query_facets_to_store():
     """A valid content-space query_facets dict passes validation and is threaded to store.retrieve."""
     st = _FakeStore()
-    handlers.memory_retrieve(None, st, "t", "how does the dash feel", k=3,
+    handlers.memory_retrieve(None, st, "how does the dash feel", k=3,
                              query_facets={"function": "a short burst of movement", "feeling": "snappy"})
     assert st.last_query_facets == {"function": "a short burst of movement", "feeling": "snappy"}
 
@@ -62,14 +62,14 @@ def test_memory_retrieve_threads_valid_query_facets_to_store():
 def test_memory_retrieve_none_query_facets_is_the_default_fallback():
     """Omitted query_facets -> None reaches the store (raw-text fallback), NOT {}."""
     st = _FakeStore()
-    handlers.memory_retrieve(None, st, "t", "q", k=3)
+    handlers.memory_retrieve(None, st, "q", k=3)
     assert st.last_query_facets is None
 
 
 def test_memory_retrieve_empty_query_facets_reaches_store_as_empty_dict():
     """query_facets={} is a live value (semantic-only), distinct from None — threaded verbatim."""
     st = _FakeStore()
-    handlers.memory_retrieve(None, st, "t", "q", k=3, query_facets={})
+    handlers.memory_retrieve(None, st, "q", k=3, query_facets={})
     assert st.last_query_facets == {}
 
 
@@ -77,17 +77,17 @@ def test_memory_retrieve_rejects_unknown_facet_space():
     """Unknown space key -> ValueError. 'semantic' is NOT a facet key (it is seeded from the raw
     query), so it too is rejected — the teeth against a caller confusing the seed for a facet."""
     with pytest.raises(ValueError):
-        handlers.memory_retrieve(None, _FakeStore(), "t", "q", query_facets={"bogus": "x"})
+        handlers.memory_retrieve(None, _FakeStore(), "q", query_facets={"bogus": "x"})
     with pytest.raises(ValueError):
-        handlers.memory_retrieve(None, _FakeStore(), "t", "q", query_facets={"semantic": "x"})
+        handlers.memory_retrieve(None, _FakeStore(), "q", query_facets={"semantic": "x"})
 
 
 def test_memory_retrieve_rejects_empty_string_facet_text():
     """A facet mapped to an empty/whitespace string -> ValueError (never a blank seed)."""
     with pytest.raises(ValueError):
-        handlers.memory_retrieve(None, _FakeStore(), "t", "q", query_facets={"function": "   "})
+        handlers.memory_retrieve(None, _FakeStore(), "q", query_facets={"function": "   "})
     with pytest.raises(ValueError):
-        handlers.memory_retrieve(None, _FakeStore(), "t", "q", query_facets={"function": ""})
+        handlers.memory_retrieve(None, _FakeStore(), "q", query_facets={"function": ""})
 
 
 # --- server-derived session key (boundary #1: Mcp-Session-Id, NEVER agent-supplied) ---

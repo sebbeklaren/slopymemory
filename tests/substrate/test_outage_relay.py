@@ -85,11 +85,11 @@ def test_a_save_made_during_a_real_outage_is_retrievable_after_it(conn, tmp_path
         if not drain:
             monkeypatch.setattr(server, "_drain", lambda conn, skip=None: None)
         relay.open = False
-        held = server.memory_save(tenant="t", text="The staging database lives on port 6543.",
+        held = server.memory_save(text="The staging database lives on port 6543.",
                                   save_concepts=[["semantic", "staging database port"]])
         assert held["status"] == "held", held
         relay.open = True
-        out = server.memory_retrieve(tenant="t", query="which port is the staging database on?",
+        out = server.memory_retrieve(query="which port is the staging database on?",
                                      query_concepts=[["semantic", "staging database port"]])
         assert out["status"] == "ok", out
         found = any((r.get("text") or "").startswith("The staging database") for r in out["results"])

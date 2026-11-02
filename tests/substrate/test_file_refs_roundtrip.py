@@ -19,10 +19,10 @@ async def _run(url):
         async with ClientSession(read, write) as s:
             await s.initialize()
             saved = _payload(await s.call_tool("memory_save", {
-                "tenant": "t", "text": "The retry loop in sync.py stays.",
+                "text": "The retry loop in sync.py stays.",
                 "files": [{"path": "sync.py", "sha256": OLD, "line": 40}]}))
             got = _payload(await s.call_tool("memory_retrieve", {
-                "tenant": "t", "query": "anything about sync?", "files": [{"path": "sync.py", "sha256": NEW}]}))
+                "query": "anything about sync?", "files": [{"path": "sync.py", "sha256": NEW}]}))
             return saved, got
 
 

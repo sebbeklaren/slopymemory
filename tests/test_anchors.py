@@ -46,7 +46,7 @@ def test_not_a_readable_file_under_the_root_is_none(tmp_path, rel):
 
 def test_fill_only_touches_entries_without_a_sha256_key(tmp_path):
     (tmp_path / "a.py").write_text("a")
-    args = {"tenant": "t", "text": "x", "files": [{"path": "a.py"}, {"path": "b.py", "sha256": "f" * 64},
+    args = {"text": "x", "files": [{"path": "a.py"}, {"path": "b.py", "sha256": "f" * 64},
                                                   {"path": "c.py", "sha256": None}, "junk"]}
     got = anchors.fill("memory_save", args, tmp_path)
     assert got["files"][0] == {"path": "a.py", "sha256": _h(b"a")}

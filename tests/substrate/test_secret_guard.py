@@ -152,7 +152,7 @@ def test_memory_save_refuses_and_logs_the_kind_never_the_text(conn, tmp_path, mo
     connects = []
     real_connect = server._connect
     monkeypatch.setattr(server, "_connect", lambda: (connects.append(1), real_connect())[1])
-    out = server.memory_save(tenant="t", text="deploy key ghp_" + "c" * 36)
+    out = server.memory_save(text="deploy key ghp_" + "c" * 36)
     assert out["status"] == "refused" and out["reason"] == "secret" and out["kind"] == "github_token"
     assert "store the secret elsewhere" in out["message"] and "GitHub token" in out["message"]
     assert "memory_id" not in out                        # nothing was stored, so there is nothing to point at
@@ -165,7 +165,7 @@ def test_memory_save_refuses_and_logs_the_kind_never_the_text(conn, tmp_path, mo
     rec = json.loads(log.strip().splitlines()[-1])
     assert rec["tool"] == "memory_save" and rec["refused"] == "secret" and rec["kind"] == "github_token"
     # the exact key set: any new field on a refusal record goes red here — none of the agent's values belong in it
-    assert set(rec) == {"tool", "tenant", "session_key", "refused", "kind", "field", "status", "t"}
+    assert set(rec) == {"tool", "session_key", "refused", "kind", "field", "status", "t"}
     assert rec["field"] == "text" and out["field"] == "text"
 
 
@@ -188,7 +188,7 @@ def test_every_agent_supplied_field_is_guarded_and_the_kind_names_the_field(tmp_
     from agent_memory.mcp import server
     monkeypatch.setattr(server, "settings", dataclasses.replace(server.settings, mcp_invocation_log=str(tmp_path / "log.jsonl")))
     calls = _fake_store_path(monkeypatch, server)
-    out = server.memory_save(tenant="t", text="a perfectly ordinary decision", **kwargs)
+    out = server.memory_save(text="a perfectly ordinary decision", **kwargs)
     assert out["status"] == "refused" and out["kind"] == kind and out["field"] == field
     assert f"the {field} contains what looks like" in out["message"] or f"the {field} label contains" in out["message"]
     assert calls == []                                   # the store was never reached
@@ -203,7 +203,7 @@ def test_a_clean_save_with_every_field_passes_the_guard(tmp_path, monkeypatch):
     from agent_memory.mcp import server
     monkeypatch.setattr(server, "settings", dataclasses.replace(server.settings, mcp_invocation_log=str(tmp_path / "log.jsonl")))
     calls = _fake_store_path(monkeypatch, server)
-    out = server.memory_save(tenant="t", text="the decision was to keep the port", scope="ops/ports", thread="ports",
+    out = server.memory_save(text="the decision was to keep the port", scope="ops/ports", thread="ports",
                              facets={"function": "which port the server binds"},
                              save_concepts=[["function", "port binding"], ["semantic", "server start"]])
     assert out["status"] == "saved" and len(calls) == 1

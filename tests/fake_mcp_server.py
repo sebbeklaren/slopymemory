@@ -44,7 +44,7 @@ _saved: list[str] = []
 
 if os.environ.get("FAKE_MCP_MEMORY"):
     @mcp.tool()
-    def memory_save(tenant: str, text: str, scope: str | None = None, thread: str | None = None,
+    def memory_save(text: str, scope: str | None = None, thread: str | None = None,
                     save_concepts: list | None = None) -> dict:
         """Canned: buffered until the twelfth save, then saved."""
         _saved.append(text)
@@ -54,7 +54,7 @@ if os.environ.get("FAKE_MCP_MEMORY"):
         return {"status": "saved", "memory_id": f"m{n}", "warmed": n == WARM_AT}
 
     @mcp.tool()
-    def memory_retrieve(tenant: str, query: str, k: int = 5, query_concepts: list | None = None) -> dict:
+    def memory_retrieve(query: str, k: int = 5, query_concepts: list | None = None) -> dict:
         """Canned: warming up before the twelfth save; then the saved texts in save order."""
         if len(_saved) < WARM_AT or os.environ.get("FAKE_MCP_RETRIEVE") == "warming":
             return {"status": "warming up", "results": []}
@@ -66,17 +66,17 @@ if os.environ.get("FAKE_MCP_MEMORY"):
 # same save without a `files` parameter, the shape of a store server from before file anchors.
 if (_files := os.environ.get("FAKE_MCP_FILES")) == "new":
     @mcp.tool()
-    def memory_save(tenant: str, text: str, files: list | None = None) -> dict:
+    def memory_save(text: str, files: list | None = None) -> dict:
         """Echo of the files the launcher forwarded."""
         return {"files": files}
 
     @mcp.tool()
-    def memory_retrieve(tenant: str, query: str, files: list | None = None) -> dict:
+    def memory_retrieve(query: str, files: list | None = None) -> dict:
         """Echo of the files the launcher forwarded."""
         return {"files": files}
 elif _files == "old":
     @mcp.tool()
-    def memory_save(tenant: str, text: str) -> dict:
+    def memory_save(text: str) -> dict:
         """A pre-anchor save."""
         return {"status": "saved"}
 

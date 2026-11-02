@@ -20,13 +20,13 @@ def _rows(conn, text):
 
 def test_a_failed_record_moved_back_into_held_drains(srv, conn, monkeypatch):
     down(monkeypatch)
-    server.memory_save(tenant="t", text="retry me")
+    server.memory_save(text="retry me")
     [p] = du.held_paths()
     du.fail(p, "CheckViolation: x")                                  # what a failed drain leaves
     failed = next((du.state_dir() / "held-failed").glob("*.json"))
     failed.rename(du.state_dir() / "held" / failed.name)            # the documented fix: move it back
     up(monkeypatch)
-    out = server.memory_retrieve(tenant="t", query="q")
+    out = server.memory_retrieve(query="q")
     assert out["status"] == "ok" and out["recovered"]["written"] == 1 and _rows(conn, "retry me")
 
 
@@ -35,9 +35,9 @@ def test_a_held_file_of_the_wrong_shape_goes_to_failed_and_blocks_nothing(srv, m
     held.mkdir(parents=True, exist_ok=True)
     (held / "00000000000000000001-a.json").write_text("[1, 2]")
     (held / "00000000000000000002-b.json").write_text(json.dumps({"text": "no id"}))
-    out = server.memory_retrieve(tenant="t", query="q")
+    out = server.memory_retrieve(query="q")
     assert out["status"] == "ok" and du.counts() == (0, 2)
-    assert server.memory_save(tenant="t", text="still works")["status"] == "saved"
+    assert server.memory_save(text="still works")["status"] == "saved"
 
 
 def test_a_record_already_in_the_warm_up_buffer_is_not_buffered_twice(conn, tmp_path, monkeypatch):
@@ -51,10 +51,10 @@ def test_the_drain_releases_a_record_already_in_the_warm_up_buffer(srv, monkeypa
     cold = LiveStore(Emb(), mode="bootstrap", bootstrap_n=5, fit_fn=stub_fit)
     monkeypatch.setattr(server, "_store", cold)
     down(monkeypatch)
-    mid = server.memory_save(tenant="t", text="buffered then crashed")["memory_id"]
+    mid = server.memory_save(text="buffered then crashed")["memory_id"]
     up(monkeypatch)
     cold._buffer.append((mid, "buffered then crashed", "s", None, None, None, None, None, None, None))   # recovered from WAL
-    server.memory_retrieve(tenant="t", query="q")
+    server.memory_retrieve(query="q")
     assert du.held_paths() == [] and [b[0] for b in cold._buffer].count(mid) == 1
 
 
@@ -72,7 +72,7 @@ def test_connections_carry_a_statement_timeout_so_a_hanging_database_answers(srv
         seen.update(k)
         raise psycopg.OperationalError("refused")
     monkeypatch.setattr(server.psycopg, "connect", spy)
-    assert server.memory_save(tenant="t", text="x")["status"] == "held"
+    assert server.memory_save(text="x")["status"] == "held"
     assert seen["connect_timeout"] == 3 and "statement_timeout" in seen["options"]
 
 
@@ -82,7 +82,7 @@ def test_a_status_file_that_cannot_be_written_still_answers_held(srv, monkeypatc
     def full(state):
         raise OSError(28, "No space left on device")
     monkeypatch.setattr(du, "write_status", full)
-    out = server.memory_save(tenant="t", text="keep me")
+    out = server.memory_save(text="keep me")
     assert out["status"] == "held" and du.held_paths()
 
 
@@ -91,5 +91,5 @@ def test_a_status_file_that_cannot_be_written_after_a_commit_still_answers_saved
         raise OSError(28, "No space left on device")
     monkeypatch.setattr(server, "_state", {"schema_ready": True, "failing": True})
     monkeypatch.setattr(du, "write_status", full)
-    out = server.memory_save(tenant="t", text="committed")
+    out = server.memory_save(text="committed")
     assert out["status"] == "saved" and du.held_paths() == []
