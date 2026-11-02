@@ -1,6 +1,6 @@
 [project]
 name = "slopymemory"
-version = "0.6.1"
+version = "0.6.2"
 description = "Per-project memory for coding agents: one launcher, one registry, a store per project."
 requires-python = ">=3.13"
 license = "MIT"

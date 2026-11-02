@@ -3,6 +3,14 @@
 What a user of slopymemory notices, newest first. A release that changes the code the store servers run says so:
 restart each running store with `slopymem stop <name>` and `slopymem start <name>`.
 
+## 0.6.2
+
+Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
+
+- `memory_save` and `memory_retrieve` no longer take `tenant`. A store is one project's memory, chosen by the folder
+  you work in, so the agent says only what to remember, never where. A harness that still sends `tenant` keeps
+  working: the argument is ignored.
+
 ## 0.6.1
 
 Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
