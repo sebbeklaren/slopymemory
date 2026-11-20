@@ -21,3 +21,11 @@ def test_version_changelog_and_tags_agree():
     versions = [_v(t[1:]) if t.count(".") == 2 else _v(t[1:] + ".0") for t in tags if re.fullmatch(r"v\d+(\.\d+){1,2}", t)]
     if versions:
         assert _v(version) >= max(versions)
+
+
+def test_the_lock_carries_the_same_version():
+    """A release bumps pyproject.toml AND uv.lock; a lock left behind installs a package that reports the old version."""
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    lock = tomllib.loads((ROOT / "uv.lock").read_text())
+    locked = [p["version"] for p in lock["package"] if p["name"] == "slopymemory"]
+    assert locked == [version], f"uv.lock says {locked}, pyproject.toml says {version}: bump both"
