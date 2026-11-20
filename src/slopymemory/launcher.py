@@ -114,9 +114,28 @@ def _cause(e: BaseException) -> BaseException:
     return e
 
 
+def project_folder(value: str) -> Path:
+    """The folder `--project` names: absolute and an existing folder, else ValueError with the reason. Never resolved
+    against the start folder — a harness that passes it starts the launcher somewhere else on purpose."""
+    p = Path(value)
+    why = ("is not an absolute path" if not p.is_absolute() else "does not exist" if not p.exists()
+           else "is not a folder" if not p.is_dir() else None)
+    if why:
+        raise ValueError(f"--project {value} {why}; name the project folder by its absolute path — see SETUP.md#registry")
+    return p.resolve()
+
+
 class Launcher:
-    def __init__(self) -> None:
+    def __init__(self, project: str | None = None) -> None:
+        # The folder the store is for: --project when the harness names it (it may start the launcher in a folder of
+        # its own), else the start folder. Store choice, the file-anchor root and memory_init all read self.cwd.
         self.cwd = Path(os.environ.get("SLOPYMEM_CWD", os.getcwd()))
+        self.project_error: str | None = None
+        if project is not None:
+            try:
+                self.cwd = project_folder(project)
+            except ValueError as e:            # raised in run() like a registry typo: handshake answered, calls raise it
+                self.project_error = str(e)
         self.store: Store | None = None
         self.upstream: ClientSession | None = None
         self.ready = asyncio.Event()           # a connect attempt has concluded (upstream set, or failure set)
@@ -429,6 +448,8 @@ class Launcher:
         # call reads whatever the cache says, so a slow network can never delay a reply.
         threading.Thread(target=updates.refresh, daemon=True).start()
         try:
+            if self.project_error:                 # a bad --project: never fall back to the start folder
+                raise ConfigError(self.project_error)
             store = self.resolve()
         except ConfigError as e:                   # a hand-edited registry/store.toml with a typo: the
             self.failure = str(e)                  # handshake is still answered; the tools raise the message
@@ -457,8 +478,12 @@ class Launcher:
                           f"{srv.DEADLINE_S:.0f}s; cancelling it — see SETUP.md#servers", file=sys.stderr)
 
 
-def main() -> None:
-    asyncio.run(Launcher().run())
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+    ap = argparse.ArgumentParser(prog="slopymem-mcp", description="the slopymemory MCP launcher (stdio)")
+    ap.add_argument("--project", metavar="FOLDER",
+                    help="the project folder the store is for, as an absolute path (default: the folder it starts in)")
+    asyncio.run(Launcher(ap.parse_args(argv).project).run())
 
 
 if __name__ == "__main__":

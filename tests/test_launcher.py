@@ -643,3 +643,94 @@ async def test_a_store_restarted_onto_new_code_takes_files_without_another_resta
         assert json.loads(res.content[0].text)["files"][0]["path"] == "a.py"
     finally:
         server.stop(store)
+
+
+# ---- --project: the harness names the folder the store is for, apart from the folder it starts the launcher in ----
+
+def project_params(project: str, start: Path, tmp_home: Path, **extra_env) -> StdioServerParameters:
+    env = {k: v for k, v in os.environ.items() if k != "SLOPYMEM_CWD"}
+    env.update({"SLOPYMEM_HOME": str(tmp_home), "SLOPYMEM_SERVER_CMD": f"{sys.executable} {FAKE}", **extra_env})
+    return StdioServerParameters(command=sys.executable, args=["-m", "slopymemory.launcher", "--project", project],
+                                 env=env, cwd=str(start))
+
+
+def _linked_repo(tmp_path: Path, port: int) -> tuple[Path, Path]:
+    repo = tmp_path / "repo"; repo.mkdir()
+    sandbox = tmp_path / "sandbox"; sandbox.mkdir()
+    Store(name="repo", dialect="coding", port=port, database="x", postgres="system").save()
+    r = Registry.load(); r.link(repo, "repo"); r.save()
+    return repo, sandbox
+
+
+async def _tool_names(params) -> list[str]:
+    async with stdio_client(params, errlog=open(os.devnull, "w")) as (rd, wr):
+        async with ClientSession(rd, wr) as s:
+            await s.initialize()
+            return [t.name for t in (await s.list_tools()).tools]
+
+
+@pytest.mark.parametrize("named", ["repo", "repo/", "repo/src"])
+async def test_project_argument_picks_the_store_of_the_named_folder_not_the_start_folder(tmp_home, tmp_path,
+                                                                                         free_port, named):
+    repo, sandbox = _linked_repo(tmp_path, free_port)
+    (repo / "src").mkdir()
+    project = str(tmp_path / named)
+    try:
+        assert "memory_ping" in await _tool_names(project_params(project, sandbox, tmp_home))
+    finally:
+        server.stop(Store.load("repo"))
+
+
+async def test_project_argument_beats_the_cwd_test_hook(tmp_home, tmp_path, free_port):
+    repo, sandbox = _linked_repo(tmp_path, free_port)
+    try:
+        params = project_params(str(repo), sandbox, tmp_home, SLOPYMEM_CWD=str(sandbox))
+        assert "memory_ping" in await _tool_names(params)
+    finally:
+        server.stop(Store.load("repo"))
+
+
+async def test_project_folder_without_a_store_offers_memory_init_for_that_folder(tmp_home, tmp_path):
+    repo = tmp_path / "fresh"; repo.mkdir()
+    sandbox = tmp_path / "sandbox"; sandbox.mkdir()
+    try:
+        async with stdio_client(project_params(str(repo), sandbox, tmp_home, SLOPYMEM_FAKE_PG="1"),
+                                errlog=open(os.devnull, "w")) as (rd, wr):
+            async with ClientSession(rd, wr) as s:
+                await s.initialize()
+                assert [t.name for t in (await s.list_tools()).tools] == ["memory_init"]
+                res = await s.call_tool("memory_init", {"dialect": "coding"})       # the name comes from the folder
+                assert f"for {repo}" in res.content[0].text, res.content[0].text
+        r = Registry.load()
+        assert r.resolve(repo) == "fresh" and r.resolve(sandbox) is None
+    finally:
+        if Store.exists("fresh"):
+            server.stop(Store.load("fresh"))
+
+
+@pytest.mark.parametrize("kind", ["relative", "missing", "file"])
+async def test_a_bad_project_value_fails_every_call_by_name(tmp_home, tmp_path, kind):
+    from mcp.shared.exceptions import MCPError
+    sandbox = tmp_path / "sandbox"; sandbox.mkdir()
+    (sandbox / "repo").mkdir()                                  # a relative "repo" must NOT resolve against the start
+    (tmp_path / "a.txt").write_text("x")
+    value = {"relative": "repo", "missing": str(tmp_path / "nope"), "file": str(tmp_path / "a.txt")}[kind]
+    async with stdio_client(project_params(value, sandbox, tmp_home, SLOPYMEM_FAKE_PG="1"),
+                            errlog=open(os.devnull, "w")) as (rd, wr):
+        async with ClientSession(rd, wr) as s:
+            await s.initialize()                                # the handshake is still answered
+            for call in (s.list_tools, s.list_prompts, s.list_resources):
+                with pytest.raises(MCPError) as e:
+                    await call()
+                msg = str(e.value)
+                assert "--project" in msg and value in msg and "SETUP.md#registry" in msg, msg
+    assert Registry.load().resolve(sandbox) is None
+
+
+async def test_project_named_through_a_symlink_serves_the_same_store(tmp_home, tmp_path, free_port):
+    repo, sandbox = _linked_repo(tmp_path, free_port)
+    (tmp_path / "alias").symlink_to(repo, target_is_directory=True)
+    try:
+        assert "memory_ping" in await _tool_names(project_params(str(tmp_path / "alias"), sandbox, tmp_home))
+    finally:
+        server.stop(Store.load("repo"))
