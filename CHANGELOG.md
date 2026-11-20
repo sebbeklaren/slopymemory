@@ -3,6 +3,14 @@
 What a user of slopymemory notices, newest first. A release that changes the code the store servers run says so:
 restart each running store with `slopymem stop <name>` and `slopymem start <name>`.
 
+## 0.6.3
+
+No store restart needed: only the launcher changed. A harness picks it up when it next starts `slopymem-mcp`.
+
+- `slopymem-mcp --project <folder>` names the project folder the store is for, as an absolute path, apart from the
+  folder the harness starts the launcher in — for harnesses that start MCP servers in a sandbox folder of their own.
+  Without it nothing changes. A relative, missing or non-folder value is refused by name on every call.
+
 ## 0.6.2
 
 Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.

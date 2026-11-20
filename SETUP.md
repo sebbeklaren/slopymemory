@@ -51,6 +51,10 @@ names and is never answered by `--yes`. `--yes` without `--data` is refused: the
 
 - **slopymem-mcp** — the launcher your harness starts in the project directory. It looks the directory up in
   the registry, starts that store's server if it is down, waits, and forwards your MCP calls to it.
+  A harness that starts it somewhere else (a sandbox folder of its own) names the project with
+  `slopymem-mcp --project /absolute/path/to/project`; that folder is then looked up instead, file anchors are
+  relative to it, and `memory_init` creates the store for it. A relative, missing or non-folder value is refused on
+  every call, never replaced by the start folder.
 - **a store** — one project's memory: a Postgres database and a state directory `~/.slopymemory/stores/<name>/`.
   The database is on the **system** Postgres (peer auth) or on the **embedded** one — a PostgreSQL 18 + pgvector
   cluster from the `embedded-postgres` wheel under `~/.slopymemory/pg`, started on demand before the store's server,
