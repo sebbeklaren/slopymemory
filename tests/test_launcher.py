@@ -724,7 +724,10 @@ async def test_a_bad_project_value_fails_every_call_by_name(tmp_home, tmp_path, 
                     await call()
                 msg = str(e.value)
                 assert "--project" in msg and value in msg and "SETUP.md#registry" in msg, msg
-    assert Registry.load().resolve(sandbox) is None
+            # memory_init too: called directly, it must not create a store for the start folder
+            res = await s.call_tool("memory_init", {"dialect": "coding"})
+            assert res.is_error and "--project" in res.content[0].text, res.content[0].text
+    assert Registry.load().resolve(sandbox) is None and not Store.exists("sandbox")
 
 
 async def test_project_named_through_a_symlink_serves_the_same_store(tmp_home, tmp_path, free_port):

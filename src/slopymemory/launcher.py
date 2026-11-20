@@ -363,6 +363,8 @@ class Launcher:
         name, arguments = params.name, params.arguments or {}
         try:
             if await self._session() is None:
+                if self.project_error:             # a bad --project: memory_init must not provision the start folder
+                    raise RuntimeError(self.project_error)
                 if name != "memory_init":
                     raise RuntimeError(self.failure or f"no memory store for {self.cwd} — call memory_init first — see SETUP.md#registry")
                 return types.CallToolResult(content=await self._init(arguments, ctx))
