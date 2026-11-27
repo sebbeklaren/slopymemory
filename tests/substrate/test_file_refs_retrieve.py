@@ -97,6 +97,7 @@ def test_a_superseded_memory_found_by_path_still_carries_superseded_by(conn):
     assert old["superseded_by"]["memory_id"] == "new"
 
 
-def test_warming_answers_as_before(conn):
+def test_a_cold_store_with_nothing_anchored_answers_an_early_empty_search(conn):
     cold = LiveStore(Emb(), mode="bootstrap", bootstrap_n=5, fit_fn=stub_fit)
-    assert cold.retrieve(conn, "q", 5, files=[{"path": "a"}]) == {"status": "warming up", "results": []}
+    out = cold.retrieve(conn, "q", 5, files=[{"path": "a"}])
+    assert out["status"] == "ok" and out["results"] == [] and out["early"] == {"memories": 0, "full_search_at": 5}

@@ -19,6 +19,7 @@ from agent_memory.spaces.concepts import place_text_concepts
 from agent_memory.spaces.memory_supersession import note_memory_supersession, attach_supersessions
 from agent_memory.spaces.related import attach_related
 from agent_memory.spaces import file_refs
+from agent_memory.spaces import early
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class LiveStore:
         self.fit_fn = fit_fn
         self.projector = projector                 # None until warm
         self._buffer = []                          # [(memory_id, text, session_key, scope, timestamp, thread, facets, save_concepts, supersedes, files)]
+        self._early_vectors = {}                   # memory_id -> document vector, for search before the fit (early.py)
         self._session_nodes = {}    # session_key -> [semantic node_id]; in-memory by design:
                                     # DB keeps memories+edges across restart, only interrupted-session linking is lost
         self._epi = cs.fixed_origin_episodic()
@@ -221,6 +223,7 @@ class LiveStore:
         for session_key, thread, node in sessions:
             self._note_session(session_key, thread, node)
         self._buffer = []
+        self._early_vectors = {}                    # early search is over; the full search has the memories now
         cs.save_projector(self.projector, settings.m3_projector_path)
         self._wal_clear()
         return results
@@ -276,7 +279,7 @@ class LiveStore:
             self._ensure_facet_projectors()                    # load per-space projectors before placement
         if not self.warm and any(b[0] == mid for b in self._buffer):
             # the same record again (a held copy of a save the buffer already has): buffered once, never twice
-            return {"status": "buffered", "warming": True, "count": len(self._buffer), "need": self.bootstrap_n}
+            return self._buffered({})
         if not self.warm:                                       # bootstrap buffering
             self._buffer.append((mid, text, session_key, scope, now, thread, facets, save_concepts,
                                  supersedes, files))
@@ -287,8 +290,7 @@ class LiveStore:
                     results = self._fit_and_place(conn)         # writes buffered supersession links post-replay
                 except psycopg.Error as e:                      # cold, buffer whole: retried at the next call
                     from agent_memory.durability import clean_error
-                    return {"status": "buffered", "warming": True, "count": len(self._buffer),
-                            "need": self.bootstrap_n, "fit_deferred": clean_error(e)}
+                    return self._buffered({"fit_deferred": clean_error(e)})
                 out = {"status": "saved", "memory_id": mid, "warmed": True}
                 placed, deferred, concepts_placed, files_anchored = results.get(mid, ([], [], 0, 0))
                 if supersedes:
@@ -301,8 +303,7 @@ class LiveStore:
                 if files:
                     out["files_anchored"] = files_anchored
                 return out
-            out = {"status": "buffered", "warming": True,
-                   "count": len(self._buffer), "need": self.bootstrap_n}
+            out = self._buffered({})
             if supersedes:                                      # recorded on the WAL, link written at fit
                 out["supersedes"] = supersedes
             if facets:                                          # persisted on the WAL, not yet placed
@@ -336,10 +337,19 @@ class LiveStore:
             out["files_anchored"] = files_anchored
         return out
 
+    def _buffered(self, extra: dict) -> dict:
+        n = len(self._buffer)
+        return {"status": "buffered", "warming": True, "count": n, "need": self.bootstrap_n, **extra,
+                "message": early.save_message(n, self.bootstrap_n)}
+
     def retrieve(self, conn, query, k, *, query_facets=None, facets=None, epoch_range=None,
                  query_concepts=None, files=None, **kwargs) -> dict:
-        if not self.warm:
-            return {"status": "warming up", "results": []}
+        if not self.warm:                           # before the fit: compare the question with each saved memory
+            n = len(self._buffer)
+            return {"status": "ok",
+                    "results": early.search(self.embedder, self._buffer, self._early_vectors, query, k, files),
+                    "early": {"memories": n, "full_search_at": self.bootstrap_n},
+                    "message": early.message(n, self.bootstrap_n)}
         self._ensure_facet_projectors()             # lazy load for an injected-projector warm store
         # REVERSIBLE concept-primary switch: when the mode flag is on AND the caller supplied the
         # agent's query→concepts, retrieve as ONE activation field over concepts. The flag
