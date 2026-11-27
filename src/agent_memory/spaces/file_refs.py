@@ -148,15 +148,28 @@ def anchored(conn, paths: list[str]) -> list[tuple[str, str | None]]:
         return [(m, t) for m, t in cur.fetchall()]
 
 
+def shown(ref: dict) -> dict:
+    """A normalised anchor (path, sha256, line_start, line_end) as a result shows it."""
+    return _shown(ref["path"], ref["sha256"], ref["line_start"], ref["line_end"])
+
+
 def anchor(conn, results: list[dict], files: list[dict] | None, k: int) -> list[dict]:
-    """ADD-ONLY for results the query reached; then the memories anchored to `files`' paths come first: those the
-    query also reached (in its order), then the others newest first (score None — found by path, not ranked), then
-    the rest of the results; the list stops at k. Every result with anchors shows them under `files`; an anchor whose
-    path the caller sent a hash for gains stale (the hash differs) or missing (the caller sent null)."""
-    out = list(results)
+    """`arrange` with the anchored memories and their anchors read from the database."""
     paths = [f["path"] for f in files or ()]
-    if paths:
-        hits = anchored(conn, paths)
+    hits = anchored(conn, paths) if paths else []
+    ids = [r["memory_id"] for r in results] + [m for m, _ in hits]
+    return arrange(results, hits, refs_of(conn, ids), files, k)
+
+
+def arrange(results: list[dict], hits: list[tuple[str, str | None]], refs: dict[str, list[dict]],
+            files: list[dict] | None, k: int) -> list[dict]:
+    """ADD-ONLY for results the query reached; then the memories anchored to `files`' paths (`hits`, newest first)
+    come first: those the query also reached (in its order), then the others (score None — found by path, not
+    ranked), then the rest of the results; the list stops at k. Every result with anchors (`refs`) shows them under
+    `files`; an anchor whose path the caller sent a hash for gains stale (the hash differs) or missing (the caller
+    sent null)."""
+    out = list(results)
+    if files:
         ids = {m for m, _ in hits}
         if ids:
             reached = [r for r in results if r["memory_id"] in ids]
@@ -167,9 +180,8 @@ def anchor(conn, results: list[dict], files: list[dict] | None, k: int) -> list[
                 if r["memory_id"] in ids:
                     r["anchored"] = True
     current = {f["path"]: f["sha256"] for f in files or () if "sha256" in f}
-    refs = refs_of(conn, [r["memory_id"] for r in out])
     for r in out:
-        mine = refs.get(r["memory_id"])
+        mine = [dict(x) for x in refs.get(r["memory_id"]) or ()]
         if not mine:
             continue
         for ref in mine:

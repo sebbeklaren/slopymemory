@@ -146,7 +146,7 @@ def memory_retrieve(conn, store, query: str, k: int = 5,
                     query_facets: dict | None = None, facets: dict | None = None,
                     query_concepts: list | None = None, files: list | None = None) -> dict:
     """Retrieve a graded set of memories (semantic seed + co-occurrence burst, memory-level top-k).
-    Returns {status: 'warming up'|'ok', results: [{memory_id, score, text}]} — input to reason
+    Returns {status: 'ok', results: [{memory_id, score, text}]} (plus early + message before the full search) — input to reason
     over (text = the memory's own content; null only for pre-fix legacy rows).
     `query_facets` (B1 enhancer): the query's extracted content facets {space: text} for
     in-distribution seeding — None omits (raw-text fallback), {} means semantic-only. Validated at
