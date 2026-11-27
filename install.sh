@@ -8,13 +8,15 @@
 #   --postgres    which Postgres new stores go on; default: the system one when it can provision, else embedded
 #   --no-harness  do not register the launcher in any coding harness (later: slopymem register <harness>)
 #   --no-update-check  do not check once a day whether a newer slopymemory is out (later: slopymem update --check on)
+#   --plan --json      change nothing: print, as one JSON object, every place the install would write, every harness
+#                      it would change, what it would download, and the free space it needs (for a consent screen)
 #
 # Everything lands under $SLOPYMEM_HOME (default ~/.slopymemory): the venv, the stores, the embedded Postgres.
 set -euo pipefail
 cd "$(dirname "$0")"
 HOME_DIR="${SLOPYMEM_HOME:-$HOME/.slopymemory}"
 VENV="$HOME_DIR/venv"
-YES=0; PG=""; HARNESS=1; CHECK=""
+YES=0; PG=""; HARNESS=1; CHECK=""; PLAN=0; JSON=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --yes) YES=1;;
@@ -22,13 +24,31 @@ while [ $# -gt 0 ]; do
     --postgres) [ $# -ge 2 ] || { echo "--postgres needs a value: system or embedded"; exit 2; }; shift; PG="$1";;
     --no-harness) HARNESS=0;;
     --no-update-check) CHECK=no;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0;;
+    --plan) PLAN=1;;
+    --json) JSON=1;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0;;
     *) echo "unknown flag $1 (try --help)"; exit 2;;
   esac
   shift
 done
 case "$PG" in system|embedded) ;; "") ;; *) echo "--postgres takes system or embedded, not '$PG'"; exit 2;; esac
 YESFLAG=""; [ "$YES" = 1 ] && YESFLAG="--yes"
+if [ "$PLAN" = 1 ]; then
+  # Nothing below this block runs: the plan is computed by the same code the install uses, on whatever interpreter is
+  # here (standard library only), and nothing is fetched, written or asked.
+  [ "$JSON" = 1 ] || { echo "--plan prints JSON only: use --plan --json"; exit 2; }
+  PY=""
+  if [ -z "$PY" ]; then
+    for c in python3.13 python3; do
+      if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+        PY="$(command -v "$c")"; break
+      fi
+    done
+  fi
+  [ -n "$PY" ] || { printf '{"schema": 1, "blockers": ["no Python 3.11 or newer here to compute the plan with; the install itself would fetch Python 3.13 through uv"]}\n'; exit 1; }
+  exec "$PY" -B -c "import json, sys; from pathlib import Path; sys.path.insert(0, 'src'); from slopymemory.install_plan import plan; print(json.dumps(plan(Path(sys.argv[1]), Path(sys.argv[2]), harness=sys.argv[3] == '1', postgres=sys.argv[4] or None, update_check=sys.argv[5] != 'no')))" "$VENV" "$HOME_DIR" "$HARNESS" "$PG" "$CHECK"
+fi
+[ "$JSON" = 0 ] || { echo "--json goes with --plan"; exit 2; }
 say() { printf '\n== %s\n' "$*"; }
 [ "$(uname -s)" = Linux ] || { echo "Linux only for now — see SETUP.md#python"; exit 1; }
 # The one system tool the package shells out to (slopymem stop, remove, the doctor's servers check) — checked here,
