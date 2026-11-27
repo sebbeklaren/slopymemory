@@ -118,3 +118,14 @@ def test_early_search_finds_a_memory_by_meaning_with_the_real_embedder(conn):
     s.save(conn, "Nightly backups run at 02:00 and keep 14 days.", session_key="s", memory_id="bk")
     out = s.retrieve(conn, "which port is staging postgres on?", 3)
     assert out["results"][0]["memory_id"] == "db", out["results"]
+
+
+def test_a_conflict_offers_only_the_standing_versions_like_the_full_search(conn):
+    """old <- mid <- new and old <- other: `mid` is itself corrected, so it is not a candidate (resolve_standing)."""
+    s = _cold(10)
+    s.save(conn, "v1", session_key="s", memory_id="old")
+    s.save(conn, "v2", session_key="s", memory_id="mid", supersedes="old")
+    s.save(conn, "v2b", session_key="s", memory_id="other", supersedes="old")
+    s.save(conn, "v3", session_key="s", memory_id="new", supersedes="mid")
+    old = next(r for r in s.retrieve(conn, "v1", 10)["results"] if r["memory_id"] == "old")
+    assert [c["memory_id"] for c in old["superseded_by"]["candidates"]] == ["new", "other"]

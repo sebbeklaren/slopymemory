@@ -61,6 +61,7 @@ def _corrections(results: list[dict], buffer: list, texts: dict) -> list[dict]:
         if len(heads) == 1 and not cycle:
             res["superseded_by"] = {"memory_id": heads[0], "text": texts.get(heads[0])}
         else:
+            others = sorted(heads) if heads else sorted(seen)   # the standing versions, as resolve_standing offers them
             res["superseded_by"] = {"conflict": True,
-                                    "candidates": [{"memory_id": m, "text": texts.get(m)} for m in sorted(seen)]}
+                                    "candidates": [{"memory_id": m, "text": texts.get(m)} for m in others]}
     return results
