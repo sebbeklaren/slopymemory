@@ -317,9 +317,16 @@ def hub_cache() -> Path:
         from huggingface_hub.constants import HF_HUB_CACHE
         return Path(HF_HUB_CACHE)
     except ImportError:
-        if (c := os.environ.get("HF_HUB_CACHE")):
-            return Path(c)
-        return Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")) / "hub"
+        return hub_cache_from_env()
+
+
+def hub_cache_from_env() -> Path:
+    """huggingface_hub's rule without huggingface_hub (the bare interpreter): HF_HUB_CACHE, else HF_HOME/hub, else
+    $XDG_CACHE_HOME/huggingface/hub, else ~/.cache/huggingface/hub."""
+    if (c := os.environ.get("HF_HUB_CACHE")):
+        return Path(c)
+    base = os.environ.get("HF_HOME") or Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "huggingface"
+    return Path(base) / "hub"
 
 
 def model_cache_dir(model: str = MODEL) -> Path:

@@ -141,10 +141,13 @@ does not read exits 1 with its message.
 its MCP servers somewhere other than the project folder.
 
 **What an install would do:** `./install.sh --plan --json` in a clone changes nothing and prints one object: `writes`
-(every folder it would write to), `postgres` (which one and where), `harnesses` (each detected harness, whether it is
-registered, and the exact `changes` — the command it would run, the file it would add a line to), `downloads` (what,
-and `bytes` when known), `update_check` (what the daily check sends, and the flag that turns it off),
-`free_bytes_needed` and `free_bytes`, and `blockers` (why the install would stop). The same flags as the install
+(every folder it would write to), `postgres` (which one and where), `harnesses` (each detected harness: its
+`config` file, its `instructions_file`, whether it is `registered`, and the exact `changes` — every command it would
+run, including a rename of an older registration, and the line it would add or replace), `downloads` (what, and
+`bytes` when known; `bytes_complete` is false when a package index publishes no size), `update_check` (what the daily
+check sends, and the flag that turns it off), `free_bytes_needed` and `free_bytes`, and `blockers` (why the install
+would stop). It writes nothing and runs no installer, but it may ask the package indexes for wheel sizes the lock does
+not carry. The same flags as the install
 (`--postgres`, `--no-harness`, `--no-update-check`) change the plan the same way. `./install.sh --yes` with those
 flags then runs it with nobody answering.
 

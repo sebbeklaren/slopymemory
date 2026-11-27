@@ -38,15 +38,13 @@ if [ "$PLAN" = 1 ]; then
   # here (standard library only), and nothing is fetched, written or asked.
   [ "$JSON" = 1 ] || { echo "--plan prints JSON only: use --plan --json"; exit 2; }
   PY=""
-  if [ -z "$PY" ]; then
-    for c in python3.13 python3; do
-      if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
-        PY="$(command -v "$c")"; break
-      fi
-    done
-  fi
+  for c in python3.13 python3; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+      PY="$(command -v "$c")"; break
+    fi
+  done
   [ -n "$PY" ] || { printf '{"schema": 1, "blockers": ["no Python 3.11 or newer here to compute the plan with; the install itself would fetch Python 3.13 through uv"]}\n'; exit 1; }
-  exec "$PY" -B -c "import json, sys; from pathlib import Path; sys.path.insert(0, 'src'); from slopymemory.install_plan import plan; print(json.dumps(plan(Path(sys.argv[1]), Path(sys.argv[2]), harness=sys.argv[3] == '1', postgres=sys.argv[4] or None, update_check=sys.argv[5] != 'no')))" "$VENV" "$HOME_DIR" "$HARNESS" "$PG" "$CHECK"
+  exec "$PY" -B -c "import sys; sys.path.insert(0, 'src'); from slopymemory.install_plan import main; sys.exit(main(sys.argv[1:]))" "$VENV" "$HOME_DIR" "$HARNESS" "$PG" "$CHECK"
 fi
 [ "$JSON" = 0 ] || { echo "--json goes with --plan"; exit 2; }
 say() { printf '\n== %s\n' "$*"; }
