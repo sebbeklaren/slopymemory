@@ -107,6 +107,27 @@ def cmd_unlink(a) -> int:
     reg.unlink(path); reg.save(); print("unlinked"); return 0
 
 
+def cmd_status(a) -> int:
+    """One JSON object a harness can read before offering memory. Reads files and probes one port; starts no server,
+    not the embedded Postgres, and creates nothing — not even the home folder. The folder is resolved by the
+    launcher's own rule (`Registry.resolve`), so a harness never has to copy it."""
+    import json
+    from .launcher import project_folder
+    if a.project is None:
+        folder = Path.cwd().resolve()
+    else:
+        try:
+            folder = project_folder(a.project)
+        except ValueError as e:
+            return fail(str(e), 2)
+    name = Registry.load().resolve(folder)          # a broken registry raises ConfigError: main prints it, exit 1
+    running = bool(name) and Store.exists(name) and srv.probe(Store.load(name).port)
+    print(json.dumps({"schema": 1, "version": updates.installed(),
+                      "launcher": str(Path(sys.executable).parent / "slopymem-mcp"), "home": str(paths.home()),
+                      "project": {"path": str(folder), "store": name, "running": running}}))
+    return 0
+
+
 def cmd_list(a) -> int:
     try:
         reg = Registry.load()
@@ -652,6 +673,10 @@ def build() -> argparse.ArgumentParser:
     s = sub.add_parser("link"); s.add_argument("store"); s.add_argument("--path"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_link)
     s = sub.add_parser("unlink"); s.add_argument("--path"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_unlink)
     s = sub.add_parser("list"); s.set_defaults(fn=cmd_list)
+    s = sub.add_parser("status", help="for harnesses: version, launcher, and the store for a folder (starts nothing)")
+    s.add_argument("--json", action="store_true", required=True, help="the only output form (schema 1)")
+    s.add_argument("--project", metavar="FOLDER", help="absolute path; default: the current folder")
+    s.set_defaults(fn=cmd_status)
     s = sub.add_parser("start"); s.add_argument("store"); s.set_defaults(fn=cmd_start)
     s = sub.add_parser("stop"); s.add_argument("store", nargs="?"); s.add_argument("--all", action="store_true"); s.set_defaults(fn=cmd_stop)
     s = sub.add_parser("remove"); s.add_argument("store"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_remove)
