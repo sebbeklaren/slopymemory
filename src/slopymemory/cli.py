@@ -123,7 +123,7 @@ def cmd_status(a) -> int:
     name = Registry.load().resolve(folder)          # a broken registry raises ConfigError: main prints it, exit 1
     running = bool(name) and Store.exists(name) and srv.probe(Store.load(name).port)
     print(json.dumps({"schema": 1, "version": updates.installed(),
-                      "launcher": str(Path(sys.executable).parent / "slopymem-mcp"), "home": str(paths.home()),
+                      "launcher": harnesses.launcher_path(), "home": str(paths.home()),
                       "project": {"path": str(folder), "store": name, "running": running}}))
     return 0
 

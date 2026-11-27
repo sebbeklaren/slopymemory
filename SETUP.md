@@ -115,6 +115,39 @@ In an interactive session the harness asks once before it uses a memory tool. Ru
   its settings).
 - Codex: `default_tools_approval_mode = "approve"` under `[mcp_servers.slopymemory]` in its `config.toml`.
 
+## integrating
+
+How a harness, an editor plugin or any other program offers slopymemory to its user. Everything here is read-only;
+nothing starts a server or changes a file. The JSON shapes carry `"schema": 1`; a field is only added within a schema,
+never renamed or removed.
+
+**Is it installed?** Look for `~/.slopymemory/venv/bin/slopymem` (or `$SLOPYMEM_HOME/venv/bin/slopymem` when that is
+set), then `slopymem` on `PATH`. Neither there means not installed.
+
+**Version, launcher, and the store for a folder:** `slopymem status --json --project /absolute/path/to/project`
+
+```
+{"schema": 1, "version": "0.6.5", "launcher": "/…/.slopymemory/venv/bin/slopymem-mcp", "home": "/…/.slopymemory",
+ "project": {"path": "/…/project", "store": "project", "running": false}}
+```
+
+`store` is `null` when the folder has no store yet: start the launcher and the agent is offered `memory_init`. The
+folder is matched exactly as the launcher matches it (a subfolder of a linked project gets that project's store).
+`running` says whether the store's server is up now; the launcher starts it on first use either way. Without
+`--project` the current folder is used. A relative or missing `--project` exits 2 with the reason; a registry that
+does not read exits 1 with its message.
+
+**Starting the launcher:** `<launcher> --project /absolute/path/to/project` (from 0.6.3), for a harness that starts
+its MCP servers somewhere other than the project folder.
+
+**What an install would do:** `./install.sh --plan --json` in a clone changes nothing and prints one object: `writes`
+(every folder it would write to), `postgres` (which one and where), `harnesses` (each detected harness, whether it is
+registered, and the exact `changes` — the command it would run, the file it would add a line to), `downloads` (what,
+and `bytes` when known), `update_check` (what the daily check sends, and the flag that turns it off),
+`free_bytes_needed` and `free_bytes`, and `blockers` (why the install would stop). The same flags as the install
+(`--postgres`, `--no-harness`, `--no-update-check`) change the plan the same way. `./install.sh --yes` with those
+flags then runs it with nobody answering.
+
 ## Checks (generated from `slopymemory.checks` — do not edit below this line)
 
 ## python

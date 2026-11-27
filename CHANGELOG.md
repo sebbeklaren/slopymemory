@@ -3,6 +3,16 @@
 What a user of slopymemory notices, newest first. A release that changes the code the store servers run says so:
 restart each running store with `slopymem stop <name>` and `slopymem start <name>`.
 
+## 0.6.5
+
+No store restart needed: the command and the installer changed, not the store servers.
+
+- `slopymem status --json [--project <folder>]`: the installed version, the launcher's path, and whether a folder
+  has a store, as JSON, without starting anything. For harnesses and plugins that offer memory to their user.
+- `./install.sh --plan --json`: everything an install would do — where it writes, which harnesses it changes and
+  how, what it downloads, the space it needs, what would stop it — printed before anything happens, changing
+  nothing. See SETUP.md#integrating.
+
 ## 0.6.4
 
 Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
