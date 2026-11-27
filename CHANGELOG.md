@@ -3,6 +3,16 @@
 What a user of slopymemory notices, newest first. A release that changes the code the store servers run says so:
 restart each running store with `slopymem stop <name>` and `slopymem start <name>`.
 
+## 0.6.4
+
+Restart your stores: `slopymem stop <name>` then `slopymem start <name>`.
+
+- Search works from the first save. A store with fewer than 50 memories used to answer `warming up` with no
+  results; now it compares the question directly with each saved memory and returns the closest ones (anchored
+  files first, corrected memories marked `superseded_by`). The reply says so in a `message` and in
+  `early: {memories, full_search_at}`. From the 50th memory on the full search takes over, as before.
+- A save made before the 50th memory says it is kept and already searchable.
+
 ## 0.6.3
 
 No store restart needed: only the launcher changed. A harness picks it up when it next starts `slopymem-mcp`.
